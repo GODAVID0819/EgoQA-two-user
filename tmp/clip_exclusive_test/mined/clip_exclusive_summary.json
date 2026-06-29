@@ -1,0 +1,19 @@
+{
+  "input": "C:\\Users\\haoya\\OneDrive\\Desktop\\Long context video understanding ARVR\\Long-video-understanding\\egolife_two_user_qa\\tmp\\clip_exclusive_test\\evidence.jsonl",
+  "output": "C:\\Users\\haoya\\OneDrive\\Desktop\\Long context video understanding ARVR\\Long-video-understanding\\egolife_two_user_qa\\tmp\\clip_exclusive_test\\ranked.jsonl",
+  "candidate_count": 2,
+  "skipped_count": 0,
+  "skipped": [],
+  "model_id": "fake-clip",
+  "parameters": {
+    "duration_seconds": 12.0,
+    "sample_interval_seconds": 1.5,
+    "start_seconds": 0.0,
+    "clusters_per_user": 1,
+    "anchor_threshold": 0.75,
+    "top_k": 1,
+    "max_packets": null,
+    "min_score": null,
+    "resample_videos": false
+  }
+}

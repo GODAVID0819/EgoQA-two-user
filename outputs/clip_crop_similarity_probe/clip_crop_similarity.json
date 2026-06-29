@@ -1,0 +1,27 @@
+{
+  "source": "tmp\\pdfs\\photo_set_analysis\\page-1.png",
+  "timestamp_seconds": null,
+  "original_path": "outputs\\clip_crop_similarity_probe\\original_frame.jpg",
+  "cropped_path": "outputs\\clip_crop_similarity_probe\\cropped_center_frame.jpg",
+  "crop": {
+    "input_size": [
+      1076,
+      1521
+    ],
+    "crop_box_xyxy": [
+      161,
+      384,
+      914,
+      1137
+    ],
+    "crop_size": [
+      753,
+      753
+    ],
+    "crop_scale": 0.7
+  },
+  "clip_error": {
+    "type": "RuntimeError",
+    "message": "CLIP encoding requires a compatible torch/torchvision/transformers installation. Install matching torch and torchvision builds, then transformers>=4.57."
+  }
+}

@@ -1,0 +1,2450 @@
+PPTX: C:\Users\haoya\Downloads\Long Context Video Understanding 2026 Summer.pptx
+SLIDES: 219
+
+--- SLIDE 1 ---
+TODO
+如何把问题从template based变成general模型自发的模式video based method: A\B –如何做exclusivenessreview egoeverything code6/26implement clip_exclusiveness framework
+[NOTES]
+OVO-Bench 的核心 motivation 可以拆成三层。
+第一层，传统视频 QA 太像“考后阅读理解”。模型通常可以看到完整视频，然后回答“视频里发生了什么”。但真实 online assistant 不能偷看未来。比如 AR 眼镜场景里，用户在第 30 秒问“现在桌上有什么”，模型就只能基于第 30 秒之前和附近的画面回答，不能用第 60 秒的信息。
+第二层，online video understanding 不只是“实时识别当前画面”。你前面问过为什么它要分这么多任务，其实作者想强调：用户的问题可能指向三种时间位置。答案可能在过去，比如“我刚才把筛子放哪了”；可能在当前，比如“现在洗衣机上有什么”；也可能在未来，比如“等他打开盒子后告诉我里面是什么”。所以 online benchmark 不能只测当前帧识别，还要测回忆过去和等待未来。
+第三层，当前模型缺少 temporal awareness。它们可能识别能力不差，但不知道“用户问的是现在这个时间点”，所以容易把过去相似画面的内容拿来回答；也容易在当前证据不足时硬答，产生 hallucination。OVO-Bench 就是为了把这些失败暴露出来。论文和项目页都把 temporal awareness 作为 offline 与 online video LLM 的关键区别，并强调模型需要沿时间线寻找视觉线索。
+OVO-Bench 的 method 不是提出一个新模型，而是提出一套 benchmark construction + evaluation pipeline。
+第一步是 任务 taxonomy。作者把 online video understanding 分成三类：Backward Tracing：从过去找证据。Real-Time Visual Perception：从当前画面找证据。Forward Active Responding：当前证据不够，等待未来线索。
+第二步是 数据构造。作者从已有人工标注数据集和网络爬取视频中收集 raw videos。这样既有标注质量，也有场景多样性。然后他们生成 meta-annotations，这里的 meta-annotation 不是普通 QA，而是带有精确时间戳的事件标注，因为 online evaluation 必须知道“线索到底在什么时候出现”。这一步用 VLLM 辅助生成，再人工 refine。最后生成多选题，并用视觉相关的干扰项提高难度。
+第三步是 Chain-of-Time evaluation。这就是图 3 下半部分。用户问题来了以后，模型要判断：当前画面能不能回答？如果能，就是 Real-Time Visual Perception；如果不能，过去记忆能不能回答？如果能，就是 Backward Tracing；如果过去和当前都不够，就应该等待未来输入，也就是 Forward Active Responding。项目页也明确说 OVO-Bench 评测模型从 ongoing input 中寻找 temporal visual clues，并允许模型等待足够证据后再响应。
+‹#›
+
+--- SLIDE 2 ---
+TODO
+Agentic AI as judgerWe could have multiple agents to evaluate the generated answer from the question generation agent. (One agent for objective/subjective video generation, another agent to justIf does not work, let the judge to provide the reason and understanding.If the understanding is wrong, use human in the loop to improve the understanding of the agents.Use an example in the prompt of the judge LLM
+[NOTES]
+OVO-Bench 的核心 motivation 可以拆成三层。
+第一层，传统视频 QA 太像“考后阅读理解”。模型通常可以看到完整视频，然后回答“视频里发生了什么”。但真实 online assistant 不能偷看未来。比如 AR 眼镜场景里，用户在第 30 秒问“现在桌上有什么”，模型就只能基于第 30 秒之前和附近的画面回答，不能用第 60 秒的信息。
+第二层，online video understanding 不只是“实时识别当前画面”。你前面问过为什么它要分这么多任务，其实作者想强调：用户的问题可能指向三种时间位置。答案可能在过去，比如“我刚才把筛子放哪了”；可能在当前，比如“现在洗衣机上有什么”；也可能在未来，比如“等他打开盒子后告诉我里面是什么”。所以 online benchmark 不能只测当前帧识别，还要测回忆过去和等待未来。
+第三层，当前模型缺少 temporal awareness。它们可能识别能力不差，但不知道“用户问的是现在这个时间点”，所以容易把过去相似画面的内容拿来回答；也容易在当前证据不足时硬答，产生 hallucination。OVO-Bench 就是为了把这些失败暴露出来。论文和项目页都把 temporal awareness 作为 offline 与 online video LLM 的关键区别，并强调模型需要沿时间线寻找视觉线索。
+OVO-Bench 的 method 不是提出一个新模型，而是提出一套 benchmark construction + evaluation pipeline。
+第一步是 任务 taxonomy。作者把 online video understanding 分成三类：Backward Tracing：从过去找证据。Real-Time Visual Perception：从当前画面找证据。Forward Active Responding：当前证据不够，等待未来线索。
+第二步是 数据构造。作者从已有人工标注数据集和网络爬取视频中收集 raw videos。这样既有标注质量，也有场景多样性。然后他们生成 meta-annotations，这里的 meta-annotation 不是普通 QA，而是带有精确时间戳的事件标注，因为 online evaluation 必须知道“线索到底在什么时候出现”。这一步用 VLLM 辅助生成，再人工 refine。最后生成多选题，并用视觉相关的干扰项提高难度。
+第三步是 Chain-of-Time evaluation。这就是图 3 下半部分。用户问题来了以后，模型要判断：当前画面能不能回答？如果能，就是 Real-Time Visual Perception；如果不能，过去记忆能不能回答？如果能，就是 Backward Tracing；如果过去和当前都不够，就应该等待未来输入，也就是 Forward Active Responding。项目页也明确说 OVO-Bench 评测模型从 ongoing input 中寻找 temporal visual clues，并允许模型等待足够证据后再响应。
+‹#›
+
+--- SLIDE 3 ---
+TODO
+Change the input position of the pose inputChange the way that pose information is folded into the encoder.
+[NOTES]
+OVO-Bench 的核心 motivation 可以拆成三层。
+第一层，传统视频 QA 太像“考后阅读理解”。模型通常可以看到完整视频，然后回答“视频里发生了什么”。但真实 online assistant 不能偷看未来。比如 AR 眼镜场景里，用户在第 30 秒问“现在桌上有什么”，模型就只能基于第 30 秒之前和附近的画面回答，不能用第 60 秒的信息。
+第二层，online video understanding 不只是“实时识别当前画面”。你前面问过为什么它要分这么多任务，其实作者想强调：用户的问题可能指向三种时间位置。答案可能在过去，比如“我刚才把筛子放哪了”；可能在当前，比如“现在洗衣机上有什么”；也可能在未来，比如“等他打开盒子后告诉我里面是什么”。所以 online benchmark 不能只测当前帧识别，还要测回忆过去和等待未来。
+第三层，当前模型缺少 temporal awareness。它们可能识别能力不差，但不知道“用户问的是现在这个时间点”，所以容易把过去相似画面的内容拿来回答；也容易在当前证据不足时硬答，产生 hallucination。OVO-Bench 就是为了把这些失败暴露出来。论文和项目页都把 temporal awareness 作为 offline 与 online video LLM 的关键区别，并强调模型需要沿时间线寻找视觉线索。
+OVO-Bench 的 method 不是提出一个新模型，而是提出一套 benchmark construction + evaluation pipeline。
+第一步是 任务 taxonomy。作者把 online video understanding 分成三类：Backward Tracing：从过去找证据。Real-Time Visual Perception：从当前画面找证据。Forward Active Responding：当前证据不够，等待未来线索。
+第二步是 数据构造。作者从已有人工标注数据集和网络爬取视频中收集 raw videos。这样既有标注质量，也有场景多样性。然后他们生成 meta-annotations，这里的 meta-annotation 不是普通 QA，而是带有精确时间戳的事件标注，因为 online evaluation 必须知道“线索到底在什么时候出现”。这一步用 VLLM 辅助生成，再人工 refine。最后生成多选题，并用视觉相关的干扰项提高难度。
+第三步是 Chain-of-Time evaluation。这就是图 3 下半部分。用户问题来了以后，模型要判断：当前画面能不能回答？如果能，就是 Real-Time Visual Perception；如果不能，过去记忆能不能回答？如果能，就是 Backward Tracing；如果过去和当前都不够，就应该等待未来输入，也就是 Forward Active Responding。项目页也明确说 OVO-Bench 评测模型从 ongoing input 中寻找 temporal visual clues，并允许模型等待足够证据后再响应。
+‹#›
+
+--- SLIDE 4 ---
+OVO-Bench: How Far is Your Video-LLMs from Real-World Online VideoUnderstanding?time-aware online interaction
+motivation ：现有很多视频理解 benchmark 本质上还是 offline video QA，也就是模型看完整段视频后再回答问题；但真实 AR/VR、机器人或在线视频助手不是这样工作的，用户会在视频流进行中的某个时间点突然提问，模型只能根据当时已经看到的信息来判断答案，而且有时候不能立刻回答，而是要等未来线索出现后再回答。因此，作者认为真实 online video understanding 的关键不是单纯“看懂视频”，而是 temporal awareness：模型要知道问题是在什么时候被问的，并判断证据来自过去、当前，还是未来。OVO-Bench 把任务设计成三类：Backward Tracing 测模型能不能回忆过去事件，Real-Time Visual Perception 测模型能不能理解当前画面，Forward Active Responding 测模型能不能在当前证据不足时先等待、等未来线索出现后再回答。方法上，作者先从已有人工标注数据集和网络视频中收集原始视频，再用 GPT-4o、Gemini-1.5-Pro 等 VLLM 辅助生成带精确时间戳的 meta-annotations，并经过人工 refine，最后构造带视觉干扰项的多选题；评测时则沿着视频时间线 query 模型，模拟真实在线视频交互。OVO-Bench 更关注“时间意识”和 online response timing，而 EgoEverything 更关注 AR 第一视角中由 human attention / gaze 驱动的长期个人记忆问题。现在视频理解需要很多 benchmark因为“视频理解”已经被拆成了不同能力：长视频记忆、第一视角理解、当前画面定位、未来线索触发、注意力对齐、幻觉检测等，每个 benchmark 都在抓模型不同的失败面。
+[NOTES]
+OVO-Bench 的核心 motivation 可以拆成三层。
+第一层，传统视频 QA 太像“考后阅读理解”。模型通常可以看到完整视频，然后回答“视频里发生了什么”。但真实 online assistant 不能偷看未来。比如 AR 眼镜场景里，用户在第 30 秒问“现在桌上有什么”，模型就只能基于第 30 秒之前和附近的画面回答，不能用第 60 秒的信息。
+第二层，online video understanding 不只是“实时识别当前画面”。你前面问过为什么它要分这么多任务，其实作者想强调：用户的问题可能指向三种时间位置。答案可能在过去，比如“我刚才把筛子放哪了”；可能在当前，比如“现在洗衣机上有什么”；也可能在未来，比如“等他打开盒子后告诉我里面是什么”。所以 online benchmark 不能只测当前帧识别，还要测回忆过去和等待未来。
+第三层，当前模型缺少 temporal awareness。它们可能识别能力不差，但不知道“用户问的是现在这个时间点”，所以容易把过去相似画面的内容拿来回答；也容易在当前证据不足时硬答，产生 hallucination。OVO-Bench 就是为了把这些失败暴露出来。论文和项目页都把 temporal awareness 作为 offline 与 online video LLM 的关键区别，并强调模型需要沿时间线寻找视觉线索。
+OVO-Bench 的 method 不是提出一个新模型，而是提出一套 benchmark construction + evaluation pipeline。
+第一步是 任务 taxonomy。作者把 online video understanding 分成三类：Backward Tracing：从过去找证据。Real-Time Visual Perception：从当前画面找证据。Forward Active Responding：当前证据不够，等待未来线索。
+第二步是 数据构造。作者从已有人工标注数据集和网络爬取视频中收集 raw videos。这样既有标注质量，也有场景多样性。然后他们生成 meta-annotations，这里的 meta-annotation 不是普通 QA，而是带有精确时间戳的事件标注，因为 online evaluation 必须知道“线索到底在什么时候出现”。这一步用 VLLM 辅助生成，再人工 refine。最后生成多选题，并用视觉相关的干扰项提高难度。
+第三步是 Chain-of-Time evaluation。这就是图 3 下半部分。用户问题来了以后，模型要判断：当前画面能不能回答？如果能，就是 Real-Time Visual Perception；如果不能，过去记忆能不能回答？如果能，就是 Backward Tracing；如果过去和当前都不够，就应该等待未来输入，也就是 Forward Active Responding。项目页也明确说 OVO-Bench 评测模型从 ongoing input 中寻找 temporal visual clues，并允许模型等待足够证据后再响应。
+‹#›
+
+--- SLIDE 5 ---
+任务分类：OVO-Bench 把在线公开视频理解分成三种时间关系，Backward Tracing 是从过去找答案，Real-Time Visual Perception 是理解当前画面，Forward Active Responding 是当前信息不够时等待未来线索再回答。数据构造流程：作者先收集已有标注数据集和网络视频，再用 VLLM 加人工 refine 生成带时间戳的细粒度 meta-annotation，最后构造多选题。最重要的是图 3 下半部分的 Chain-of-Time：模型要判断线索到底在过去、现在还是未来
+[NOTES]
+用户问题来了以后，模型要判断：当前画面能不能回答？如果能，就是 Real-Time Visual Perception；如果不能，过去记忆能不能回答？如果能，就是 Backward Tracing；如果过去和当前都不够，就应该等待未来输入，也就是 Forward Active Responding。项目页也明确说 OVO-Bench 评测模型从 ongoing input 中寻找 temporal visual clues，并允许模型等待足够证据后再响应。
+让模型知道什么时候该回答“不能”
+‹#›
+
+--- SLIDE 6 ---
+Streaming VideoLLMs for Real-time Procedural Video Understanding在做咖啡、做饭、组装这类长流程任务时，模型不能等视频结束后再理解，而是要边看视频边回答，比如“我现在在做什么”“下一步该做什么”“最终目标是什么”。长期历史用文字记忆，短期当前用视觉 token，二者交错放进同一个 cache，让模型可以实时理解和预测。
+[NOTES]
+现有 VideoLLM 多数适合 offline video understanding，但 AR assistant 这类真实场景需要模型实时理解长时间 procedural video。直接保存所有历史视觉 token 会导致 token 数、显存和计算量爆炸；只看短期画面又会丢失历史步骤信息。因此，作者想设计一种既能记住长期流程，又能保留当前细节，同时还能实时运行的 streaming VideoLLM
+论文逻辑链
+1. 真实需求：AR/实时助手需要边看边理解。比如用户正在用 Moka Pot 做咖啡，模型不能等整个视频结束后再回答，而是要实时判断：
+“用户现在做到哪一步？”“之前已经完成了什么？”“下一步应该做什么？”
+所以问题不是普通 offline video QA，而是 streaming procedural video understanding。
+2. 核心困难：procedural video 又长、又有步骤依赖。做饭、组装、修东西这种视频不是单个动作识别，而是一串流程。
+当前动作是否正确，下一步应该做什么，都依赖历史步骤。比如如果已经加水了，下一步可能是放滤网；如果已经放滤网了，下一步才是加咖啡粉。
+所以模型需要记住长期历史。
+3. 直接存全部视觉 token 不现实。如果每一帧都转成 visual tokens 存进 LLM context，视频越长，token 越多，显存和 attention 计算都会爆。
+这也是普通 VideoLLM 难以直接用于实时长视频的原因。
+4. 作者的关键观察：长期历史和短期当前不应该用同一种表示。
+长期历史主要回答的是：
+“之前做过哪些步骤？”
+这个可以用文字表示，比如：
+<L> add water to bottom<L> place filter onto bottom
+不需要继续保存大量视觉帧。
+但短期当前主要回答的是：
+“现在手在做什么？物体有没有被拿起？有没有倒进去？”
+这需要细粒度视觉信息，所以最近几秒仍然要保留 visual tokens。
+所以作者提出一个很直观的思想：
+过去发生了什么，用语言记；现在正在发生什么，用视觉看。
+5. 但是只把视觉变成文字还不够，还要解决 cache 更新问题。
+如果 long-term text cache 和 short-term visual cache 分开存，每次旧视觉 token 转成文字 token 时，可能需要重新计算 attention，导致 streaming 延迟不稳定。
+所以作者提出 multimodal interleaved cache：
+把 long-term text tokens 和 short-term visual tokens 放进同一个 causal cache 里。
+这样模型可以持续增量更新，不需要大规模重算。
+6. 另一个问题：短期 visual tokens 要关注哪里？
+procedural video 的关键通常不是背景，而是 手和被操作物体。
+比如做咖啡时，真正重要的是手有没有拿滤网、咖啡粉有没有倒进去，而不是桌子、墙面、厨房背景。
+所以作者提出 DETR-QFormer：
+它用 visual queries、hand queries、object queries 从 DINOv2 patch tokens 里提取信息，并用 hand-object bbox pseudo labels 训练，让视觉 token 更关注手和物体交互区域。
+‹#›
+
+--- SLIDE 7 ---
+如果全存视觉 token，长视频 token 数会爆；如果先 verbalize 再分开存 long-term 和 short-term，会带来 attention recomputation；把它们放在同一条 token 序列里：<L><t1>, <L><t2>, <v6>, <v7>, <v8>, <v9> ...当 <v6> 这段旧视觉信息过期时，就把它 verbalize 成 <L><t3>，然后插入到同一个 interleaved cache 里。cache 始终是一个统一的 multimodal sequence，LLM 可以继续用 causal KV cache 增量更新，不需要大规模重算。作者认为短期视觉 token 不能随便压缩。因为 procedural video 的关键动作通常发生在 hand-object interaction 上，比如拿滤网、倒咖啡粉、压平表面。如果普通 Q-Former 把背景也压进去，token 就浪费了。所以 DETR-QFormer 加了 hand queries 和 object queries，并用 pseudo bbox 做辅助训练，让视觉 token 更集中在手和接触物体上。
+[NOTES]
+这篇论文的方法是 ProVideLLM，主要有三部分：
+第一，long-term verbalization。把长期过去的视频片段转成文字步骤 token，比如 <L> add water to bottom，用语言压缩历史，减少视觉 token 数。
+第二，short-term visual tokenization。最近几秒的视频仍然保留 visual tokens，用 DINOv2 + DETR-QFormer 提取 hand-object-focused visual tokens，让模型看清当前手和物体的细节。
+第三，multimodal interleaved cache。把长期文字 token 和短期视觉 token 交错放进同一个 causal cache 里，让 LLM 可以边接收新视频边增量推理，避免每次 verbalization 都重新计算 attention。
+‹#›
+
+--- SLIDE 8 ---
+Object-centric Video Representation for Long-term Action Anticipation作者把 long-term action anticipation 转化成一个“future tokens 检索 video/object evidence”的过程。不同未来时间步可以关注不同物体，从而预测不同的 verb-noun action。PTE 不是一步一步递归生成未来动作，而是用 Z 个 learnable tokens 并行编码未来 Z 步，然后分别预测每一步的 verb 和 noun。
+[NOTES]
+‹#›
+
+--- SLIDE 9 ---
+1. 设计新benchmark（根据实际任务）2. Memory新存储模式 eg语义（但为什么昨天有说embedding很慢：AR video encoder设备就很慢，不是算法问题）3. 新的attention计算（设计新的encoder去算注意力）4. 细读JEPA相关&代码思考JEPA的思路（暂时不看jepa，先研究这三个问题）5. 组里具体能获得什么任务呢？Eg有哪些设备有什么具体场景需要自己去处理什么数据6. 参考object-centric串行理解改成并行理解，加速计算设计新方法判断未来token（未来问题能否在当前视频里回答），online clustering长视频保证time增长保持storage cost不变（压缩，只在乎O（1）complexity）eg daily routine 早上/晚上喝牛奶，周期性问题，不随时间decay
+用户是在视频流中途提问，不是视频结束后提问。 系统要边看边更新 memory/cache，而不是一次性离线处理。 长期行为理解不能只存全局语义，还要知道哪些 object 对未来动作重要。未来 AR/VR video understanding 不只是 offline long-video QA，而是一个 online streaming memory system。它需要知道用户什么时候问、证据在过去/现在/未来哪里、哪些视觉信息应该短期保真保存、哪些历史可以压成 text/embedding memory、哪些 object 对未来行为最重要。能不能构建一个在线 AR 记忆系统：长期历史存 semantic embeddings，短期当前保留 object-centric visual evidence，并根据时间意识判断问题应该从过去、现在还是未来回答？
+[NOTES]
+‹#›
+
+--- SLIDE 10 ---
+Egoeverything VQA.json分析
+EgoEverything 最终 benchmark 的“题目表”。每一条不是一段原始视频标注，而是一个经过 gaze 引导采样、VLM 生成、人工审核、再做 blind filtering 后留下来的 5 选 1问答样本。 一条样本 = 一个“以后可能会被用户问出来”的 AR/第一视角记忆问题，不是对整段视频的全面描述。  - 论文的流程是三步：先把长视频切成带文字摘要的片段，再用 gaze 附近的目标采样出一个 target object 和 target frame，最后围绕它生成 MCQ，并做人工审核与规则过滤。      - video_name: 题目来自哪条长视频。      - question: 围绕某个被采样目标构造的自然语言问题。      - options: 5 个候选答案。      - correct_answer: 最终标准答案，这是正式 GT。      - keyframes[0]: 这道题绑定的目标帧。      - keyframes[0].object_name: 被采样出来的目标对象名。      - keyframes[0].bbox: 目标对象在那一帧里的框；空字符串说明这个导出版本里没保留框。      - keyframes[0].timestamp: 目标对象被选中的时刻，不是提问发生时刻。论文里真正“提问时刻”会        在目标时刻之后再随机采样。      - AveDist2Gaze: 目标对象和 gaze 的某种距离统计，说明它和 gaze-oriented sampling 有关。  - 换句话说，这个文件更像“带目标锚点的 MCQ benchmark”，而不是“视频逐帧标注”。
+
+--- SLIDE 11 ---
+StreamReady: Learning What to Answer and When in Long Streaming Videos CVPR 2026 preprintStreamReady 想解决 long streaming video 里两个同时存在的问题：第一，模型要判断“当前看到的视频证据够不够回答问题”；第二，长视频不能无限存所有帧，所以要用固定预算的 memory 压缩历史视频。前者靠 Readiness mechanism，后者靠 Visual Memory Tree。 论文摘要明确说，它关注的模型是否能在 supporting evidence 出现时回答，并提出 ARS 来惩罚过早和过晚回答。
+可以参考rdy token的设置，加一个可训练的head让这个head控制是否该看信息
+[NOTES]
+‹#›
+
+--- SLIDE 12 ---
+ProReady-QA，包含 annotated answer evidence windows 和 proactive multi-turn questions，覆盖 local 和 global context。
+1. Sequential Step Recognition识别一个过程的步骤变化。比如炒菜过程：先切菜，再下锅，再翻炒。模型要在对应步骤出现时回答当前处于哪一步。2. Repetitive Event Counting数重复事件。比如人摘了几棵树/几个果子。模型不能一开始就答，要等重复事件完成或证据足够后再回答。3. Clues Reveal Responding线索揭示型问题。比如“等她开始往锅里放东西时告诉我”。模型要等关键线索出现后才答。4. Causal Trigger Detection因果触发检测。比如“什么时候能知道他测量是否正确？”模型要等因果结果出现，比如木板是否短了，才能判断。5. Goal-State Detection目标状态检测。比如“她什么时候喝完？”模型要等目标状态完成后回答 finished。这里紫色框/紫色文字表示 question time，绿色框/绿色文字表示 answer evidence / answer time。所以这张图想说明：问题和答案证据不是同一时间出现的，这正是 proactive streaming QA 的难点。
+左边展示了它包含的五类 proactive 任务：步骤识别、重复事件计数、线索出现后回答、因果触发检测和目标状态检测；这些任务的共同点是问题先出现，但答案证据要等后续视频帧出现，所以模型必须判断什么时候证据足够。右上展示数据生成流程：先对长视频做 dense annotation，再结合任务类型和多模态信息标注 answer evidence window，最后用 VLM 生成人工修正后的 QA。右下表格说明 ProReady-QA 相比之前 benchmark 的关键优势：它的视频更长，支持 local/global multi-turn，并且最重要的是有 answer evidence annotation，因此可以用 ARS 评估模型是提前猜、准时答还是答晚了。
+[NOTES]
+‹#›
+
+--- SLIDE 13 ---
+LiveStar: Live Streaming Assistant for Real-World Online Video Understanding NeurIPS 2025motivation： 真实在线公开视频视频一帧一帧进来，模型要边看边决定 什么时候说、什么时候沉默、说什么。现有 online Video-LLM 很多靠学 <EOS> 表示“不说话”，但大部分帧都不需要输出，导致模型训练时大量学习“画面 → EOS”，容易破坏原本的视觉-语言对齐，还会让相邻相似帧出现一帧输出 narration、一帧输出 EOS 的不稳定监督。核心目标： 处理连续 frame-by-frame 输入，同时判断最优响应时机，并保持叙事连贯性。Method： 第一，训练时用 SCAM，也就是 Streaming Causal Attention Masks，把视频帧和 caption 交错组织起来，让模型学“当前视频前缀应该对应什么 narration”，而不是疯狂学 EOS；第二，推理时用 SVeD，也就是 Streaming Verification Decoding，每来一帧先检查上一句 narration 在当前画面下还合不合理，如果 PPL 变高超过阈值，就说明语义变了，需要生成新 narration；如果还合理，就保持沉默；第三，为了处理 10 分钟以上长视频，用 Peak-End Memory Compression 保留关键帧和每段最后总结（删除不重要的旧帧），再配合 streaming KV cache 加速（缓存历史KV）。论文还提出 OmniStar 数据集，覆盖 15 个真实场景和 5 个 online video understanding 任务（评测模型是否能在视频一帧一帧输入时，自己决定什么时候输出、什么时候沉默，并且输出内容是否准确、是否重复、是否和历史上下文连贯。）
+最上面是实时视频流，模型不是看完整视频再回答，而是一帧一帧接收输入，并且只在语义变化时输出 narration。左边是旧方法，它训练时让大量非关键帧输出 EOS，但这样会导致 response-silence 极度不平衡，而且相邻相似帧可能一帧输出 narration、一帧输出 EOS，破坏视觉-语言对齐。中间是 LiveStar 的做法：训练时用 SCAM，把 frame 和 caption 交错起来，并 mask 掉容易复制的重复 caption，让模型继续学视频内容和语言的对应关系；推理时用 SVeD，每来一帧先检查上一句 narration 还是否适合当前画面，如果适合就沉默，如果不适合就生成新的 narration。右边最终展示的是一段连贯的 streaming narration，而不是每帧都重复输出。
+设计指标看什么时候该重新decode，不保留重复语义以免误导模型&增加不必要kv cache
+[NOTES]
+(a) Streaming Narration 表示任务场景。
+视频是一帧一帧流入的，模型收到 prompt：Generate streaming narration in real time，重点不是每一帧都说话。时间轴上有些位置是 Narration，有些位置是捂嘴表情，表示 silent。这说明在线模型真正要做两件事：第一，理解当前视频内容。第二，判断现在该不该输出。
+比如小猫一直在草地上跑，连续几帧语义差不多，就不需要每帧都重复说；等小猫从户外切到室内，语义变化了，才应该输出新的 narration。
+(b) Existing Methods 讲的是旧方法。
+训练阶段，旧方法把每一帧都变成一个输出目标：有些关键帧输出 Narration ，大量普通帧输出 <EOS>，表示 silence
+问题是，这种方法太依赖 EOS。因为大部分时间都不该说话，所以训练数据里 EOS 特别多。结果模型不是在稳定学习“视频内容到语言描述”的对应关系，而是在学“很多画面都输出 EOS”。
+更糟的是，相邻帧可能视觉很像，但监督完全不同：一帧要求输出 narration，下一帧要求输出 EOS。这样模型会很困惑，训练也不稳定。
+推理阶段，旧方法每来一个 current frame，就 decode 一次，然后决定输出 <EOS> 还是 narration。这个方式既慢，又容易出现错误 timing：要么说太多，要么该说的时候不说。
+(c) LiveStar (Ours) 是这篇文章的核心。
+它分成训练和推理两部分。训练时，LiveStar 不再简单让模型大量输出 EOS。它用 SCAM mask 控制模型能看哪些历史信息、不能看哪些重复 caption。图里有一个眼睛被划掉的图标，表示某些重复 narration 会被 mask 掉，防止模型直接复制答案；下面正常眼睛表示模型仍然能看有用的历史上下文。
+这里的意思是：
+LiveStar 训练模型学的是 streaming video-language alignment，而不是 EOS classification。
+也就是说，它还是让模型保持和预训练一致的能力：看到图像/视频，就生成有意义的语言描述。
+推理时，LiveStar 用 SVeD。图下面有 “Check / Single Forward”。意思是每来一个新帧，它先不急着生成新句子，而是检查上一句 narration 还能不能解释当前画面。
+如果还能解释，就输出 Silent。如果不能解释，就 Decode 新 narration。
+(d) Training Perspective 是在解释 SCAM 的训练视角。
+图里有 image token 和 narration token 交错排列。不同颜色的 narration 代表不同 semantic clip 的 caption。
+关键点是：模型训练时不是简单的：
+image → captionimage → EOSimage → EOSimage → caption
+而是把视频流组织成一个连续上下文，让模型学：
+当前帧 + 历史上下文 → 当前语义片段的 narration
+同时，SCAM 会 mask 掉容易造成复制泄漏的 caption，只保留必要的历史总结信息。
+(e) Full Narration 展示最终效果。
+模型输出的不是零散的单帧 caption，而是一段连贯 narration：
+一开始，小猫在草地上跑；随后，另一只小猫进入画面；最后场景切换到室内。
+不同颜色对应不同时间点输出的 narration。它想说明 LiveStar 的输出是：
+少量、及时、连贯、有上下文的 narration。
+不是每一帧都说，也不是只会沉默，而是在语义变化时更新描述。
+之前的 online video benchmark 有两个问题：
+第一，任务太窄。很多 benchmark 主要还是 streaming video QA，也就是边看边回答问题，但真实在线助手不只做 QA，还要做实时解说、实时定位、答案更新、多轮交互等任务。论文也明确说，已有 SVBench、OVO-Bench、StreamBench 等工作虽然开始做 online evaluation，但主要集中在 video question answering，缺少多任务覆盖。
+第二，场景太窄。很多 online Video-LLM 主要在 Ego4D 这种第一人称视频上测，但真实场景可能包括直播、监控、宠物、体育、教学、游戏、新闻、娱乐等。OmniStar 因此想做一个更接近真实公开视频平台的 benchmark。
+所以 OmniStar 的核心 motivation 是：
+以前 benchmark 主要问“模型能不能回答视频问题”，OmniStar 想问“模型能不能在真实视频流中，决定什么时候说、说什么、是否保持沉默，并且保持上下文连贯”。
+OmniStar 是一个覆盖 15 diverse real-world scenarios 和 5 evaluation tasks 的 online video understanding 数据集。
+15 个场景大概包括：Travel & Events、Sports、Pets & Animals、Music、Autos & Vehicles、Film & Animation、Science & Technology、Education、Howto & Style、News & Politics、Entertainment、Comedy、People & Blogs、Gaming 等。PDF 中也说这些场景进一步按 YouTube 原生标注系统细分成 46 个类别。
+任务 1：RNG，Real-time Narration Generation
+这是最核心的任务。模型要像直播解说员一样，边看视频边生成 narration。
+重点不是每一帧都说，而是：
+语义变化时输出，语义没变时沉默。
+比如视频里一个人先拿出杯子，然后换成书，再换成手机，模型应该只在关键变化点更新描述，而不是每秒重复一句话。
+这个任务主要考察：
+response timing + narration quality + narrative coherence。
+任务 2：OTG，Online Temporal Grounding
+这个任务是给模型一个文本 query，让模型在视频播放过程中实时判断：
+这个事件什么时候开始？什么时候结束？
+比如 query 是：
+A man reporting from outside of a destroyed house.
+模型要在视频流中判断相关片段的 start/end，而不能提前看未来帧。
+这个任务主要考察：
+在线时间定位能力。
+传统 temporal grounding 通常是看完整视频后找片段，但 OTG 要求模型在 streaming 设置下做定位。
+任务 3：FDQ，Frame-level Dense Question Answering
+这个任务有一个固定问题，但答案会随着视频变化而变化。
+比如问题是：
+What is the person showing to the camera?
+答案可能随时间变成：
+nothing → white cup → grey cup → red book
+模型不能一直重复回答，也不能漏掉变化。它要在答案发生语义变化时更新。
+这个任务主要考察：
+模型能不能持续跟踪状态变化，并在答案变化时及时更新。
+任务 4：COQ，Contextual Online Question Answering
+这个任务是在线上下文问答。用户会在不同时间点提问，模型只能基于当前已经看到的视频和历史对话回答，不能看未来。
+关键点是后面的问题可能依赖前面的回答。
+比如：
+Q1：Who is the competitor?A1：A man in red.Q2：What did he continue to do?
+这里 Q2 的 “he” 需要模型记住前文指的是谁。
+这个任务主要考察：
+历史记忆、指代消解、上下文理解。
+任务 5：MIQ，Multi-turn Interactive Question Answering
+MIQ 比 COQ 更复杂。它不只是一个 QA chain，而是可能同时有多个问题链并行出现。
+比如同一个时间点问：
+Q1：What appears at the beginning?Q2：What is above it?Q3：What is in front of it?
+后面又继续追问。模型要同时维护多个交互线程。
+这个任务主要考察：
+多轮交互、多问题链跟踪、实时上下文管理。
+4. OmniStar 的标注方式有什么特别？
+OmniStar 不是简单给每个视频一个 caption 或一个 QA。它做的是 temporally dense annotation。
+也就是每个视频被切成多个带时间戳的语义片段，每个片段都有对应描述，而且这些描述不是孤立的，而是构成一条连续故事线。论文举的风格类似：
+First, the woman gathers the ingredients...Then, she mixes them in a large bowl...Finally, she places the dish in the oven...
+也就是说，它标的不只是“这一帧有什么”，而是“视频故事如何随时间推进”。PDF 里明确说 OmniStar 的 annotations 是 narrative-consistent caption sequences，目的是帮助模型学习 long-range narrative flow。
+这点很重要，因为 online video assistant 不能只会输出碎片 caption，它要知道前面发生了什么，然后让后面的输出接上去。
+5. 它怎么评测模型？
+OmniStar 的评测不只是看答案对不对，还看 输出时间对不对。
+主要指标包括：
+TimDiff：模型输出时间和 ground truth 时间的差距，越小越好。TimRedun：模型多余输出的次数，越小越好。TimCover：模型覆盖了多少应该响应的场景，越高越好。SemCor：semantic correctness，用 GPT-4o 从语义准确性、语言质量、信息完整性等角度评分。SumFluen：summary fluency，把模型多段输出拼起来，看整体叙事是否连贯。PDF 里对这些指标有详细定义。
+这个评测设计的意义是：传统 benchmark 可能只问 “answer right or wrong”，但 OmniStar 会问：
+你是不是在正确时间说了正确内容？有没有乱说？有没有重复？前后是否连贯？
+这更符合 online assistant 的真实需求。
+6. OmniStar 和 SVBench / OVO-Bench 的区别
+你可以这样理解：
+SVBench / OVO-Bench 更像是在测 online video QA 能力；OmniStar 更像是在测完整的 online video assistant 能力。
+区别主要有三点：
+第一，OmniStar 不只测 QA，还测 narration、temporal grounding、dense QA、contextual QA、多轮交互 QA。
+第二，OmniStar 强调 response-silence timing，也就是模型要自己决定什么时候输出，而不是只在固定问题点回答。
+第三，OmniStar 场景更宽，从公开视频平台和真实场景出发，而不是集中在第一人称或单一任务类型上。
+‹#›
+
+--- SLIDE 14 ---
+模型不是每来一帧都重新生成一句话，也不是输出 EOS 表示沉默，而是检查上一句 caption 在当前新画面下还适不适合。具体流程是：视频帧一帧一帧进来。 第一个语义片段，比如 Frame 1 到 Frame 5，模型生成 Caption 1。 后面新帧继续进入时，模型先不直接 decode 新 caption，而是用一次 forward 计算：当前画面下，旧 Caption 1 的 PPL 有没有明显变高。 如果 PPL 没有明显变高，说明旧 caption 还能解释当前画面，所以输出 Silent。 如果 PPL 超过阈值，说明画面语义已经变了，旧 caption 不再合适，于是触发 decoder，生成 Caption 2。 后面继续重复这个过程。 论文摘要里也明确说，LiveStar 的 response-silence decoding 是通过 single forward pass verification 来决定最优主动响应时机，而不是依赖 EOS token。
+训练阶段的 attention mask matrix：横轴和纵轴都是交错排列的：Img, Cap, Img, Cap, Img, Cap ...训练时，作者把视频帧和对应 caption 交错放进同一个序列里，让模型学习 streaming video-language alignment。但这里有一个问题：同一个 semantic clip 里面，连续几帧的 caption 语义可能差不多。如果模型在生成当前 caption 时能看到前面几乎一样的 caption，它就会直接复制，不是真的理解画面。所以 SCAM 要做 mask。蓝色部分：前一个语义片段的信息。 绿色部分：当前或后一个语义片段的信息。 灰色格子：被禁止 attend，防止信息泄漏。 浅色格子：允许 attend。 上面的箭头表示：模型可以保留每个语义片段最后的 caption 作为历史总结，但不能随便看同一片段里重复的 caption。
+
+--- SLIDE 15 ---
+Online Video Understanding: OVBench and VideoChat-Online CVPR 2025online video understanding 不是简单长视频理解，而是 time-dependent understanding。模型既要记住过去，又不能无限存过去；既要看清当前细节，又要保留长期时间信息。
+OVBench 是一个面向在线视频流的 benchmark。它的核心不是让模型看完整段视频后回答，而是在某个当前时间点提问，测试模型能否区分过去、当前和未来。任务上，它覆盖空间感知、时空轨迹、时间感知、过去记忆、时间幻觉验证和未来预测六类能力。构造上，它从多种视频场景中收集数据，利用动作时间、物体位置、轨迹和 timestamp 等高质量时空标注生成 QA，再通过相似物体、错位时间戳等方式构造干扰选项，并人工检查质量。因此 OVBench 更适合评估模型在真实 streaming video 场景下的实时理解能力。
+[NOTES]
+把在线视频理解分成三个时间上下文：Past、Current、Future。基于这三个时间段，它设计了 6 类核心任务：
+Spatial Perception：看清当前画面里的空间关系，比如某个人/物体在什么位置。
+Spatial-Temporal Perception：理解过去一段时间里的运动轨迹，比如两个人是靠近还是远离。
+Temporal Perception：理解动作或物体状态的时间范围，比如某个人什么时候出现/消失。
+Hallucination Verification：判断过去看到的东西现在是否还存在，防止模型把历史信息误当成当前事实。
+Past Memory：回忆过去某个时间点的状态，比如 13 秒前某个物体在哪里。
+Future Prediction：根据当前和过去信息预测接下来会发生什么，比如某个人下一秒会往哪个方向移动。
+所以第一张图的核心意思是：
+OVBench 不只是问“视频里有什么”，而是测试模型能不能在流式视频中区分过去、现在、未来，并完成感知、记忆、验证和预测。
+OVBench 怎么构造。它的生成流程分成四步：
+Task formulation：先定义 online video 里的任务类型，也就是 Past / Current / Future 下的不同问题。
+Data collection：从多个场景收集视频，包括 movie、instructional、outdoor、indoor、road scenes、open-domain，保证场景多样。
+QA construction：利用已有的高质量时空标注，比如动作时间段、物体位置、timestamp、bounding box，再由人工按模板改写成问题。
+Option generation：生成选择题选项，并加入更贴近流式视频的干扰项，比如相似物体、错位时间戳、常见错误回答；最后再人工检查问题清晰度、选项歧义和标注准确性。
+‹#›
+
+--- SLIDE 16 ---
+PMB（Pyramid Memory Bank）
+但是这样还是没法解决O(1)处理KV cache的问题
+[NOTES]
+‹#›
+
+--- SLIDE 17 ---
+真实 AR 眼镜里会遇到的 Future-dependent 场景用户已经把一个观察/提醒/辅助目标交给 AR 眼镜；当前画面还不能完成这个目标；模型必须继续看未来的第一视角视频流，等某个真实世界证据出现后，才能及时回应。Future-dependent = answer/action 的正确时机依赖未来才会出现的视觉/语音/动作/位置/注视证据。只有任务规格不清楚时，问用户才有用；但 Future-dependent 的核心缺口不是规格缺口，而是未来观察缺口。这类任务缺的是未来才会出现的现实证据：用户把持续观察任务交给 AR agent 后，agent 应该等待并判断证据是否足够，而不是反复打断用户
+[NOTES]
+比如：
+“我一会儿走到正确教室门口时提醒我。”
+如果 agent 不知道“正确教室是哪间”，它可以先问：“你要去哪个教室？”但一旦用户说了“Silver 401”，之后的问题就不是问用户能解决的。agent 必须等未来画面里真的出现门牌、走廊位置、教室入口等证据。
+再比如：
+“如果我之后忘了关灯，请提醒我。”
+agent 可以先问：“你是指卧室灯还是所有房间灯？”但确认范围后，它还是必须等未来的“离家/睡觉/离开房间”场景出现，并同时判断灯是否仍然开着。这个不是继续问用户能解决的，因为用户很可能正是会忘。
+‹#›
+
+--- SLIDE 18 ---
+
+--- SLIDE 19 ---
+StreamBridge: Turning Your Offline Video Large Language Model into a Proactive Streaming Assistant NeurIPS 2025 poster
+incoming frames 被逐帧编码并存入 memory buffer；用户 query 在某个时间点插入；activation model 监控后续 frames；如果输出二值信号 D=True，就触发 LLM 开始回答。
+Memory Buffer：把视频帧、用户问题、模型回答都存成连续历史； Round-Decayed Compression：历史太长时，优先压缩旧视觉 token，保留最近视觉上下文； 越早的轮次，压缩越严重；越近的轮次，尽量保留清晰。Activation Model：用一个小模型判断什么时候应该主动回答。把原本的 language modeling head 换成 score head，加入一个可学习的 <ACT> token。每帧后面放一个 <ACT>，模型最后取最新帧的 <ACT> hidden state，送进 score head，预测当前时刻是否应该回答。<V_i tokens> <ACT>label 怎么来？作者用有时间标注的视频数据。对于一个视频 segment，只把最后 P% 的 frames 标成 positive，也就是“可以回答了”；前面的 frames 标成 negative，也就是“还不能/不该回答”。P 会在 0% 到 50% 之间动态采样，用来模拟不同激活时机。
+compression 是 recent-first，可能不适合 AR 里长期个人记忆和非单调重要信息
+activation label 用最后 P% frames 近似，比较粗，不是真正根据 answer evidence 是否出现来标注但插入token&用轻量score head打分的思路可以借鉴
+
+--- SLIDE 20 ---
+输入是用户问题 Q、已经出现的视频帧 token，以及可能的历史回答 A1、A2。作者在每一帧后面插入一个特殊的 <ACT> token，让它像一个小探针一样收集当前时刻的信息。然后 activation model，也就是 LLaVA-OV-0.5B，会读取这些内容，并把每个 <ACT> token 的 hidden state 送到 score head，输出 0 或 1。0 表示继续保持沉默，1 表示当前证据足够，可以触发主 LLM 回答。
+这个 P% label 是一种粗糙近似。它假设一个 segment 的后半部分更接近“可以回答”的时间点，但它没有真正逐帧标注答案证据第一次出现的位置。只是假设最后 P% 大概率已经足够
+
+--- SLIDE 21 ---
+MEMENTO: TOWARD AN ALL-DAY PROACTIVE ASSIS-TANT FOR ULTRA-LONG STREAMING VIDEO ICLR2026作者认为真实 AR 助手不是“当前帧描述器”，而是 长期行为监控器。比如用户说：“如果这个人之后第三次要打针，请提醒我距离上一次多久。”这个任务同时需要：记住第一次、第二次发生的时间；未来第三次出现时主动触发；回答时还能用过去 memory 做时间推理。普通 online 模型可能前 20 分钟还能工作，但几个小时后就忘了或爆显存。
+每个 frame 先经过 ViT-based encoder，得到一个包含全局 [CLS] token 和空间 patch tokens 的视觉表示。不同于直接把每一帧 token 都投进 LLM，Memento 先把它送进 Dynamic Memory，更新一个长期 memory bank。然后根据历史用户 query，通过 QMS 选出 query-relevant memory，再交给 LLM 生成当前时刻的输出（判断 ready 不是“把所有历史都看一遍”，而是应该先根据 query 取相关证据，再判断当前是否足够回答）
+
+--- SLIDE 22 ---
+Dynamic Memory
+用阈值 ε 做三种决策。论文默认 ε=0.7。第一种，如果 δ > ε，说明当前帧和上一帧/最后 memory 很像，比如用户手还在同一个位置，画面变化不大。这时候不追加新 memory，而是把当前帧融合进最后一个 memory。直白说，就是“这帧没必要单独存，更新一下最近记忆就行”。第二种，如果 δ ≤ ε 但 σ > ε，说明当前帧和最近画面不像，但和很久以前的某个 memory 有关系，比如同一个物品再次出现、同一个动作再次发生。这时候模型会用 attention 去软更新历史 memory slots，而不是简单丢掉或盲目追加。直白说，就是“这不是最近重复，但它和过去某件事有关，要更新那段长期记忆”。第三种，如果 δ ≤ ε 且 σ ≤ ε，说明这是一个新信息，那就直接 append 到 memory。直白说，就是“这个东西以前没见过，值得新开一个记忆槽”。这个设计的意义是：memory 不是无限增长，也不是强行固定长度；它会对重复内容做融合，对新内容做扩展。 这比纯 token accumulation 更适合 ultra-long video，也比固定 memory bank 更灵活，因为固定 bank 容易在长视频里把早期但重要的信息挤掉。解决：长期第一视角视频怎么存？Eg. Daily routine适合处理“同一个物体/动作反复出现”的 AR 场景，比如药瓶、钥匙、灯、门牌
+
+--- SLIDE 23 ---
+STEP-AWARE MEMORY ATTENTION
+保证 readiness 判断的训练过程不作弊
+
+--- SLIDE 24 ---
+找一个长时间的benchmark（egoeverything的时间太短了）AR 长视频记忆里，如何利用日常行为的周期性先验，避免对全部历史 memory 做全量检索，同时保留长期重要信息。
+
+--- SLIDE 25 ---
+RoutineMem: Routine-Aware Memory for AR Egocentric Video：在固定 KV memory budget 下，RoutineMem 不把所有视频 token 放进一个 flat cache，而是维护多个 routine-specific KV shard。在固定 KV memory budget 下，RoutineMem 不把所有视频 token 放进一个 flat cache，而是维护多个 routine-specific KV shard。一个 learnable memory controller 学习新 chunk 写到哪个 routine、每个 routine 分多少预算、routine 内哪些 token 留下、query 来时读哪些 routine。
+AR 眼镜里的第一视角视频不是普通视频。它有三个特点：时间非常长：用户可能戴几个小时、一天、甚至连续多天。 内容很碎：吃饭、走路、工作、找东西、聊天、做饭，全都混在一起。 行为有规律：人的生活不是随机流，而是由很多重复 routine 组成，比如吃药、做饭、通勤、工作、睡前检查。用户戴着 AR 眼镜生活一整天，然后问：“我今天吃药了吗？”“我把钥匙放在哪里？”“我这周哪几天忘了运动？”“我上次和老师讨论这个 topic 是什么时候？”“我有没有关火 / 锁门 / 拿文件？”这些问题需要从很长的第一视角历史里找证据。RoutineMem 的作用就是不把所有视频当成一条 flat history，而是学习用户跨天重复出现的 routine，把长期记忆结构化成 routine-specific memory，在固定预算下更可靠地保留和检索生活中真正重要的证据。
+[NOTES]
+‹#›
+
+--- SLIDE 26 ---
+Streaming video chunk → Video-LLM encoder → chunk embedding + visual KV → Learnable Routine Router → write KV into M_r → update routine state h_r → Budget Allocator gives B_r → Retention Scorer keeps top-B_r KV tokens → query selects top-k routine shards → Video-LLM answersM_r 表示第 r 个 routine 的 KV memory shard；h_r 表示这个 routine 的状态表示；B_r 表示分配给这个 routine shard 的 KV budget。Novelty 1：Routine-Sharded KV Cache把长期 egocentric video 的 memory 从 flat chronological KV cache 改成 routine-sharded KV cache。现有 streaming KV 方法一般维护一个 flat KV memory，然后在里面做 token-level compression；但routinemem维护 {M_1, ..., M_K}，每个 M_r 对应一个长期 routine。Existing: M = all historical KV tokensRoutineMem: M = {M_medicine, M_cooking, M_work, ...}  按人的行为 routine 组织 cacheNovelty 2：Learnable Routine-Level Budget Allocation不是只问哪个 token 重要，而是先问哪个 routine 值得分配 memory budget。也就是在 token-level compression 之前，加了一个 routine-level budget policy。Existing: score(token_i) → keep/dropRoutineMem: score(routine_r) → B_r then score(token_i | routine_r) → keep/drop 先学习不同 routine 应该分多少 cacheNovelty 3：Routine-Conditioned Retention and Retrievaltoken retention 和 query retrieval 都 condition on routine state。也就是说，同一个 token 在不同 routine 下的重要性不同；同一个 query 也应该先路由到相关 routine，而不是匹配整个历史。routine 不是标签，而是 cache partition unit、budget unit 和 query routing unit。
+[NOTES]
+Module 1：Streaming video chunk
+输入是 AR 眼镜连续看到的第一视角视频流。我们不会一次性拿到完整视频，而是每隔 5 到 10 秒切成一个 chunk。这样更符合真实 AR streaming 场景，也符合 fixed memory budget 的约束。
+这里强调两点：不是 offline full video，是 streaming chunk-by-chunk input
+Module 2：Video-LLM encoder
+每个 video chunk 会先经过 frozen Video-LLM 或 vision encoder，比如 VideoLLaMA3 / Qwen2.5-VL。这里 backbone 不作为我的主要贡献，我主要利用它提取两类信息：一个是 chunk-level embedding，另一个是 visual KV cache。
+这里重点是：backbone frozen我的贡献不在训练 base model，我的贡献在 memory manager
+第一版可以用开源 Video-LLM 作为 backbone，先冻结它，只训练 memory controller。
+Module 3：chunk embedding + visual KV
+对每个 chunk，我拿到两种表示。第一种是 chunk embedding，用来判断这个片段属于什么 routine；第二种是 visual KV cache，用来作为真正要保存的细粒度视觉记忆。
+换句话说，embedding 负责“路由和管理”，KV 负责“保留可回答问题的视觉证据”。
+embedding 用来决定这个片段写到哪里；KV 用来真正回答问题。
+Module 4：Learnable Routine Router
+Routine Router 的作用是判断当前 chunk 应该写入哪个 routine memory。比如它看到药瓶、水杯、早晨时间、洗手间/厨房场景，可能会把这个 chunk 路由到 medicine routine；看到锅、灶台、食物，可能路由到 cooking routine。
+我不想只做 heuristic clustering，而是希望做成 learnable router。它输入 chunk embedding 和已有 routine states，输出这个 chunk 属于每个 routine 的概率。
+可以写成：π(r | z_t, h_1, ..., h_K)
+z_t 是当前 chunk embedding，h_r 是第 r 个 routine 的状态。router 输出一个分布，决定当前 chunk 更像哪个 routine。
+这里的 novelty 小点是：routine 不是人工定义的标签，而是模型在长期视频里学出来的 latent memory state。
+Module 5：write KV into M_r
+M_r 表示第 r 个 routine 的 KV memory shard。比如 M_medicine 存吃药相关的 KV，M_cooking 存做饭相关的 KV，M_work 存工作相关的 KV。
+所以 M_r 是routine-specific 的 layer-wise visual KV cache 子库。M_r = {K_r^1, V_r^1, ..., K_r^L, V_r^L} 因为 Transformer 每一层都有 KV cache，所以严格来说每个 M_r 都是 layer-wise KV shard。
+这里你要强调 novelty：
+现有方法通常只有一个 flat cache；我这里把 cache 按 routine 拆成多个 shard。
+Module 6：update routine state h_r
+每个 routine 不只是一个 KV 容器，它还有一个 routine state，记作 h_r。这个 state 是这个 routine 的长期画像，记录这个 routine 通常长什么样、什么时候发生、和哪些 object/action 相关。
+例子：
+h_medicine: 药瓶、水杯、早晨/晚上、拿药动作h_cooking: 厨房、锅、食物、切菜/加热动作h_work: 桌面、电脑、文档、会议对话
+每当新 chunk 被写入 M_r，对应的 h_r 也会更新。后面的 budget allocator 和 query selector 都会用到这个 h_r。
+这里强调：h_r 是 routine 的 summary state；M_r 是 routine 的 KV memory。
+Module 7：Budget Allocator gives B_r
+因为总 KV budget 是固定的，不可能每个 routine 都无限存。所以 Budget Allocator 要决定每个 routine 分多少 memory budget，记作 B_r。
+最简单的 baseline 可以是按 frequency 分，比如高频 routine 多给一点 budget。但我的主方法不是手写 B_r = frequency，而是 learnable allocator。
+B_r = B_total · softmax(MLP(h_r, stats_r, global_state))
+h_r 是 routine state，stats_r 可以包括 frequency、recency、uncertainty、当前 memory size，global_state 表示整体 memory pressure。模型自己学习哪个 routine 更值得存，而不是我手写规则。
+frequency 只是输入特征，不是最终规则。
+Module 8：Retention Scorer keeps top-B_r KV tokens
+Budget Allocator 只决定每个 routine 有多少预算，但每个 routine 内部还要决定具体保留哪些 KV token。Retention Scorer 就是做这个的。
+s_i = f(token_i, h_r, timestamp_i, layer_i)
+它给 M_r 里面每个 token 打分，然后保留 top-B_r 个 KV token。
+重点在 routine-conditioned：
+token 的重要性不是绝对的，而是和 routine 有关。同一个药瓶 token，在 medicine routine 里可能非常重要，但在普通厨房背景里可能没那么重要。所以 retention scorer 要 condition on routine state h_r。同一个视觉 token，在不同 routine 里有不同价值。
+InfiniPot-V 用 temporal redundancy 和 value norm 做 training-free 压缩，StreamMem 用 generic query tokens 的 attention score 来维护 fixed-size KV memory
+Module 9：query selects top-k routine shards
+当用户提问时，系统不再把 query 和整个 flat cache 匹配，而是先选择相关 routine shard。比如用户问“我今天吃药了吗”，query selector 应该优先选择 M_medicine、可能再选择 morning/kitchen 相关 shard，而不是扫描所有历史 KV。
+score(q, h_r) → top-k M_r
+q 是用户问题，h_r 是 routine state。模型选择最相关的 top-k routine memory shards。
+StreamKV 是 query 检索 single-video semantic segment；我这里是 query 检索 cross-day persistent routine shard。StreamKV 的 segment 是当前视频里的语义片段，而 RoutineMem 的 routine 是多天、多次出现的行为状态。
+Module 10：Video-LLM answers
+Video-LLM 只基于 selected routine KV shards 和当前 query 生成答案。这样可以在 fixed memory budget 下避免把所有历史都放进上下文，同时优先保留和读取用户长期生活里最相关的 routine memory。
+整个 controller 学的是四件事：where to write, how much to keep, what to evict, and where to read.
+‹#›
+
+--- SLIDE 27 ---
+EgoLife: Towards Egocentric Life Assistant
+https://egolife-ai.github.io/EgoLife 是一个面向 AR 眼镜生活助理的长期第一视角生活数据集：6 个参与者共同生活 7 天，为 Earth Day party 做准备，每人佩戴 Meta Aria 眼镜记录约 50 小时 ego video/audio，同时结合第三视角相机、传感器、语音转录和 dense captions，目标是评测模型能否像“个人生活助理”一样理解长期日常记忆、物品状态、事件回忆、习惯模式、社交关系和任务安排。第一张图展示整体采集设定：多人、多天、多模态第一视角记录，并形成 EntityLog、EventRecall、HabitInsight、RelationMap、TaskMaster 五类任务；第二张图展示一周内每个参与者的活动时间线，把生活行为按社交、做饭、购物、清洁、音乐、聚会等类别组织起来，说明数据具有连续的日常行为结构；第三张图展示 EgoLifeQA 的问题形式：每个问题都需要模型从过去不同时间点检索证据，比如回忆事件、找物品价格、判断未完成任务、总结个人习惯或分析谁经常和谁互动，因此它的核心价值是测试 long-term egocentric memory，而不是只看当前短视频回答问题。
+[NOTES]
+‹#›
+
+--- SLIDE 28 ---
+变成树结构Episodic memory&sta... Memory两种分类
+
+--- SLIDE 29 ---
+═══════════════════════════════════════════════════════════                Streaming egocentric video═══════════════════════════════════════════════════════════                          ↓              Chunk every 5–10 seconds                          ↓        [Module 1: Chunk Feature Extractor]        - visual_emb     : frozen Video-LLM encoder        - time_feat      : sin/cos hour-of-day, day-of-week                          ↓═══════════════════════════════════════════════════════════   阶段一：WARM-UP（Day 1）—— 初始化 routine tree═══════════════════════════════════════════════════════════        用第一天的所有 chunk 做 offline DP-means 聚类（不用提前指定 cluster 数量的 k-means，自适应）        （visual + time 联合空间）        → 形成 K_init 个 top-level routine clusters        → 每个 cluster 初始化 visual_prototype                          + time_distribution                          + 空 semantic_part / episodic_part        ROOT 节点建立完成                          ↓═══════════════════════════════════════════════════════════   阶段二：STREAMING UPDATE（Day 2 起）—— 在线维护═══════════════════════════════════════════════════════════                          ↓        [Module 2: Hierarchical Routine Matcher]        从 ROOT 开始向下匹配                          ↓              ┌─── ROOT 层判断 ───┐              ↓                   ↓        max P > τ_root           max P ≤ τ_root        AND margin > δ           OR margin ≤ δ              ↓                   ↓        进入对应顶层               ⚠️ NOVELTY TRACK        routine                  （流程结束，等待 promotion）              ↓        ─── 中间层判断（如果该 routine 有 sub-children） ───              ↓        max P > τ_mid?              ↓                   ↓        进入 sub-child           PROVISIONAL sub-cluster        继续向下                  （未确认，等重复 ≥M 次升正式）              ↓        最终落到某个叶子节点                          ↓        在该叶子节点存储:        - 更新 visual_prototype (EMA)        - 更新 time_distribution        - 更新 semantic_part (EMA prototype tokens)        - 决定是否加入 episodic_part
+↓═══════════════════════════════════════════════════════════   ROUTINE TREE                ║      NOVELTY TRACK═══════════════════════════════════════════════════════════   ROOT                        ║  list of {timestamp,   ├─ morning routine          ║            visual_emb,   │   ├─ wake up              ║            KV instance,   │   ├─ breakfast            ║            novelty_score}   │   └─ [provisional: yoga]  ║   ├─ work routine             ║  Promotion check (每 N 天):   ├─ cooking routine          ║   - novelty 池内做 DP-means   └─ ...                      ║   - if cluster size ≥ M:                               ║       挂到 routine tree   每节点存:                    ║       (用 visual+time 找最近 parent)   - visual_prototype          ║   - time_distribution         ║  Eviction (池满时):   - semantic_part (固定 K)    ║   按 novelty_score 保留 top-K   - episodic_part             ║   - children (若有)            ║   - state: confirmed/         ║            provisional         ║═══════════════════════════════════════════════════════════                          ↓        [Module 3: Hierarchical Budget Allocator]        B_total = B_routine + B_novelty (默认 7:3)        B_routine 在 confirmed nodes 上按 utility 分配        provisional cluster 共享 parent 的 buffer 配额                          ↓              Memory state 持续更新                          ↓        ┌─────── Query 到达 ───────┐                          ↓        [Module 4: Soft Query Router]        所有 routine 节点 + novelty events        在同一打分空间竞争        Beam search 取 top-r                          ↓        Selected memory + query → Video-LLM → Answer                          ↓        [Online correction (v2)]        if answer 错 / 低 confidence:            update query_hit_history            re-allocate budget next round
+[NOTES]
+双轨架构（routine tree + novelty track）、树形结构、scene 和 time 双信号匹配、episodic 和 semantic 分层。这页是完整版。
+流程是这样：每 10 秒切一个 chunk，提取 visual embedding 和 time-of-day feature。阶段一用 Day 1 做 warm-up DP-means 聚类，初始化 ROOT 下面的 top-level routine。阶段二 Day 2-7 是 streaming，每个新 chunk 自顶向下匹配——
+在 ROOT 层算 P(child|chunk)，如果 max P 大于阈值并且 margin 足够大，就进入对应顶层 routine；如果都不匹配，进 novelty track。只有 ROOT 层失败才算 novelty，这是"全新大类活动"。
+进入 routine 之后再做中间层匹配——如果该 routine 已经有 sub-children，继续向下；中间层匹配不到的话，新建一个 provisional sub-cluster，等重复出现 ≥ M 次再升为正式 child。这样树不会被偶然噪声撑爆。
+每个 routine 节点存四样东西：visual prototype、time distribution、固定 K 个 semantic prototype tokens、以及 episodic instances。
+Novelty pool 每 N 天扫描一次，里面如果出现 ≥ M 个相似事件——比如连续几个周末去美术馆——就 promote 到 routine tree 里挂在合适位置。
+Budget 是固定的，B_total = B_routine + B_novelty 默认 7:3。Query 来时所有 routine 节点和 novelty events 在同一打分空间竞争，beam search 取 top-r。
+‹#›
+
+--- SLIDE 30 ---
+═══════════════════════════════════════════════════════════════                    RoutineMem-v0 Pipeline═══════════════════════════════════════════════════════════════                  EgoLife P1 streaming video                         (7 days)                              ↓                  Chunk every 10 seconds                              ↓        ┌─────────────────────────────────────────┐        │  [Module 1] Chunk Feature Extractor      │        │  - visual_emb : VideoLLaMA3 vision tower │        │  - time_feat  : sin/cos hour-of-day      │        └─────────────────────────────────────────┘                              ↓═══════════════════════════════════════════════════════════════   阶段一：WARM-UP (Day 1)═══════════════════════════════════════════════════════════════        Day 1 全部 chunk → offline DP-means        (visual_emb + γ·time_feat 联合空间)                              ↓        形成 K 个 top-level routine clusters        每个 cluster 初始化:          - visual_prototype (μ_r)          - time_distribution (1D histogram on hour)          - 空 semantic_part / episodic_part═══════════════════════════════════════════════════════════════   阶段二：STREAMING UPDATE (Day 2-7)═══════════════════════════════════════════════════════════════                              ↓                    新 chunk 进来                              ↓        对所有 K 个 cluster 计算:          P(r | chunk) ∝ exp(-||v - μ_r||) · p_r(t)^γ                              ↓              ┌──── max P > τ ? ────┐              ↓ Yes                  ↓ No        ─────────────────         ─────────────────        归到该 cluster              进 NOVELTY POOL        ─────────────────         ─────────────────              ↓                        ↓        更新该 cluster:            存为独立 event:        - μ_r ← EMA(μ_r, v)        {timestamp, v, KV}        - time_dist 更新        - semantic_part EMA            ↓        - episodic_part:           novelty pool 满时          按 budget 决定保留         按 recency +           (recent / diverse)         distinctiveness                                     保留 top-K              ↓                        ↓
+└────────┬───────────────┘                       ↓              Memory state 持续更新              (Day 2 → Day 7)═══════════════════════════════════════════════════════════════   阶段三：QUERY 评测═══════════════════════════════════════════════════════════════                              ↓                       Query 到达                              ↓        对所有候选打分:          - K 个 routine cluster (每个用 visual_prototype 算 cosine)          - novelty pool 中所有 events (visual_emb 算 cosine)                              ↓                    取 top-r 候选                              ↓        拼接 selected memory + query        → VideoLLaMA3 → Answer═══════════════════════════════════════════════════════════════   存储结构（fixed budget B 总约束）:   ─────────────────────────────────   B_total = B_routine (70%) + B_novelty (30%)      B_routine 平均分给 K 个 cluster (v0 不做 utility 分配)       每个 cluster B_r:         - K_sem 个 semantic prototype tokens (固定)         - 剩下给 episodic instances      B_novelty: novelty pool 共享，按 score 保留
+保留：✅ Top-level routine clustering（warm-up 初始化）✅ Visual + time 双信号匹配✅ Novelty track（ROOT 不匹配时进）✅ Episodic + semantic 双层存储✅ Fixed budget 约束✅ 简单 query routing（cosine similarity）砍掉（先不做，v1 再加）：❌ 中间层（hierarchical tree）—— v0 只做一层❌ Provisional sub-cluster 机制 —— 跟 hierarchical 一起 v1 做❌ Promotion 机制 —— v0 周期短（一周）观察不到 promotion 价值❌ Online learning routing scorer❌ 复杂 utility 函数 —— 先只用 frequency❌ Fallback retrieval —— 第一版不加
+[NOTES]
+打算先做 v0 最小版本，目的是验证一个核心假设：在固定 memory budget 下，按 routine 组织记忆是不是真的比 flat 组织更好？
+保留的 6 个核心 component 是：top-level routine clustering（用 warm-up 初始化）、visual + time 双信号匹配、novelty track（ROOT 不匹配时进）、episodic + semantic 双层存储、固定 budget、简单 cosine query routing。
+暂时砍掉的是：中间层（v0 只做一层，不做完整 tree）、provisional sub-cluster 机制（跟 hierarchical 一起 v1 加）、promotion 机制（v0 一周观察周期太短看不到 promotion 价值）、online learning routing scorer、复杂 utility 函数（先只用 frequency）、fallback retrieval。
+流程很简单：Day 1 warm-up，Day 2-7 每个新 chunk 跟 K 个 cluster 算 P，匹配进 cluster，不匹配进 novelty pool，cluster 内做 EMA 更新。Query 来时对所有候选算 cosine 取 top-r 喂给 VideoLLaMA3。
+如果 v0 上 routine prior 有显著提升，立刻按完整计划推进，加 hierarchical tree、promotion、provisional 这些；如果 v0 跟 flat clustering 持平甚至更差，说明 routine prior 这个假设有问题，那再加复杂模块也救不了，需要重新评估方向。
+‹#›
+
+--- SLIDE 31 ---
+EgoLife 真实结构：multi-session daily egocentric recordings。A1_JAKE 7 天数据：每天都有数据，无缺失天；总 6266 个 clips，median gap = 30 秒（session 内连续）；全 7 天检测到 32 个 sessions，每天均有 session break；主要覆盖 10:00–23:00，每天起止时间略有不同实验 1：Time-of-day periodicity（时间维度）方法：找出 7 天共同覆盖的 30 分钟时间窗口，比较：同一时间段跨天的 clip 视觉相似度；与随机时间段的相似度结果（A1_JAKE，34 个 clips，CLIP embedding）：same-time cross-day similarity:  0.8376  random-time similarity: 0.8338  periodicity score (差值): 0.0038→ 信号几乎为 0。"每天同一时间发生类似事情" 不成立。实验 2：Semantic recurrence（不限时间，看视觉重复）方法 A（对每个 clip，找一个“跨天最像它的 clip”，然后和“随机跨天 clip 的平均相似度”比较）：EgoLife 里能找到跨天相似画面方法 B（严格 baseline，加 permutation test：通过打乱标签生成一个“没有真实结构时会得到什么结果”的 null distribution，然后看真实结果是否足够极端）：“跨天”这个结构本身并没有被证明很重要，这些相似画面不一定来自真实跨天 routine/event recurrence。它们可能只是：同一个房子，类似房间，类似桌子，类似灯光，类似室内背景，类似鱼眼视角A1_JAKE 严格结果：lift vs random-max (k=20): 0.0217 permutation p_mean_best: 1.0000 permutation p_clusters≥3days: 0.5174→ 打乱 day label 后跨天相似性依然存在。说明相似性来自 indoor/room/lighting 等环境因素，不是真正的 repeated event/action。实验 3：扩展到 A2-A6（结论相似，无显著跨天结构）EgoLife 不支持 cross-day routine recurrence 作为核心假设：1. Time-of-day periodicity 无信号 2. Semantic recurrence 仅 environment-level，不是 event-level / action-level repetition 3. 现象在全部 6 个 participant 上一致实验 4：caption/text recurrence 也没有救回 RoutineMemEgoLife 的 recorded active hours 内部语义连续性很好，但 caption-level recurrence 结果仍然弱：文本/字幕层面，同一小时跨天只比随机小时略高一点；打乱 day label 后结果没有变差，所以仍然不能证明存在稳定跨天 routine/event recurrence。不是 CLIP 视觉特征太弱导致没看到 recurrence；换成 caption/transcript 后，强 recurrence 仍然不明显。猜测原因：EgoLife 是 task-driven (Earth Day prep)，不是自然 daily routine；6 个 participants 共同生活 1 周，活动随任务进度演化，不按 daily cycle 重复目前没有很适合routinemem的数据集（最贴切的只有厨房数据集，domain太小了）除开routine, video KV cache 本身的问题独立存在（换数据集or换思路？）EgoEverything 的 follow-up（attention-aware QA）？Or组里其他项目？castle-dataset下载
+[NOTES]
+我补看了 caption/transcript 文件。结果发现，虽然视频文件是 clip/session 形式，但文本标注层面可以恢复出比较连续的 daily timeline。A1_JAKE 里 caption-active span 覆盖约 87.4%，caption median gap 只有 3.67 秒。所以 EgoLife 不是散乱 clip 数据，它确实适合做 long-context daily memory。但是，我现在区分了两个问题：第一，数据是否连续；第二，跨天是否有稳定 routine recurrence。新的 caption 分析解决了第一个问题，但没有解决第二个问题。视频层面的 time-of-day periodicity 几乎为 0；视觉 semantic recurrence 严格验证后只是 weak；扩到 A2-A6 也没有更强 participant；caption/text recurrence 也只是 same-hour 比 random-hour 高一点点，而且 permutation p-value 仍然是 1.0。EgoLife 很适合 long-context egocentric memory / event recall / QA，但不适合支撑以 cross-day routine recurrence 为核心的 RoutineMem。
+我这几天主要是在验证 EgoLife 是否支持 RoutineMem 的核心假设。
+首先，从文件结构看，EgoLife 不是散乱 clip。以 A1_JAKE 为例，7 天都有数据，总共 6266 个 clips，session 内部 median gap 是 30 秒，所以每个 session 内基本连续。但是 7 天一共有 32 个 recording sessions，每天都有 session break，所以它不是 24 小时连续 AR stream，而是 multi-session daily egocentric recordings。
+然后我补看了字幕和 caption 文件。这个结果很重要：A1_JAKE 解析出 12.9 万条 caption/transcript entries，caption-active span 覆盖 76/87 hours，大约 87.4%，caption 的 median gap 只有 3.67 秒。所以从文本标注层面看，EgoLife 可以恢复出比较连续的 daily event timeline。这说明 EgoLife 是可以做 long-context daily memory 的。
+但是，我现在区分两个问题：数据是否连续，和跨天是否有稳定 routine recurrence。前者基本成立，后者目前不成立。
+我做了三组 recurrence 验证。第一组是 time-of-day periodicity：找 7 天共同覆盖的 30 分钟窗口，比较同一时间段跨天视觉相似度和随机时间段相似度。A1_JAKE 的 same-time similarity 是 0.8376，random-time 是 0.8338，差值只有 0.0038，几乎没有信号。所以“每天同一时间发生类似事情”这个假设不成立。
+第二组是 visual semantic recurrence：不看时间，只看视觉内容是否跨天重复。宽松 baseline 下，nearest neighbor 比 random mean 高 0.0931，看起来很强。但这个 baseline 太容易赢，因为最近邻本来就比随机平均更像。所以我做了 random-max baseline 和 permutation test。A1 的 lift vs random-max k20 只有 0.0217，而且 permutation p_mean_best 是 1.0，p_clusters≥3days 是 0.5174。也就是说，打乱 day label 后结果没有变差，说明相似性更可能来自室内、桌面、房间、光照、鱼眼视角这类通用环境，而不是真正跨天重复事件。
+第三组是扩展到 A2-A6。结果 A4/A5/A6 只是 weak candidate，A3/A2 not supported，而且没有任何一个 participant 比 A1 更强。contact sheets 里也主要是 indoor / home / table / background similarity，没有明显干净的 event-level recurrence。
+最后，我又做了 caption-level recurrence。虽然 caption continuity 很好，但 recurrence 仍然不强。same-hour text similarity 是 0.6905，random-hour 是 0.6770，差值很小；permutation p_mean_best 还是 1.0。所以即使用字幕语义，仍然不能证明有稳定跨天 routine structure。
+所以我现在的结论是：EgoLife 是一个很好的 long-context daily memory / event recall 数据集，但它不适合支撑以 cross-day routine recurrence 为核心的 RoutineMem。Routine recurrence 可以作为一个弱观察或辅助 signal，但不能作为主 contribution。
+EgoLife 的 recorded hours 内语义连续性很好，适合 long-context daily event memory；但视觉和字幕两层 recurrence 分析都显示，cross-day routine/event recurrence 不显著。因此 RoutineMem 的核心假设不成立，不能继续把 routine recurrence 作为主 contribution。
+所以我现在有两个选择：第一，放弃 RoutineMem，把方向转成更一般的 long-context egocentric memory / event recall；第二，如果还想做 routine memory，就需要换更适合自然 daily routine 的数据集，或者做人工标注的小规模 routine subset。
+EgoLife 是可用的 long-context daily memory 数据集。但它不支持 RoutineMem 最核心的 cross-day routine recurrence 假设。
+‹#›
+
+--- SLIDE 32 ---
+Active ≠ Relevant: Source-aware Multi-stream VideoScenario：场景 A：多人会议 / presentation场景 B：找东西 / 物体记忆场景 C：实验室 / 医疗 / 安全操作真实 AR / multi-user assistant 面对的是多个 memory sources：user ego view other users’ ego views room/static cameras audio/transcripts 但一个 query 只需要少量 evidence。ChallengeSingle-view may miss evidence.All-view fusion wastes context budget, adds noise, and raises privacy/permission cost.Research questionGiven a query and long-form multi-stream videos, how can we select top-k event-relevant sources/segments under a fixed context budget?
+[NOTES]
+未来 AR 助手会运行在多人共享空间里，同一个事件可能同时被多个用户的第一视角眼镜和房间摄像头记录。但对某个具体问题来说，只有少数 active streams 真的有用。由于长时多路视频不可能全部放进 VLM context，系统必须在固定 memory/context budget 下判断该查哪一路、哪一段、忽略哪些无关视角。我的问题就是 source-aware / memory-efficient multi-stream video QA：从多路同步长视频中选择并压缩事件相关 evidence 来回答问题。
+第一是 计算和 context 成本。CASTLE 这种设定里，15 路视频、600+ 小时内容，本质上是 dataset-scale memory。即使每路只抽低 fps frame，乘以 15 路和长时间窗口后，token 数也会爆炸。你的脚本也一直强调不下载完整视频、不用 hf_hub_download 下载 video，而是只抽指定 clock-time 的少量帧，这说明你的实验已经在围绕低带宽、低存储、低上下文的现实约束做 feasibility。
+第二是 无关信息会干扰模型。不是说 context 越多越好。如果把 Kitchen、Reading、Klaus 这种 active 但无关的视角也放进去，模型不但浪费 token，还可能被错误场景误导。比如用户问 living-room presentation，结果 context 里混进厨房、空房间、校准视角，VLM/LLM 可能产生错误关联。
+第三是 单视角又不够。如果只看一个 ego view，可能看不到全局事件。AR 眼镜很容易被遮挡，用户也不一定一直看向关键信息。静态摄像头能提供 room-level context，其他 ego views 能提供互补细节。所以你的目标不是 “single best view”，而是 small set of complementary evidence views。
+第四是 隐私和权限。真实 multi-user AR assistant 不能随便把所有人的视频都读一遍。更合理的是：只在有必要时访问最相关的 source，并能说明 evidence 来自哪个 stream。也就是 source-aware retrieval / source provenance。
+场景 A：多人会议 / presentation
+几个人在客厅或会议室讨论一个项目。用户之后问：
+“刚才那个人指的是屏幕上的哪一部分？”
+用户自己的 AR 眼镜可能只看到桌子或旁边的人；另一个人的 ego view 可能正对屏幕；Meeting static camera 可能看到整个人群和屏幕；Kitchen camera 虽然也在录，但完全无关。
+这正好对应你现在的 CASTLE window：Onanong / Tien 是相关 ego views，Meeting static 更直接看到 group event，Kitchen / Reading / Klaus 是 active 但无关。你的研究问题就是：系统如何自动做出这种 source selection，而不是靠人工看 contact sheet。
+场景 B：找东西 / 物体记忆
+用户问：
+“我的门卡刚才放哪里了？”“谁拿走了桌上的剪刀？”
+用户自己的眼镜不一定拍到物体被移动的瞬间，因为他可能转身了。但另一个人的眼镜或者房间静态摄像头可能正好拍到。这里 “self memory” 不够，需要跨 source 查证。
+但你不能一口气看所有人所有视频。系统要先判断：
+哪些 camera 在那个时间段覆盖了桌子？哪个 ego view 离目标物体最近？哪些视角只是同时间 active 但不在同一空间？
+这就是 source-aware memory retrieval。
+场景C：实验室 / 医疗 / 安全操作
+用户问：
+“刚才是谁碰了样品？”“试剂有没有被放回冷藏柜？”“手术/实验里某个工具最后在哪里？”
+这种场景对准确性和证据来源要求更高。系统必须能说：
+我是从哪个 camera、哪个时间段看到的。哪些 source 被排除了，因为它们没有覆盖该事件。
+这就把你的问题从普通 video QA 提升成：
+source-aware evidence selection with provenance under fixed budget。
+‹#›
+
+--- SLIDE 33 ---
+CASTLE Feasibility: Does the dataset support this problem?CASTLE: 10 ego + 5 static/exo streams, 600+ hours, official four-choice QA challenge.
+Metadata overlap: many periods have 10-15 active streams.
+https://huggingface.co/datasets/CASTLE-Dataset/CASTLE2024https://castle-dataset.github.io/https://castle-dataset.github.io/challenges/cvpr26/（针对这个数据集有一个challenge，可能到时候可以参考别人的baseline）
+[NOTES]
+CASTLE 官方页面写明它是 4 天、10 个参与者、15 个视频流，其中 10 个 egocentric、5 个 static perspectives，超过 600 小时 UHD 50fps 视频，总量 8.22TB。 CVPR/EgoVis 2026 challenge 页面也写明任务是 closed-form QA：给定 600+ 小时、15 个视角，从四个选项中选答案，需要 video retrieval 和 long-form multi-stream video understanding。
+这张 heatmap 是 metadata-level feasibility。横轴是一天 0-24 小时，纵轴是 DAY1-DAY4，颜色表示同一时间有多少 streams active。亮黄色说明最多接近 15 路同时 active。它证明 CASTLE 有足够多 high-overlap windows，可以支撑 multi-stream source selection。
+但这张图只能证明“同时在录”，不能证明“都看到同一个事件”，所以我还需要后面的 visual validation。
+‹#›
+
+--- SLIDE 34 ---
+DAY1 10:06: 15 streams are active, but usefulness differs.
+Temporal validation: direct views remain aligned; Living1 is spatial context only.
+[NOTES]
+我选了 DAY1 10:05-10:10 这个 high-overlap window，在 10:06 从所有 15 个 active streams 抽了一帧。这个 overview 说明：同一时刻确实有很多视角 active，但它们的相关性不一样。
+直接 event evidence：Allie、Bjorn、Florian、Luca、Onanong、Stevan、Tien 都能看到 presentation / speaker / screen / audience 的不同角度。Meeting static 也很强，因为它从上方看到整个 group event。
+context 或 partial evidence：Cathal、Werner 能看到一部分 audience / room context，但不一定是最好的 detail view。Living1 / Living2 主要提供 room layout，不是核心事件细节。
+off-event / invalid：Kitchen 是厨房视角，和 presentation 无关。Reading 是另一个房间。Klaus 是 calibration/test pattern。
+这张图是 temporal visual validation。我没有只看 10:06 一帧，而是对 selected views 在 10:06、10:07、10:08 抽帧，检查它们是否持续对齐到同一个 event。
+Onanong 和 Tien 是 direct ego evidence，可以看到 speaker、screen、audience。Meeting 是 direct static/global evidence，可以看到整个 group event。Living1 不是 direct event evidence，它只是 weak spatial context，能看到房间布局和远处区域，但看不清 presentation 细节。
+Relevant views have different utility levels: direct detail view, global static view, spatial context view.
+‹#›
+
+--- SLIDE 35 ---
+选了 3 个 high-overlap CASTLE windows，每个 window 有 15 个 active streams。它们分别是 DAY1 presentation/meeting、DAY4 lunch/dining、DAY3 mixed tabletop/kitchen activity。然后我构造了 6 个 self-vs-other QA，每个 QA 都指定一个 querying user，比较不同 source setting 是否有足够 evidence。这个阶段没有跑 VLM，也没有把它当模型 accuracy，而是做 manual evidence-sufficiency scoring。结论：self-first incremental source selection是可行的Given a querying user and a question, first check self view; if insufficient, retrieve a small number of non-redundant incremental sources.
+
+--- SLIDE 36 ---
+1. 和把所有 video 全合起来的区别（避免把所有stream都塞进模型）：能不能用最少的、对 self view 有增量价值的 source，接近 all-active 的 evidence coverage
+2. 除了隐私、传输、context，还有没有更有意思的 constraint
+现在更核心的 constraint 不是单纯省 token，是 incremental information。其他人的 video 里很多内容和 self view 是重复的，或者完全 off-event。我们真正想找的是：self view 没看到、但其他 source 看到了，并且和 query 相关的 evidence。所以后续自动方法不能只是选最相似的 view，因为最相似可能只是重复；应该选 query-relevant 但和 self view non-redundant 的 view。
+
+--- SLIDE 37 ---
+3. 应该先查自己的 video，还是直接查别人？现在把 pipeline 改成 self-first。真实 AR assistant 里，self view 默认权限最低、成本最低、隐私风险最低。所以系统应该先判断 self view 是否 sufficient；如果 sufficient，就不访问别人；如果 insufficient，再查 selected other/static source。结果里 2/6 的问题 self-only 就够，所以系统确实不应该每次都访问别人；但 4/6 的问题 self-only 不够或不确定，所以只看自己的 memory 也不够。4. 别人看到的大部分和自己很像，怎么找自己没看到的？先用人工 oracle 做 proof-of-concept。对每个 QA，手动 audit 哪个 view 相对 self view 提供了 missing evidence。后续自动 selector 可以做成 relevance_to_query - λ * redundancy_with_self（先验证这个现象存在；下一步才做自动 selector）5. 如果不中心化，别人的 video 在 device 上，怎么搜？这次先假设 centralized index，因为现在只想验证 core assumption：other source 是否真的有增量 evidence。如果这个 assumption 成立，下一步可以考虑更系统化的 access control：先访问低成本 summary / metadata，再决定是否请求 raw video。这个可以作为后续 extension。
+[NOTES]
+人工审查：Please apply my human audit decisions to the CASTLE self-vs-other PoC package and generate locked outputs.
+Context:
+I reviewed the three overview contact sheets:
+- DAY1_100500000 presentation/meeting
+- DAY4_120500000 lunch/dining
+- DAY3_174500000 mixed tabletop/kitchen activity
+I am now locking the manual proof-of-concept decisions. Do not run ffmpeg. Do not download videos. Do not run CLIP/VLM/LLM. Only update CSV/txt/html outputs based on the human audit decisions below.
+Input files:
+- castle_self_vs_other_scoring_draft.csv
+- castle_self_vs_other_qa_filled_draft.csv
+- castle_poc_view_annotation_filled_reviewable.csv
+- castle_poc_manual_scoring_summary.csv
+- castle_poc_manual_scoring_summary.txt
+- castle_self_vs_other_human_audit_checklist.txt
+- castle_poc_manual_review_packet.html, if available
+Important:
+This is a proof-of-concept, not final benchmark labels. Preserve notes about uncertainty when appropriate. However, for rows explicitly covered by the human audit decisions below, set needs_human_review=no because I have manually reviewed them. If evidence remains visually ambiguous after review, set evidence_sufficient_locked=unclear but still needs_human_review=no, with explanation.
+Human audit decisions:
+Q1: DAY1_100500000, querying_user=Werner, event_focus=presentation
+Question: Is someone presenting or talking near the TV/screen to a seated group?
+Decision:
+- Werner self view is partial/audience-side and does not clearly show enough speaker/screen evidence.
+- Set self-only evidence_sufficient_locked = unclear or no. Prefer "unclear" if the draft uses conservative labels; otherwise "no" is acceptable with note "partial/audience-side view; not enough direct screen/speaker evidence."
+- self + selected incremental other = yes.
+- Good selected other views: Allie; Bjorn; Cathal; Onanong; Tien.
+- self + selected static = yes, using Meeting.
+- all-active = yes, but noisy/redundant because it includes off-event/context/invalid streams.
+- oracle minimal = Werner + Meeting, or Werner + one strong other ego such as Tien/Onanong.
+Reason:
+Other ego/static views show the speaker/screen/group more directly than Werner's self view.
+Q2: DAY1_100500000, querying_user=Tien, event_focus=presentation
+Question: Is someone presenting or talking to the group?
+Decision:
+- Tien self view clearly shows the presentation interaction.
+- self-only = yes.
+- self + selected other = yes but redundant.
+- self + selected static = yes but optional/redundant.
+- all-active = yes but unnecessary/noisy.
+- oracle minimal = Tien only.
+Reason:
+This is a self-sufficient case; the system should avoid unnecessary other-source access.
+Q3: DAY4_120500000, querying_user=Allie, event_focus=lunch/dining
+Question: Are people eating together around the dining table?
+Decision:
+- Allie self view clearly shows the dining table, food, and people around the table.
+- self-only = yes.
+- self + selected other = yes but redundant.
+- self + selected static = unclear or unnecessary; static views are not needed.
+- all-active = yes but unnecessary/noisy.
+- oracle minimal = Allie only.
+Reason:
+This is a redundancy/self-sufficient case. Other ego views mostly repeat the same dining event.
+Q4: DAY4_120500000, querying_user=Cathal, event_focus=lunch/dining
+Question: Are people eating at the dining table?
+Decision:
+- Cathal self view is a CASTLE calibration/test pattern, so it cannot answer the dining question.
+- self-only = no.
+- self + selected incremental other = yes.
+- Good selected other views: Allie; Bao; Bjorn; Florian; Onanong.
+- self + selected static = unclear/weak context, not strong evidence. Do NOT mark Living1/Living2/Kitchen as strong direct dining evidence unless the draft explicitly separates them as weak context.
+- Kitchen is not useful for the dining-table question; it is kitchen-specific/off-event for this question.
+- all-active = yes, but noisy/redundant and includes invalid Cathal plus off-event/context views.
+- oracle minimal = Cathal + one strong dining ego view, e.g. Allie or Bao.
+Reason:
+This is an easy self-failure sanity case because Cathal is calibration/test pattern; other dining ego views provide the answer.
+Q5: DAY3_174500000, querying_user=Florian, event_focus=tabletop/group activity
+Question: Are people gathered around a table for a tabletop activity or game?
+Decision:
+- Florian self view is kitchen-focused and does not directly show the tabletop/group activity.
+- self-only = no or unclear. Prefer "no" if the scoring draft needs a binary decision, with note "kitchen-focused view; misses tabletop group."
+- self + selected incremental other = yes.
+- Good selected other views: Allie; Cathal; Onanong.
+- self + selected static = unclear/context-only. Meeting/Living1/Living2 may provide spatial context but not strong tabletop detail.
+- all-active = yes, but noisy/redundant because it includes calibration/off-event/context views.
+- oracle minimal = Florian + one strong tabletop ego view, e.g. Cathal or Onanong.
+Reason:
+This is a real incremental-memory case, not just calibration failure: the querying user's view is focused on another sub-event/area.
+Q6: DAY3_174500000, querying_user=Cathal, event_focus=kitchen sub-event
+Question: Is someone standing or working in the kitchen area?
+Decision:
+- Cathal self view is tabletop-focused and does not provide clear, direct evidence of the kitchen sub-event.
+- A person may be visible in or near the kitchen area in the background, but the kitchen activity is not direct or clear enough to mark self-only as sufficient.
+- self-only evidence_sufficient_locked = unclear.
+- For aggregate counting, treat this as self-only insufficient-or-unclear, not self-only sufficient.
+- locked note for self-only: "tabletop-focused view; a person may be visible in/near the kitchen background, but kitchen activity is not direct/clear."
+- self + selected incremental other = yes, using Florian.
+- self + selected static = yes, using Kitchen.
+- all-active = yes, but noisy/redundant because it includes many views unrelated to the kitchen sub-event.
+- oracle minimal = Cathal + Kitchen, or Cathal + Florian.
+Reason:
+This is a query-dependent source selection case. For tabletop questions, Kitchen/Florian may be off-event; for kitchen questions, they are directly useful. Cathal self contains at most weak background context for the kitchen, so it should be locked as unclear rather than a confident no or yes.
+Please update or create these locked outputs:
+1. castle_self_vs_other_scoring_locked.csv
+- Same rows/settings as castle_self_vs_other_scoring_draft.csv.
+- Add or update columns:
+- evidence_sufficient_locked
+- human_audit_decision
+- needs_human_review
+- locked_notes
+- For rows covered by the decisions above, set needs_human_review=no.
+- Preserve the draft values in separate columns if useful.
+- For Q6 self-only, set evidence_sufficient_locked=unclear and needs_human_review=no.
+- For Q6 self-only locked_notes, use: "tabletop-focused view; a person may be visible in/near the kitchen background, but kitchen activity is not direct/clear."
+2. castle_self_vs_other_qa_locked.csv
+- Same 6 questions, with human-reviewed self_view_sufficient_locked and notes.
+- For Q6, set self_view_sufficient_locked=unclear, not no.
+- For Q6, keep it counted as self-only insufficient-or-unclear in the summary.
+3. castle_poc_manual_scoring_summary_locked.csv
+4. castle_poc_manual_scoring_summary_locked.txt
+Recompute summary metrics:
+- total_questions
+- self_only_sufficient_count
+- self_only_insufficient_or_unclear_count
+- self_only_insufficient_but_selected_other_sufficient_count
+- self_only_insufficient_but_selected_static_sufficient_count
+- all_active_sufficient_count
+- average_num_views_by_setting
+- average_off_event_views_by_setting
+- average_invalid_views_by_setting
+- average_redundant_views_by_setting
+- remaining_needs_human_review_count
+Expected interpretation:
+- Self-only sufficient should be 2/6: Q2 and Q3.
+- Self-only insufficient or unclear should be 4/6: Q1, Q4, Q5, Q6.
+- Q6 is specifically self-only unclear, not confidently no.
+- Selected other should help in the self-insufficient/unclear cases: Q1, Q4, Q5, Q6.
+- Selected static should clearly help in Q1 and Q6. It should be weak/unclear for Q4 and Q5.
+- All-active should be sufficient for all 6 but noisy/redundant/expensive because it includes all 15 streams.
+5. castle_self_vs_other_human_audit_checklist_locked.txt
+- Mark the above audit items as reviewed.
+- List any remaining ambiguity.
+- For Q6, list the ambiguity as reviewed/resolved-for-PoC:
+"Q6 Cathal self-only is visually ambiguous because a person may be visible in/near the kitchen background, but the kitchen activity is not direct/clear. Locked as evidence_sufficient_locked=unclear and needs_human_review=no."
+6. castle_poc_manual_review_packet_locked.html, if possible
+- Include the locked QA table, locked scoring table, and summary interpretation.
+- Make Q6 self-only visibly marked as unclear, not no.
+At the end, print:
+- list of generated locked files
+- number of questions
+- number of scoring rows
+- summary metrics
+- remaining needs_human_review rows
+- one paragraph explaining the conclusion:
+"The locked PoC supports self-first incremental source selection: some questions are answerable from self-only, while others require selected other/static views. All-active covers the answers but includes redundant, off-event, calibration, and context-only streams, so naive all-stream fusion is inefficient and noisy."
+
+--- SLIDE 38 ---
+Q1：DAY1 Werner presentation —— 正向 incremental case问题：Is someone presenting or talking near the TV/screen to a seated group?判断：Werner 的 self view 是 partial / audience-side，不够清楚看到 speaker/screen，所以 self-only 是 unclear/no。Tien 或 Onanong 这样的 other ego view 更直接看到 presentation，Meeting static 也能补全局 evidence。结论：这是一个好的 positive case：self view 不够，selected other/static 能补上。Q2：DAY1 Tien presentation —— self-sufficient case问题：Is someone presenting or talking to the group?判断：Tien 自己已经清楚看到 presentation interaction，所以 self-only = yes。其他 view 虽然也可以看到，但对这个 query 是 redundant / optional。结论：这个 case 证明系统不应该总访问别人。如果 self 已经足够，访问别人就是 unnecessary access。
+
+--- SLIDE 39 ---
+Q3：DAY4 Allie dining —— redundancy case问题：Are people eating together around the dining table?判断：Allie self view 能看到 dining table、food 和 people，所以 self-only = yes。其他 ego views 多数是在重复同一个 dining event，static view不是必须。结论：这个 case 支持 redundancy-aware retrieval：别人看到的未必有增量价值。Q4：DAY4 Cathal dining —— easy self-failure sanity case问题：Are people eating at the dining table?判断：Cathal self view 是 calibration / test pattern，所以不能回答 dining 问题；加 Allie 或 Bao 这类 dining ego view 能补上。结论：这个 case 是 valid sanity check，但它是 easy failure，不是我最想强调的主证据，因为 self view 是 calibration pattern。更有研究意义的是 Q1、Q5、Q6。
+
+--- SLIDE 40 ---
+Q5：DAY3 Florian tabletop —— 真正的 incremental-memory case问题：Are people gathered around a table for a tabletop activity or game?判断：Florian self view 是 kitchen-focused，没有直接看到 tabletop/group activity；而 Cathal / Onanong / Allie 这些 other ego views 能看到 tabletop group。static views更多是 context，不是强 direct evidence。结论：self view 不是坏掉，而是关注了另一个子事件，所以需要找其他 source 的增量 evidence。Q6：DAY3 Cathal kitchen —— query-dependent source selection case问题：Is someone standing or working in the kitchen area?判断：Cathal self view 主要看 tabletop/group area。背景里可能有厨房区域人物，但 kitchen activity 不够直接清楚，所以 self-only 锁为 unclear，而不是 confident no。Florian 和 Kitchen static 对 kitchen sub-event 有用。结论：这个 case 很重要，因为它说明 source usefulness 是 query-dependent。对 tabletop query，Kitchen/Florian 可能是 off-event；但对 kitchen query，它们反而是 direct evidence。
+
+--- SLIDE 41 ---
+不是把 person 当成普通 hierarchy 的一层，而是把每个 source 当成有 access cost、privacy cost、redundancy、marginal utility 的 memory source。问题不是“选哪个人”，而是“自己的证据够不够？如果不够，哪个 source 能提供自己没有看到的增量证据？什么时候应该停止访问别人？”query + querying user→ inspect self evidence→ decide: stop or access external source?→ if access, choose source with maximum incremental value→ update evidence→ decide whether to stop
+
+--- SLIDE 42 ---
+top-1 selected other 平均 1.67 views 是怎么来的？这是按 全部 6 个 QA 的 top1 setting 来平均的。因为有 2 个问题 self-only 已经够了，所以 top1 setting 不需要额外 other view，只用 self view。逐题算是：Question	top1 setting input views	views 数Q1 Werner presentation	Werner + Tien	2Q2 Tien presentation	Tien only	1Q3 Allie dining	Allie only	1Q4 Cathal dining	Cathal + Allie	2Q5 Florian tabletop	Florian + Cathal	2Q6 Cathal kitchen	Cathal + Florian	2所以平均是：(2 + 1 + 1 + 2 + 2 + 2) / 6 = 10 / 6 = 1.67 views
+
+--- SLIDE 43 ---
+self-first incremental source access：给定一个 querying user 和一个问题，系统先只看这个用户自己的 ego view / memory；如果自己的 view 已经足够回答，就停止，不访问别人；如果自己的 view 不足或不清楚，才在其他 ego views / static cameras 里选择最少、最相关、且不和 self view 重复的 source / segment 来补 missing evidence。它不是单纯 “multi-stream QA”，也不是 “A+B 必须互补”。它的核心是：先判断 self 是否够；不够时，只访问能提供 self 没看到的增量证据的外部 source。
+Step 1：Self-only checkself_only_sufficient = yes / no / unclearStep 2：External help triggerif self-only = no or unclearStep 3：Incremental source selectionfind：relevant_to_query = yesincremental_to_self = yesredundant_with_self = no / lowaccess_cost = lowStep 4：Combined answer / evidence sufficiencyself + selected source sufficient?if yes -> answer，record source provenance：answer comes from:- self source?- selected other ego?- selected static camera?- combined evidence?
+
+--- SLIDE 44 ---
+MA-EgoQA: closest related work to my multi-user AR memory idea
+已经正式定义了 multi-agent egocentric video QA提供 benchmark：1,741 QA，5 类问题，6 agents，7 days提出 EgoMAS：training-free shared-memory + dynamic retrieval baseline对我的意义：说明“大问题”已经有人做了帮我收窄 novelty可借鉴 benchmark construction pipeline可作为 baseline / related work
+
+--- SLIDE 45 ---
+Core idea: QA over multiple long-horizon egocentric streams
+场景：多个 embodied agents 在同一环境中长期活动每个 agent 都有自己的 egocentric video memoryHuman manager 向整个 multi-agent system 提问系统需要：聚合多个 agents 的经历检索相关 episodes形成 system-level answerKey point: manager/system-level multi-agent QA
+
+--- SLIDE 46 ---
+Benchmark facts
+
+--- SLIDE 47 ---
+Construction pipeline
+
+--- SLIDE 48 ---
+MA-EgoQA is close, but not directly my task
+MA-EgoQA removes single-agent answerable questions→ but my task needs them.我的任务需要包含：self-sufficient cases→ self 能答，应当 stopself-insufficient / external-sufficient cases→ self 不够，other/static 能补 evidenceredundant external sources→ other 相关但重复 selfoff-event / invalid sources→ active 但无效或无关static camera helpful casespossible A+B complementary cases
+
+--- SLIDE 49 ---
+Adapt MA-EgoQA pipeline to SelfFirst-MultiSourceQA
+借鉴：category-first QA generation；window-based source aggregation；GPT/VLM-assisted candidate QA generation；LLM filtering；cross-model validation；human verification修改：single-agent filtering → self-sufficiency labeling；add source-access labels；querying_user；self_source；self_only_sufficient；external_access_needed；incremental_to_self；redundant_with_self；oracle_positive_sources；oracle_minimal_source_set；answer_source_provenance
+
+--- SLIDE 50 ---
+EgoMAS = training-free baseline
+
+--- SLIDE 51 ---
+What EgoMAS tells us
+检索 / source selection 很重要all-information / all-frame / all-caption 不是最优大量 irrelevant context 会干扰模型shared memory + dynamic retrieval 有效但它没有显式建模：self-first gateincremental-to-selfredundancy with selfexternal access cost
+
+--- SLIDE 52 ---
+Same big space, different access policy
+相同点：都是 multi-agent / multi-user egocentric memory都不能直接塞所有视频都需要 retrieval / source selection都要聚合多 source evidence不同点：
+
+--- SLIDE 53 ---
+Revised novelty
+Self-first incremental source access给定 querying user 和问题：判断 self memory 是否足够如果足够：stop如果不足：选择少量 external sourcesexternal source 要满足：relevant to queryincremental to selflow redundancylow access cost
+
+--- SLIDE 54 ---
+Correction: CASTLE is not a gaze-focused dataset
+CASTLE 主视频：10 head-mounted GoPro ego streams5 fixed static camerasUHD 50fps video + audioGaze：只有 auxiliary eyegaze来自 dedicated reading sessions使用 Gazepoint GP3 HD不能说“CASTLE 是 gaze dataset”对我目前问题的影响（？）
+
+--- SLIDE 55 ---
+Next step
+精读 MA-EgoQA data schemaquestioncategoryreferenced agents / timestampscaptions / transcriptsevidence labels?判断能否借鉴它的数据构造 pipeline设计我的 SelfFirst-MultiSourceQA annotation layerAgent-assisted construction：candidate QA generationself-sufficiency labelingexternal-source labelingredundancy/off-event labelinghuman verification数据集选择还未最终决定：MA-EgoQA / CASTLE / EgoEverything-style pipeline 都继续比较如果要在AR眼镜上部署可以考虑AWQ：AWQ 的核心是：LLM 里并不是所有权重都同等重要，真正关键的是那些对应“大激活值通道”的权重；通过对这些通道做缩放后再量化，可以在保持纯 INT4/INT3 权重量化硬件友好的同时，接近甚至优于 GPTQ 的精度。解决什么问题LLM 在端侧部署时主要卡在显存/内存带宽，不是算力。FP16 的模型太大，尤其 batch=1 生成阶段会频繁读权重。AWQ 选择 weight-only quantization，典型是 W4A16：权重 4-bit，激活仍 FP16。这样权重读流量约降到 1/4，适合手机、Jetson、笔记本 GPU、Raspberry Pi 这类设备。
+
+--- SLIDE 56 ---
+CASTLE Self-first Incremental Source AccessDemo Progress Update
+Goal:For a querying user, first check self memory.If self is sufficient → stop.If self is insufficient → select an incremental external source.Current demo status:✓ Source-isolated packets built✓ Visual audit / source cards completed✓ Original benchmark mismatch identified✓ Demo-only repaired case promoted✓ Repaired policy run succeeded:  F001 stops at self  F021R1 triggers external  selector chooses Kitchen
+[NOTES]
+‹#›
+
+--- SLIDE 57 ---
+From manual feasibility to runnable demo pipeline
+Important correction:Some original external-needed labels were too easy.The pipeline found this mismatch instead of forcing external access.
+[NOTES]
+‹#›
+
+--- SLIDE 58 ---
+Task 1–4: Building source-isolated visual inputs
+Task 1: Project guardrails        ↓Task 2: Locate native per-source frames        ↓Task 3: Build source-isolated packets        ↓Task 4: Visual audit + source cards
+Task 2:- 93 qid/source rows scanned- 83 native-frame rows- 0 missing / 0 ambiguousTask 3:- 83 packets built- 12 qids- 12 self packets- 71 candidate packets- 0 blocked qidsTask 4:- 83 packets audited- leakage detected: 0- single-source-only: 83- source cards built
+[NOTES]
+‹#›
+
+--- SLIDE 59 ---
+Task 5: Original labels exposed a benchmark mismatch
+Original Task 5 ready qids:F001, F002, F003, F004, F005, F006, F008, F009, F012Self-gate result:stop count = 9external trigger count = 0Posthoc conflicts:F009, F012F009: self already sees seated group + TV/screen + presenter.F012: self already sees table group + tabletop pieces/cards.
+[NOTES]
+‹#›
+
+--- SLIDE 60 ---
+[NOTES]
+‹#›
+
+--- SLIDE 61 ---
+Repairing the demo: promote only a clean external-trigger case
+F021R1Question:Is someone standing or working in the kitchen area?Query user: CathalSelf source: CathalSelected external source: KitchenUse: demo qualitative onlyNot final benchmark label
+[NOTES]
+‹#›
+
+--- SLIDE 62 ---
+Demo A: Self sufficient → stop
+qid: F001query_user: TienQuestion:Is someone presenting or talking to the group?Self evidence:- standing person near TV/screen- seated group facing presentation area- slide-like CASTLE screen content visiblePolicy:self sufficient = trueshould_access_external = falseDecision: STOP
+[NOTES]
+‹#›
+
+--- SLIDE 63 ---
+Demo case B — self insufficient → select Kitchen
+Self: Cathal- one usable partial frame- one dark/off-angle frame- one occluded by fingers/hand→ cannot reliably answer kitchen activityExternal: Kitchen- fixed kitchen view- island/counter visible- person standing/working near kitchen in one frame→ direct evidenceQuestion:Is someone standing or working in the kitchen area?Self-gate:should_access_external = trueSelector:selected_source_id = Kitchen
+[NOTES]
+‹#›
+
+--- SLIDE 64 ---
+From Manual Source Selection to Automatic Source/Frame Ranking
+Self-first incremental source access on CASTLEWhen the querying user's self view is insufficient, the system should automatically choose which external source and frames to inspect.Self view → insufficient? → external source selection → selected frames
+[NOTES]
+‹#›
+
+--- SLIDE 65 ---
+Step 1: Make visual inputs source-isolated
+Each packet = one qid/target_id + one source_id + framesNo full contact sheet as model/selector inputNo source leakageBad: full contact sheet with multiple sourcesGood: separate packets:  Cathal packet  Kitchen packet  Bjorn packet  ...
+[NOTES]
+‹#›
+
+--- SLIDE 66 ---
+Frame scores → source scores → selected source + frames
+query+self packet+candidate source packets        ↓score every candidate frame        ↓source_score = avg(top-2 frame scores)        ↓rank sources        ↓select top source and top frames
+Oracle source is not used in ranking.Oracle is only used posthoc for top1/top3/MRR.
+[NOTES]
+‹#›
+
+--- SLIDE 67 ---
+Method 1 — RGB mean-difference baseline
+self_rgb_center = mean RGB(self frames)rgb_distance = L2(frame_rgb_mean - self_rgb_center)source_score = avg(top-2 frame scores)
+[NOTES]
+‹#›
+
+--- SLIDE 68 ---
+CLIP hybrid: query relevance + novelty to self + quality
+frame_score = 0.55 * query_relevance + 0.35 * visual_novelty_to_self + 0.10 * qualityquery_relevance: image-text similarity to the questionvisual_novelty: distance from self embedding centerquality: Laplacian sharpness scorequestion text → CLIP text embeddingcandidate image → CLIP image embeddingself frames → self embedding center
+[NOTES]
+‹#›
+
+--- SLIDE 69 ---
+Success case: Kitchen selected for kitchen-area question
+Question:Is someone standing or working in the kitchen area?Self: CathalOracle/eval-only: KitchenRGB top1: Bjorn ❌CLIP top1: Kitchen ✅Cathal self: can’t see kitchenBjorn: RGB top1 wrongKitchen frame_000/frame_001: CLIP top1 correctCLIP uses query semantics to recover the correct source.
+[NOTES]
+‹#›
+
+--- SLIDE 70 ---
+Near miss: general event relevance vs missing evidence
+Question:Can an external source verify the presenter's laptop/computer screen?Self: WernerOracle/eval-only: MeetingRGB top1: Tien ❌CLIP top1: Onanong ❌CLIP rank2: Meeting ✅Werner self: can see presentation area, laptop unclearOnanong: CLIP top1, presentation-relevantMeeting: oracle, laptop screen visibleTien: RGB top1Onanong sees the presentation scene.Meeting sees the missing laptop-screen evidence.Query relevance is not enough.Selector must be self-gap / evidence-specific.
+[NOTES]
+‹#›
+
+--- SLIDE 71 ---
+[NOTES]
+‹#›
+
+--- SLIDE 72 ---
+[NOTES]
+‹#›
+
+--- SLIDE 73 ---
+Small n=2 sanity check: CLIP improves over RGB, but not solved
+Claim: CLIP hybrid is a useful cheap retrieval stage.Not claim: final reliable selector.MRR = average(1 / oracle_rank)
+[NOTES]
+‹#›
+
+--- SLIDE 74 ---
+Next: from source ranking to self-first QA evaluation
+1. Connect selector to VLM runner   self-only   self + RGB-selected   self + CLIP-selected top1/topk   self + oracle2. Add self sufficiency / confidence gate   trigger external access only when self is insufficient3. Improve selector   from query relevance   to self-gap-aware / evidence-specific source selection4. select more case to build benchmarkQ1 suggests the key challenge:the model must identify not just relevant views, but the view that contains the missing evidence.
+[NOTES]
+‹#›
+
+--- SLIDE 75 ---
+Updated Direction Self-first Incremental Source Access for Multi-user AR Memory
+Motivation:Future AR assistants operate in shared multi-user environments.Each user owns local egocentric memory.A querying user’s self memory may be insufficient.Core question:When should the system stop at self?When self is insufficient, which external source should it access?Not all-stream fusion.Not generic multi-agent QA.Self-first + incremental-to-self + low redundancy + low access cost.
+[NOTES]
+‹#›
+
+--- SLIDE 76 ---
+CASTLE POC: Pipeline works, but clean cases are scarce
+Completed:- Source-isolated packets- RGB mean-difference baseline- CLIP hybrid source/frame ranking- n=2 clean sanity checkResult:RGB: top1 0/2, MRR 0.292CLIP: top1 1/2, top3 2/2, MRR 0.750Takeaway:CLIP is a useful cheap retrieval stage, but not a final selector.CASTLE clean self-insufficient cases are hard to mine.
+[NOTES]
+‹#›
+
+--- SLIDE 77 ---
+Target Scenarios
+Scenario A: Shared physical-space AR memory- meeting room / classroom / lab / home- each user has egocentric memory- one user misses screen / object / conversation- another user or shared camera has missing evidenceScenario C: Distributed / federated personal memory- each user owns local long-term memory- raw memory cannot be fully centralized- query routes to external memory only when self is insufficient
+[NOTES]
+‹#›
+
+--- SLIDE 78 ---
+Why EgoLife / MA-EgoQA fit the updated direction
+EgoLife:- 6 participants living together for 7 days- egocentric Meta Aria recordings- synchronized third-person cameras- each participant = local memory sourceMy previous EgoLife extraction:- A1-A6 all have 7-day metadata- ~32k clips, ~264 observed hours- raw frames can be extracted- multi-agent overlap windows existMA-EgoQA:- closest related benchmark- 1,741 QA, 5 categories, 6 agents, 7 days- provides context windows and construction pipeline
+[NOTES]
+‹#›
+
+--- SLIDE 79 ---
+MA-EgoQA is close, but not self-first
+MA-EgoQA:- manager/system-level multi-agent QA- every question needs multiple agents- EgoMAS = shared memory + dynamic retrievalMy task:- querying-user-centered QA- self may already be sufficient- preserve self-sufficient stop cases- external source only when incremental to selfKey change:single-agent filtering → self-sufficiency labeling
+[NOTES]
+‹#›
+
+--- SLIDE 80 ---
+LLM-assisted self-first benchmark construction
+MA-EgoQA contexts    ↓Map to EgoLife A1-A6 video manifests    ↓Extract source-isolated multi-user frames    ↓Build packet gallery    ↓LLM generates candidate self-first questions    ↓Human/VLM audit:- self_sufficient_stop- self_insufficient_external_sufficient- redundant_external- multi_source_ambiguous- off_event_invalid    ↓SelfFirst-MultiSourceQA benchmark
+[NOTES]
+‹#›
+
+--- SLIDE 81 ---
+Phase 0: MA-EgoQA contexts → EgoLife multi-user frames
+MA-EgoQA row→ context_id: DAY/time window→ agents: ALICE / KATRINA / SHURE ...→ EgoLife A1–A6 video clips→ source-isolated framesCurrent result:- Selected 5 MA-EgoQA contexts- 5 unique 5-min windows- 3 agents per context- 45 planned frames = 5 × 3 agents × 3 timestamps- Manifest mapping: 45/45 ok- Remote/local extraction: succeeded- Packet gallery builtThis verifies the data bridge:MA-EgoQA context metadata can be grounded into EgoLife multi-user visual evidence.
+[NOTES]
+‹#›
+
+--- SLIDE 82 ---
+Phase 0 visual check: source-specific evidence appears in EgoLife
+Action context: needs more temporal/audio evidenceDAY2 15:25–15:30A2 / A5 / A6 see different room/action context.Useful for mapping check, but not yet a clean self-first case.
+[NOTES]
+‹#›
+
+--- SLIDE 83 ---
+Phone evidence: source-specific detail
+A2_ALICE sees phone/hand evidence.A4_LUCIA is dark/partial.A6_SHURE is mostly context.Candidate for external-source evidence.
+[NOTES]
+‹#›
+
+--- SLIDE 84 ---
+Whiteboard evidence: complementary view
+A4_LUCIA sees the whiteboard clearly.A1/A2 provide partial room/table context.Strong candidate for self-first source access.These are not final QA labels yet, but they show candidate patterns for self-first incremental source access.
+[NOTES]
+‹#›
+
+--- SLIDE 85 ---
+Next: from visual feasibility to self-first benchmark construction
+Current status:- CASTLE: selector POC works, but clean cases are scarce- EgoLife/MA-EgoQA: Phase 0 mapping + extraction works- Visual examples show candidate phone / whiteboard / action evidenceImmediate next step:1. Finish visual review of the 5 contexts2. Label each context:   - self_sufficient_stop   - self_insufficient_external_sufficient   - redundant_external   - multi_source_ambiguous   - needs_more_context3. Use LLM to generate candidate self-first questions4. Human/VLM audit labels before evaluationBaselines:self-only / random external / RGB / CLIP / EgoMAS-style retrieval / all-source / oracleMetrics:self-stop accuracysource top1/top3/MRRfinal QA accuracyexternal access rate# sources / frames / tokensGoal: prove that self-first incremental access improves answer quality while reducing unnecessary external memory access.
+[NOTES]
+‹#›
+
+--- SLIDE 86 ---
+MA-EgoQA / EgoMAS Baseline Reproduction Progress
+Goal:- Reproduce the official EgoMAS baseline on NYU Torch HPC.- No method modification at this stage.Paper / benchmark:- Multi-agent egocentric video QA- 1,741 QA pairs- 6 agents, 7 days- 5 categories: SI / TC / ToM / TR / EICurrent status:- Environment + data + BM25 retrieval pipeline are completed.- Inference reached Gemini API call.- Current blocker: GEMINI_API_KEY.
+[NOTES]
+‹#›
+
+--- SLIDE 87 ---
+Official EgoMAS Pipeline
+Clone repo   ↓Download MA-EgoQA data   ↓Use / construct shared memory   ↓Build BM25 index   ↓Run EgoMAS inference   ↓Evaluate predictions
+✅ Repo cloned✅ Conda env created under $SCRATCH✅ Dataset downloaded✅ Official shared memory file found✅ BM25 index generated⚠️ Inference blocked by Gemini API key❌ Full evaluation not yet run
+[NOTES]
+‹#›
+
+--- SLIDE 88 ---
+What Has Been Completed
+[NOTES]
+‹#›
+
+--- SLIDE 89 ---
+Debugging Notes
+Solved：1. huggingface-cli deprecated   → switched to `hf download`2. `requirements.txt` missing   → installed dependencies manually3. Missing packages   → installed numpy / pandas / rank-bm25 / google-genai / etc.4. `ModuleNotFoundError: egomas`   → fixed by `export PYTHONPATH=$PWD:$PYTHONPATH`5. BM25 indexing   → successfully generated both 10-min and 30-sec BM25 indexes Remaining：Gemini API key required:ValueError: No API key was provided.
+[NOTES]
+‹#›
+
+--- SLIDE 90 ---
+Current Blocker and Next Steps
+Current blockerOfficial EgoMAS inference requires Gemini API.Current error:No API key was provided.Next steps1. Obtain / configure GEMINI_API_KEY.2. Add debug flags:  - --max_samples  - --output_path3. Run 5-sample inference first.4. Check output format and prediction file.5. Submit full inference with Slurm.6. Run evaluation and compare with reported baseline.Ask forDecision needed:- Should I use Gemini as official code expects?- Or should I also prepare an alternative local / OpenAI model version for comparison?
+[NOTES]
+‹#›
+
+--- SLIDE 91 ---
+From current-time source selection to historical memory access
+query → current context/source selectionquery → current evidence      → if insufficient, search historical memory      → optionally access external agentsdo not only search same-time frames; memory assistant should access historical information.
+[NOTES]
+‹#›
+
+--- SLIDE 92 ---
+Data source: MA-EgoQA questions + EgoLife caption/video memory
+MA-EgoQA.json(question / answer / category / context)        ↓caption/30sec + caption/10min(released memory chunks)        ↓source-isolated caption index        ↓retrieve current-only / history-only / current+history evidence        ↓visual audit with raw EgoLife framesMA-EgoQA: 1,741 QA, 5 categories, 6 agents, 7 daysEgoMAS baseline: shared memory + agent-wise dynamic retrieval
+[NOTES]
+‹#›
+
+--- SLIDE 93 ---
+Full caption-level screening over MA-EgoQA
+Processed parseable questions: 1739Tier A demo-ready candidates: 22Tier B promising history-gain candidates: 111current+historical better than current-only:  73 yes + 95 unclear_but_promisingThis is screening signal, not final labels.
+[NOTES]
+‹#›
+
+--- SLIDE 94 ---
+Filtering noisy caption candidates with visual audit
+Dataset V0.1:10 demo / 35 eval-lite / 15 control↓Visual audit:20 cases, 240 targeted frames, 20 contact sheets↓Dataset V0.2 Verified:2 history demos1 possible history eval12 current controls5 rejects45 model input rows
+[NOTES]
+‹#›
+
+--- SLIDE 95 ---
+Qualitative examples — one history gain + one current control
+[NOTES]
+‹#›
+
+--- SLIDE 96 ---
+Current status and next step
+- Built a historical-memory evidence-scope pipeline.- Full screening found candidate current+history gains.- V0.2 contains visually spot-checked candidate cases.Pilot model comparison:current-only vs current+historicalon V0.2 model inputs.Then expand:more visual audit on Tier A/Badd query_user/self/external labelscompare with EgoMAS-style retrievalmeasure source access cost.
+[NOTES]
+‹#›
+
+--- SLIDE 97 ---
+Algorithm: VLM-gated Staged Evidence RoutingCurrent pilot: Current → Historical MemoryInput:query q, query/context time t, memory bank MCurrent pilot uses evidence scopes: E_current, E_history1. E0 ← Retrieve(q, M_current around t)2. J0 ← VLM-Gate(q, E0)        // no reference answer3. if J0.sufficient == yes:       route ← stop_current       answer ← VLM-Answer(q, E0)       return answer, route, provenance4. E1 ← E0 ∪ Retrieve(q, M_history before t)5. J1 ← VLM-Gate(q, E1)6. if J1.sufficient == yes:       route ← use_history       answer ← VLM-Answer(q, E1)       return answer, route, provenance7. else:       route ← unresolved_or_external_needed       answer ← abstain / request external source       return answer, route, provenance
+[NOTES]
+‹#›
+
+--- SLIDE 98 ---
+Block 1: Evidence RetrieverMemory chunk:(source_agent, day/time, granularity, caption, frames)Current implementation:- current-only: captions near context window- history-only: captions before context_start- current+history: union of bothRetriever:BM25 / embedding over released caption memoryTop-k chunks + targeted frames
+Block 2: Qwen3-VL Sufficiency GateInput:- question- evidence packet- optional frames/contact sheetOutput JSON:{  "evidence_sufficient": "yes/partial/no",  "tentative_answer": "...",  "missing_information": "none/history_needed/external_needed/unclear",  "routing_decision": "stop_current/use_history/use_external/reject",  "evidence_used": ["..."],  "reason": "..."}
+[NOTES]
+‹#›
+
+--- SLIDE 99 ---
+Block 3: Routing Policyif Gate(E_current).sufficient:    stop_currentelse:    E ← E_current ∪ E_history    if Gate(E).sufficient:        use_history    else:        unresolved / future external routingBlock 4: Qwen3-VL AnswererQwen3-VL AnswererInput:questionselected evidence packetOutput:{  "answer": "...",  "supporting_evidence": "...",  "confidence": "high/medium/low"}}
+Pilot evaluation on Dataset V0.2:- history demo: current should be partial/no; current+history should be yes- current control: current should be yes
+[NOTES]
+‹#›
+
+--- SLIDE 100 ---
+AR/VR-native Progressive Evidence Access + PEA-B Baseline
+AR/VR-native Progressive Evidence Access
+Old framing:Multi-agent QA / cost-aware RAGProblem:Too close to generic long-video retrieval & No strong dataset supportNew framing:AR/VR assistant chooses a minimal evidence route
+[NOTES]
+‹#›
+
+--- SLIDE 101 ---
+AR/VR-native Progressive Evidence Access + PEA-B Baseline
+AR/VR Signals = Routing Signals
+gaze ->  attention / crop prioritypose/FOV ->  physical observabilityaudio ->  transcript-first evidenceroom/co-presence ->  source candidatestatic camera ->  low-privacy beyond-self sourceownership/privacy ->  access permissionbandwidth/latency ->  progressive communication
+[NOTES]
+‹#›
+
+--- SLIDE 102 ---
+AR/VR-native Progressive Evidence Access + PEA-B Baseline
+Query→ evidence need trace→ source / modality cards→ AR/VR source filter→ evidence route→ answer with provenance
+Progressive Evidence Access Baseline
+Query
+->
+Evidence Need Trace
+->
+Source-Memory Cards
+->
+AR-native Source Filter
+->
+Progressive Evidence Route
+->
+VLM Answer + Provenance
+Route hierarchy:1. self caption / metadata2. self audio / transcript3. self raw frame / crop4. self history5. static / auxiliary source6. external user view / audio
+[NOTES]
+‹#›
+
+--- SLIDE 103 ---
+Trick 1: Reason-before-Retrieve → Evidence Need TraceExample: “How many colored pens were in the box?”→ answer type: count→ modality: raw visual→ granularity: high-res crop→ external user: not the first choiceTrick 2: Structured Memory → Source-Memory CardsEach source is represented with:owner, source type, modality, time window, room/location,privacy level, communication cost, and whether video decoding is required.Trick 3: AR-native Source Filter → gaze / pose / audio / roomgaze → whether the user attended to the targetpose/FOV → whether the user physically observed itaudio → whether transcript should be checked firstroom/co-presence → which static/user source may have observed itownership → whether another user’s source can be accessed
+Trick 4: Viewpoint-aware Retrieval → static-first / cross-viewIf self evidence is insufficient:→ check static room source / auxiliary modality first→ access external user view/audio only as the last resortTrick 5: Adaptive Retrieval Depth → no fixed top-kAdaptive evidence depth per source:→ each source receives a different evidence budget→ skip sources with low relevanceTrick 6: Memory-guided Retrieval Path → Access TraceStep 1: checked self caption → insufficientStep 2: checked transcript → no hitStep 3: checked static kitchen camera → candidate sourceStep 4: extracted 6 frames → visual evidenceTrick 7: Semantic Memory + Raw Visual FallbackDefault: caption / summary / embedding / transcriptFallback: raw frame / high-res crop / short clipTriggered by: count, color, brand, OCR, small object, exact spatial location
+[NOTES]
+‹#›
+
+--- SLIDE 104 ---
+AR/VR-native Progressive Evidence Access + PEA-B Baseline
+Early Data Check
+EgoVis2026 suggests mixed evidence needs:
+185 questions checkedraw visual: 96audio / speech: 13spatial: 24pose / FOV: 25possible beyond-self source: 80communication-sensitive: 80
+CASTLE has useful routing signals:
+transcript, pose/IMU/GPS, photos, ego video, static cameras, auxiliary sensors
+[NOTES]
+‹#›
+
+--- SLIDE 105 ---
+AR/VR-native Progressive Evidence Access + PEA-B Baseline
+External User Should Be Last
+First-pass seed validation:20 seed cases16 weakened after review4 candidate-only5 transcript/audio-first15 need targeted frames later10 should check static camera before other user0 verified as external-user-needed so far
+Takeaway:beyond-self != external userstatic / transcript / raw evidence should be checked first
+[NOTES]
+‹#›
+
+--- SLIDE 106 ---
+MA-EgoQA QA dataset
+{  "question": "Who chimed in to suggest simpler ways to organize desserts during dessert planning?",  "options": [    "Tasha and Alice, planning detailed preparations",    "Jake and Katrina, introducing innovative steps",    "Lucia and Katrina, thinking of ready-made options",    "Katrina and Tasha, with Shure listening nearby",    "Jake and Shure, speaking briefly but seriously"  ],  "answer": "Katrina and Tasha, with Shure listening nearby"}
+[NOTES]
+‹#›
+
+--- SLIDE 107 ---
+eliminate-Single Agent Filtering
+生成很多候选 QA→ 看 zero-context 是否能猜对，能猜对就删→ 看 single-agent memory 是否能答对，能答对就删→ 用 Gemini / Claude cross-model validation 再查一遍→ human verification→ 最后 3436 个候选里留下 1741 个
+[NOTES]
+‹#›
+
+--- SLIDE 108 ---
+compress-event-based shared memory
+每 10 分钟，每个 agent 提供一段自己的 observation caption→ central manager 把多个 agent 的 caption 整合成 system-level summary→ 不是做 flat summary，而是先识别 key events→ 对每个 event 记录 4W1H:   When / What / Where / Who / How→ 得到跨 agent 对齐后的 shared memorymulti-agent long video→ agent captions→ 10-min memory units→ event-level 4W1H shared memory
+[NOTES]
+‹#›
+
+--- SLIDE 109 ---
+EgoMas-agent-wise dynamic retrieval
+Query→ 先从 shared memory 里用 BM25 检索 top-k system-level memories→ 根据这些 retrieved shared memories，生成 agent-specific retrieval requests   每个 request 包含：   agent identifier + sub-query→ 再到对应 agent 的 memory 里做 agent-level retrieval→ 低于 score threshold 的 memory 会被 filter out→ 最后用 shared memory + agent-level retrieved results 生成答案
+[NOTES]
+先全局 shared memory 找大方向，再决定查哪些 agent，再查 agent-specific memory，再 threshold filter —--which agent to access
+‹#›
+
+--- SLIDE 110 ---
+Metadata & Category
+question_idcategorycontext_daycontext_startcontext_endagents_in_context
+social_interactiontask_coordinationtheory_of_mindtemporal_reasoningenvironmental_interaction
+[NOTES]
+‹#›
+
+--- SLIDE 111 ---
+Qwen runner 会把它转成 prompt，然后解析模型输出的字母，再和 answer 对应的 option 比：
+Question:Who chimed in to suggest simpler ways to organize desserts during dessert planning?A) Tasha and Alice, planning detailed preparationsB) Jake and Katrina, introducing innovative stepsC) Lucia and Katrina, thinking of ready-made optionsD) Katrina and Tasha, with Shure listening nearbyE) Jake and Shure, speaking briefly but seriouslyGT = D
+[NOTES]
+‹#›
+
+--- SLIDE 112 ---
+use the question to retrieve each agent’s 30-second caption context with BM25. the model does not directly look at the original video frames; it reasons over retrieved caption evidence.
+MA-EgoQA question/options        +某个 agent 或多个 agent 的 retrieved captions        ->Qwen3VL 选 A-E        ->和官方 answer 算 accuracy
+[NOTES]
+‹#›
+
+--- SLIDE 113 ---
+In multi-agent egocentric QA, more agents are not automatically better. The system should learn/select the minimal useful source route for each question.
+final QA correct?        ↓which source made it correct?        ↓which sources were necessary / sufficient / redundant / harmful?在现有 QA 上补一层 source-level audit annotation。
+[NOTES]
+‹#›
+
+--- SLIDE 114 ---
+[NOTES]
+just a conception
+‹#›
+
+--- SLIDE 115 ---
+EgoExoMem
+核心问题：单一第一人称视角(egocentric)的记忆不足以支撑全面的时空推理 — 它看不到自己身体动作、看不到房间全局、看不到其他人。论文提出要结合第三人称(exocentric)记忆形成互补的"协同记忆"。
+独立视角评分：用CLIP计算Query和ego/exo的相似度，避免一边主导
+EgoExoMem Benchmark首个针对同步 ego-exo 视频进行跨视角记忆推理的基准2.6K 高质量人工审核 MCQ，源自 EgoExo4D(烹饪/修车)+ LEMMA(多人)390 段视频，平均较长(LEMMA ~111s, EgoExo4D ~425s)三步构建管线：GPT-5.4 程序化生成 → 3 位标注员人工编辑/过滤 → GPT-4o 纯文本检查(剔除常识可答题，确保视觉依赖,文本准确率<45%)
+[NOTES]
+‹#›
+
+--- SLIDE 116 ---
+MA-EQA dataset
+Dataset structure: agent / day / 30s video clipsExample: DAY1_A1_JAKE_12150000.mp4 = Jake, Day 1, starts at 12:15:00QA context is a 5-min window: DAY1_12150000_12200000
+/scratch/xy3257/data/MaEgo/    A1_JAKE/      DAY1/        DAY1_A1_JAKE_11100000.mp4        DAY1_A1_JAKE_11103000.mp4        DAY1_A1_JAKE_11110000.mp4        ...      DAY2/    A2_ALICE/      DAY1/      DAY2/    ...    A6_SHURE/      DAY1/      DAY2/ex. DAY1_A1_JAKE_12150000.mp4 = DAY1, A1_JAKE, 从 12:15:00 开始的 30 秒 clip从约 11:09:42 到 22:05:30，基本每 30 秒一个 clipA1_JAKE/DAY1 有 828 个 mp4，A1_JAKE/DAY2 有 854 个mp4。
+[NOTES]
+‹#›
+
+--- SLIDE 117 ---
+Route A: Uniform Frame Sampling + Qwen3-VL(baseline)
+pipeline:QA context window→ locate clips by agent/day/time→ uniformly sample frames from each 30s clip→ frames + question + options→ Qwen3-VL answers A/B/C/D/ESmoke test: 1 QA / few QAsCompare frame budgets: 5, 10, 15, all frames per clip/windowMain baseline: stratified uniform samplingframe budget 很大，而且 uniform sampling 可能漏掉关键瞬间。
+[NOTES]
+No captions; No BM25; No transcript; No explicit embedding retrieval; Qwen3-VL directly consumes visual frames
+‹#›
+
+--- SLIDE 118 ---
+Route B: Query-Aware Visual Evidence Retrieval
+pipeline:Sample frames from all candidate clips→ compute visual embeddings (maybe novelty, baseline, top k)→ compute text embedding for question/options→ retrieve top-k relevant (visual + text?) frames→ top-k frames + question + options→ Qwen3-VLuses embeddings to select question-relevant visual evidence.reduces visual token cost and may improve accuracy.maybe useful for multi-agent QA, where only a few agents/timestamps may contain the answer.
+[NOTES]
+‹#›
+
+--- SLIDE 119 ---
+QA Sample-定位视频窗口和 agent
+{  "category": "social_interaction",  "subcategory": "single_span",  "question": "Who chimed in to suggest simpler ways to organize desserts during dessert planning?",  "options": [    "Tasha and Alice, planning detailed preparations",    "Jake and Katrina, introducing innovative steps",    "Lucia and Katrina, thinking of ready-made options",    "Katrina and Tasha, with Shure listening nearby",    "Jake and Shure, speaking briefly but seriously"  ],  "answer": "Katrina and Tasha, with Shure listening nearby",  "contexts": {    "DAY1_12150000_12200000": [      "JAKE", "ALICE", "TASHA", "LUCIA", "KATRINA",  "SHURE"    ]  }}
+[NOTES]
+‹#›
+
+--- SLIDE 120 ---
+route B pipeline
+MA-EgoQA Day1 question + options→ parse structured contexts→ 用 contexts 定位 day / time window / relevant agents→ 生成和 Route A 一样的条件:   single: 每个 relevant agent 单独   pair: 每两个 relevant agents   all: 当前问题所有 relevant agents→ 对每个 selected agent:   找到对应 EgoLife 30s clips   在 context overlap 区间 dense sample candidate frames，默认 1 fps   用 google/siglip-base-patch16-224 encode candidate frames   用同一个 SigLIP encode question + options   image-text cosine similarity 排序   用 MMR + temporal NMS 选 per-agent top-k→ 把各 agent 选中的 frames 按时间排序合并→ selected frames + question + options 输入 Qwen/Qwen3-VL-8B-Instruct→ parse A/B/C/D/E→ 保存 prediction、selected frames、accuracy、retrieval latency、Qwen latency
+[NOTES]
+‹#›
+
+--- SLIDE 121 ---
+single top_k=5 → 5 frames totalpair top_k=5   → 10 frames totalall top_k=5    → 5 × relevant_agents framesRoute A:context clips → per-agent uniform sample 5/10/15 frames → Qwen3-VLRoute B:context clips → per-agent dense candidate sampling, default 1 fps → SigLIP question-aware retrieval→ per-agent top-k selected frames → Qwen3-VLtop5 的 all-agent 最好：37.15%，top10 all-agent 是 35.97%，结论（待分析）：加更多 retrieved frames 不一定提升，可能开始引入视觉噪声。btw：每个 pair 的 trial set 不完全一样，比如 Jake_Shure 只有 97 条，不能直接说它“比 all agents 更强”。它只能说明在 Jake/Shure 同时出现在 context 的那部分问题上，这个组合表现很好。
+[NOTES]
+‹#›
+
+--- SLIDE 122 ---
+Route B: Question-Aware Frame Retrieval for Long-Video QA
+Why SigLIP?Use SigLIP as a lightweight visual retriever before Qwen3-VL.It ranks candidate frames by semantic similarity to the question and options.Takeaway: select question-relevant frames instead of uniformly sampling long videos.Why MMR? value = lambda * relevance - (1 - lambda) * diversity_penaltyRaw SigLIP top-k can return many near-duplicate frames.MMR balances relevance and diversity, with temporal NMS to avoid nearby repeated frames.Takeaway: keep the selected evidence informative, diverse, and non-redundant.Why 5 / 10 / 15 Frames?These are per-agent frame budgets, matched with Route A for fair comparison.They test the cost-accuracy trade-off of giving Qwen more visual evidence.Takeaway: more frames are not always better; frame budget must be evaluated, not assumed.
+[NOTES]
+Temporal NMS = temporal non-maximum suppression，可以通俗理解成：
+不要在时间上选太近、太重复的 frames。
+比如 SigLIP 排序后可能觉得这些 frame 都很相关：
+12:15:03
+12:15:04
+12:15:05
+12:15:06
+12:15:07
+但它们其实很可能是同一个动作、同一个画面，只是连续几秒的重复截图。如果都选进去，就会浪费 frame budget，也会让 Qwen 看到很多重复 visual tokens。
+Temporal NMS 的做法是：
+如果已经选了 12:15:03，
+那 12:15:04 这种离它太近的 frame 就先不要选。
+比如设置：
+temporal_nms_sec = 1.0
+意思是：同一个视频里，离已选 frame 小于 1 秒的候选 frame 会被过滤掉。
+‹#›
+
+--- SLIDE 123 ---
+Flip Analysis
+Definition of flip: Same question + same agent group   <-> top5 and top10 correctness changedTwo flip types:Degradation: top5 correct → top10 wrong <-> Improvement: top5 wrong → top10 correctResults: Total paired trials: 2964 Flip cases: 259top5 correct → top10 wrong: 134 cases; top5 wrong → top10 correct: 125 casesInterpretation: top10 helps some questions, but hurts almost the same number of questions. Order AblationOriginal top10 input order:All selected frames sorted by timestamp top5 evidence: A B C D E extra frames:  x y z u vchronological top10 may become: A x B C y z D u E vCounterfactual order: Keep top5 evidence intact, append extra rank 6-10 frames after it: A B C D E x y z u v
+[NOTES]
+63.4%: extra visual tokens/content caused distraction
+36.6%: frame order/interleaving caused disruption
+‹#›
+
+--- SLIDE 124 ---
+qid 0, agent SHURE (social interaction) Q: Who chimed in to suggest simpler ways to organize desserts during dessert planning?Ground Truth: Katrina and Tasha, with Shure listening nearbyA. Tasha and Alice, planning detailed preparationsB. Jake and Katrina, introducing innovative steps C. Lucia and Katrina, thinking of ready-made optionsD. Katrina and Tasha, with Shure listening nearbyE. Jake and Shure, speaking briefly but seriouslytop5: C, wrongtop10: D, right
+Single
+[NOTES]
+‹#›
+
+--- SLIDE 125 ---
+[NOTES]
+‹#›
+
+--- SLIDE 126 ---
+Future Plan:inspect exact frame to explain why sometime adding additional frame cause accuracy to drop (before Meta meeting)Compare RGB, embedding similarity of above mentioned frame (before Meta meeting)Justify why top 5 and top 10.Gaze-related Token selection
+[NOTES]
+‹#›
+
+--- SLIDE 127 ---
+[NOTES]
+‹#›
+
+--- SLIDE 128 ---
+Egolife: Towards Extremely Long, Egocentric,Interpersonal, Multi-view, Multimodal, Daily Life AI Assistant
+6人，7天Meta Aria 眼镜temporal infogaze, video, IMU, 3D scans400K+ captions3000 QA266hr
+https://openaccess.thecvf.com/content/CVPR2025/papers/Yang_EgoLife_Towards_Egocentric_Life_Assistant_CVPR_2025_paper.pdf
+主要解决三个问题Create robust visual-audio model for egocentric dataEnable identity recognitionFacilitate long-context question answering over extensive temporal info
+[NOTES]
+‹#›
+
+--- SLIDE 129 ---
+QA Example
+https://arxiv.org/pdf/2503.03803
+Facilitate long-context question answering over extensive temporal info，只保留问题requiring info > 5mins问题不针对multi-agent的视角，是从个人视角回答，gaze数据未公开
+[NOTES]
+‹#›
+
+--- SLIDE 130 ---
+CASTLE
+2024The CASTLE dataset is a large-scale, multimodal dataset designed for advancing research in lifelogging, human activity recognition, and multimodal retrieval.Captured over four days 10 participants engaged in natural activities15 video streams (10 egocentric, 5 static perspectives)Over 600 hours of UHD 50fps video with audioIncludes 6DoF IMU, GPS, and biometric data，但gaze只在部分参与者特定任务是采集，不是全程连续的egocentric gaze, 同时没有dense caption8.22TB total size目前没有公开问答数据集，CASTLE举办挑战赛，但并没有公开数据集，Need to Generate QA for use
+https://castle-dataset.github.io/
+[NOTES]
+‹#›
+
+--- SLIDE 131 ---
+MA-EgoQA: Question Answering over Egocentric Videos from Multiple Embodied Agents
+9/2025 submitted openreview, 3/2026 submitted arxiv解决问题：人与多智能体系统的交互 Built on EgoLife, first benchmark for question answering over multiple long-horizon egocentric videos from embodied agentsMA-EgoQA Benchmark: 1,741 questions, 5 categories, 6 agents, 7 daysEgoMAS Baseline: training free baseline
+https://ma-egoqa.github.io/
+[NOTES]
+‹#›
+
+--- SLIDE 132 ---
+Methodology: MA-EgoQA Benchmark (Question Generation)
+https://ma-egoqa.github.io/
+Five predefined categories(Social Interaction, Task Coordination, Theory of Mind, Temporal Reasoning, Environmental Interaction)Questions generated using llm and promptsPipeline flow: GPT-based Generation, LLM Filtering, Human Verification
+System prompt for SI, TC, and ToM category QA generation.
+Category Prompt
+[NOTES]
+‹#›
+
+--- SLIDE 133 ---
+Methodology: EgoMAS Baseline (Answering)
+https://ma-egoqa.github.io/
+Example
+BM25 for shared memory, top-k for agent memory
+[NOTES]
+‹#›
+
+--- SLIDE 134 ---
+Evaluation Result
+Retrieval-based approaches consistently outperform non-retrieval methods, while using 100× less context (4–8k vs 128k–1M tokens)EgoMAS with a small 8B model (Qwen3VL-8B-Thinking) surpasses both Gemini-2.5-Flash and GPT-5 baselines at 40.3%.
+https://ma-egoqa.github.io/
+[NOTES]
+‹#›
+
+--- SLIDE 135 ---
+EgoExoMem: Cross-View Memory Reasoning over Synchronized Egocentric and Exocentric Videos
+5/2026 on archivefirst benchmark for cross-view memory reasoning over synchronized Ego-Exocentric videosvideo sourced from EgoExo4D and LEMMA2.6K high-quality MCQs across eight temporal, spatial, and cross-view QA typesE^2 Select, training free frame selection method for synchronized ego-exo videosBest model reaches 55.3% when E^2 select achieves 58.2%
+https://arxiv.org/abs/2605.18734
+[NOTES]
+‹#›
+
+--- SLIDE 136 ---
+Methodology
+For benchmark
+E2-Select: EgoExo Frame Selection
+Training-free frame selection method
+Independent View Scoring
+Relevance-Based Budget Allocation
+Per-View k-DPP Samping
+https://arxiv.org/abs/2605.18734
+[NOTES]
+‹#›
+
+--- SLIDE 137 ---
+https://arxiv.org/abs/2605.18734
+Evaluation
+(1) Can egocentric and exocentric streams serve as complementary memory sources for spatial and temporal reasoning? Ego + Exo 互补(2) How do existing MLLMs perform on EgoExoMem? 跨视角记忆推理对于现MLLM是未解决的开放问题(3) How does E2-Select compare to existing memoryretrieval strategies on EgoExoMem? E2-Select最优，核心创新是视觉感知的预算分配+多样性frame采样
+[NOTES]
+‹#›
+
+--- SLIDE 138 ---
+Method A: Uniform Sampling (baseline: 37.7%)
+对于一个问题, fixed frame budget, uniformly sample frames from clip比如frame budget 5: 在五分钟，也就是300s中, 1 fps = 1 frame，取5个均匀中点（30，90，150，210，270s的frame）
+Key Observationsingle-frame visual evidence works best for temporal reasoningdoes not work well for social interaction, task coordination, theory of mind and environmental interaction
+[NOTES]
+‹#›
+
+--- SLIDE 139 ---
+Uniform pair (two agents) result (baseline: 37.7%)
+[NOTES]
+‹#›
+
+--- SLIDE 140 ---
+Route B pipeline
+QA context window→ dense sample candidate frames→ SigLIP ranks frames per agent→ select top-k frames per agent→ frames + question + options→ Qwen3-VL answers A/B/C/D/Etop-k per agent = 5, 10, 15eval modes = single / pair / all agentsdataset = MA-EgoQA Day1model = Qwen3-VL-8B-InstructSame question + same agent groupCompare top5 vs top10 prediction
+[NOTES]
+‹#›
+
+--- SLIDE 141 ---
+Route B Retrieval: question/options -> SigLIP -> MMR/NMS -> top-k evidence
+Slide 1 focuses on E_t/E_i, normalization, dot=cosine, SigLIP vs CLIP, and MMR
+RetrievalStream
+Question + optionsT
+SigLIPtext encoder
+E_t
+E_t = normalize(SigLIP_text(T))
+normalize(x) = x / ||x||_2
+candidate frames {F_i}
+selected agents, 30s clips, 1 fps
+ContextSampler
+Day1 window + agents
+SigLIPimage encoder
+E_i
+E_i = normalize(SigLIP_image(F_i))
+score_iE_t · E_i
+E_t · E_i = ||E_t||||E_i||cos(theta)
+After normalization, vector length is 1, so dot product equals cosine similarity.
+MMRRanker
+TemporalNMS
+same video < 1.0s
+per-agent top-k evidencek = 5 / 10 / 15
+relevance_i = E_t · E_i
+penalty_i = max_j(E_i · E_j)
+value_i = 0.7 relevance_i - 0.3 penalty_i
+lambda=0.7: 70% question relevance, 30% diversity penalty
+SigLIP vs CLIP: why this fits the retrieval setting
+CLIP: S = I T^T / tau, softmax contrastive loss over batch matrix
+SigLIP: z_ij = E_i · E_t, sigmoid/BCE over independent pairs
+One question/options query scores many candidate frames. SigLIP pairwise scoring is direct and lightweight before Qwen.
+
+--- SLIDE 142 ---
+Route B Reasoning: selected frames + Qwen prompt -> answer -> accuracy
+Slide 2 focuses on Prompt Builder, Qwen3-VL input, output parsing, and scoring
+ReasoningStream
+selected frames
+single: 1*k, pair: 2*k, all: N*kthen sorted by timestamp
+PromptBuilder
+question + optionsagents + frame metadata
+Qwen Prompt Template
+You are answering a multiple-choice egocentric video QA question.Use only the provided video frames.Agents included in this trial: ...Question: ...Options:A. ...B. ...C. ...D. ...E. ...Frame metadata in image order:Frame 1: agent=..., context=..., video=..., offset=......Return exactly one option letter: A, B, C, D, or E.
+Qwen3-VLReasoner
+images in order + text promptmax_new_tokens = 16
+A/B/C/D/E
+parse first valid option letter
+accuracy
+compare with official answer
+Actual Qwen3-VL Input
+[image_1, image_2, ..., image_n, text_prompt]
+No BM25 captions, transcripts, or context semantic text. Qwen only sees selected video frames and the prompt.
+Scoring After Output
+1. Generate short output2. Parse A/B/C/D/E3. Map to option text4. Compare with official answer
+top5/top10/top15 controls the per-agent selected-frame budget before Qwen. More frames raise visual-token cost and latency, without stable accuracy gains.
+
+--- SLIDE 143 ---
+Text Method Token Pipeline
+One text row = one shared case_id/question_index; method=text; setting=planner_plus_answer.
+TextMethod
+Question +Options
+->
+PlannerPrompt
+->
+QwenPlanner
+->
+BM25Retrieval
+->
+AnswerPrompt
+->
+QwenAnswer
+->
+Text totalinput tokens
+Planner prompt
+question_prompt = question + options A-Eshared_context = item['bm25'][:20]### Context{shared_context}### Question{question_prompt}Output: [{name, query}, ...]
+BM25 retrieval
+For each planner {name, query}:- tokenize: lowercase, strip punctuation- retrieve top 100 captions- filter ids containing selected name- fallback retrieve top 1000 if needed- keep top 5 with score >= 10Format: [DAY time] Name: caption
+Answer prompt
+Answer only A/B/C/D/E.### Shared Context{shared_context}### Retrieved Contexts{retrieved_contexts}### Question{question_prompt}
+qid=0 real example
+Question: Who chimed in to suggest simpler ways to organize desserts during dessert planning?Planner output: [{'name':'Katrina','query':'suggested buying ready-made taro balls'}, {'name':'Tasha','query':'asked if ready-made taro balls were available'}]Retrieved context then enters the answer prompt; text_total = planner_input_tokens + answer_input_tokens.
+Qwen chat template is applied before token counting: <|im_start|>user ... <|im_end|> <|im_start|>assistant
+
+--- SLIDE 144 ---
+RouteB Video Processor Input
+One video row = one question_index + top_k + eval_mode + agents trial.
+RouteBVideo
+SelectedFrames
+->
+Question +Options
+->
+FrameMetadata
+->
+Qwen3-VLChat Template
+->
+processor(text, images)
+->
+input_ids +image_grid_thw
+Video prompt text
+You are answering a multiple-choiceegocentric video QA question.Agents included in this trial: ...Question: ...Options: A. ... B. ... C. ...Frame metadata in image order:Frame 1: agent=ALICE, context=..., video=..., offset=9.50s...Return exactly one option letter.
+Message content
+content = [  {type:'image', image: frame_1},  ...,  {type:'image', image: frame_N},  {type:'text', text: prompt}]messages = [{role:'user', content: content}]
+After chat template
+<|im_start|>user<|vision_start|><|image_pad|><|vision_end|>... one image placeholder per frame ...text prompt<|im_end|><|im_start|>assistantprocessor returns input_ids, image_grid_thw,image pad tokens, and total input length.
+qid=0 RouteB example
+top_k=5, eval_mode=all, agents=JAKE/ALICE/TASHA/LUCIA/KATRINA/SHURE; candidate frames=1,740; selected frames=30.The text prompt itself is 2,038 Qwen tokens; after adding image placeholders and visual encoding, total input is 19,378 tokens.
+<|image_pad|> is a placeholder inside the chat text; the processor expands images into visual tokens using the image grid.
+
+--- SLIDE 145 ---
+Token Accounting + Result
+Primary fairness metric is Qwen input-token budget; generated tokens are reported separately.
+Counting formulas
+Text input tokens
+planner_input = len(ids(chat(planner_prompt)))answer_input  = len(ids(chat(answer_prompt)))text_total = planner_input + answer_input
+Video input tokens
+video_total = len(processor(  text=[chat(images + prompt)], images=images).input_ids)visual_tokens = video_total - text_prompt_tokens
+qid=0 RouteB example
+top_k=5 / eval_mode=allframes = 30text prompt = 2,038visual = 17,340total = 19,378
+Mean input tokens
+Ratio vs text
+Text method
+10,114
+baseline
+RouteB all, top_k=5
+12,100
+1.31x
+RouteB all, top_k=10
+24,014
+2.60x
+RouteB all, top_k=15
+35,918
+3.90x
+253 text rows
+8,892 video rows
+0 error rows
+100 text + 100 video generation
+Conclusion: the text and RouteB all-agent video settings are not token-budget matched.
+
+--- SLIDE 146 ---
+What Exactly Was Compared
+A paired top5 vs top10 comparison: same question, eval mode, and agent group.
+Route B frame selection path
+Question+ Options
+Text query per trial
+->
+SigLIPscores
+Frame-query match
+->
+MMR +NMS
+Diverse top-k per agent
+->
+Mergeselected
+All agent frames
+->
+Timestampsort
+Then Qwen3-VL
+Why the pair is fair
+- The matched trial key keeps the question fixed.
+- Eval mode stays fixed: single / pair / all.
+- The agent group stays fixed; only top_k changes.
+The key premise
+2,964 matched trials
+subset rate = 1.0
+top5
+rank 1-5 frames
+->
+Qwen3-VL
+images in order
+top10
+same top5 + rank 6-10
+->
+Qwen3-VL
+same eval prompt
+top10 = top5+ extras
+top10 does not replace top5 evidence
+
+--- SLIDE 147 ---
+Flip Analysis: Top10 Helps and Hurts
+The added rank 6-10 frames rescue some trials, but they also break almost the same number.
+2,964
+matched trials
+same question / mode / agents
+259
+flip cases
+top5 and top10 differ in correctness
+134
+top5 correct -> top10 wrong
+degradation cases
+125
+top5 wrong -> top10 correct
+improvement cases
+By eval mode
+Mode
+N
+top5 acc
+top10 acc
+5->10 wrong
+10 rescues
+all
+253
+37.15%
+35.97%
+14
+11
+pair
+1,768
+30.43%
+29.64%
+85
+71
+single
+943
+28.31%
+29.16%
+35
+43
+Interpretation
+- Top10 adds context, but it does not provide a stable accuracy lift.
+- The rescue side is real: 125 wrong top5 trials become correct.
+- The damage side is slightly larger: 134 correct top5 trials become wrong.
+Qwen latency rises: top10 is about 1.6-1.9x top5
+Bottom line: more frames are not automatically better; they change the evidence set that Qwen must attend to.
+
+--- SLIDE 148 ---
+Order Ablation: Extra Frames vs Interleaving
+The counterfactual keeps the same ten frames and changes only their order.
+What changes when top10 is chronologically sorted
+Clean top5 evidence
+A
+B
+C
+D
+E
+Original chronological top10
+A
+x
+B
+C
+y
+z
+D
+u
+E
+v
+Same top10 frames. Only position changes.
+Green = original top5 evidence.Orange = added rank 6-10 evidence.
+Counterfactual append order
+A
+B
+C
+D
+E
+x
+y
+z
+u
+v
+Degradation cases: top5 correct -> chronological top10 wrong
+85 / 134
+still wrong after append
+63.4%: extra visuals distract
+49 / 134
+recover after append
+36.6%: position shift matters
+Takeaway
+- top5 is smaller, cleaner evidence.
+- top10/top15 add context, plus noise and redundancy.
+- They can also perturb evidence position.
+- The next step should be adaptive top-k, not fixed frame inflation.
+
+--- SLIDE 149 ---
+MOTIVATION + LINEAGE
+From single-view memory QA to two-user evidence QA
+Problem: an egocentric assistant should answer questions that depend on what multiple people saw, not just one wearer’s stream.
+Why two users?
+Many real daily-life questions are distributed: one person observes an object, another observes the destination, hand-off, or later state. Any single view is incomplete.
+EgoEverything inspiration
+Borrow the evidence-first habit: select evidence, generate an MCQ around supported facts, then use a reviewer loop to reject weak or ambiguous questions.
+EgoLife adaptation
+Replace single-video selected-object QA with multi-user semantic complementarity: each required user contributes a distinct fact to the final answer.
+single-view QA
+evidence-first generation
+two-user answerability
+the QA item should be answerable only after combining at least two users’ evidence slices.
+Key distinction: inspired by EgoEverything’s QA construction loop, but the target unit is a multi-user EgoLife event, not a single selected object in one clip.
+
+--- SLIDE 150 ---
+You are constructing a high-quality multi-user egocentric video QA item.Goal:- Create exactly one multiple-choice question that requires evidence from at least two EgoLife users.- A single user's frames must be insufficient to answer the question completely.- The combined evidence from the required users must make exactly one option correct.- Use the complementarity notes: the question should combine one distinct fact from each required user.Style constraints:- The question should sound like a natural daily-life memory question asked to an AR/VR assistant.- Do not mention timestamps, video, footage, recording, frames, dataset, or camera.- Use first-person phrasing when natural ("Where did I...", "What did we...").- Avoid private speculation that is not visually supported.- Treat EgoLife gaze CSV values as Aria CPF yaw/pitch/depth.  Only use 2D gaze-to-object claims if `projection_status` is `projected`;  if it is `missing_calibration`, do not claim image-pixel gaze or bbox proximity.Evidence packet:{这里塞入 evidence packet}Use only the provided images, observations, complementarity notes, and packet metadata.If the evidence is not enough, still return JSON but set review.status to"reject_insufficient_evidence" and explain why.Return one valid JSON object only, with this exact shape:{qa schema}
+[NOTES]
+‹#›
+
+--- SLIDE 151 ---
+{  "evidence_id": "...",  "candidate_type": "...",  "required_users": ["user A", "user B"],  "complementarity": {    "shared_anchors": "...",    "unique_facts_by_user": "...",    "notes": "..."  },  "clips": [    {      "user": "...",      "day": "...",      "clip_clock": "...",      "video_url": "...",      "gaze_summary": "...",      "observation": "...",      "frames": ["frame path at timestamp"]    }  ]}
+[NOTES]
+‹#›
+
+--- SLIDE 152 ---
+DATA + CONTRACT + PIPELINE
+The pipeline turns aligned EgoLife streams into answerability-constrained MCQs
+Inputs
+EgoLife videos
+multi-user egocentric clips
+EyeGaze CSV
+Aria CPF yaw / pitch / depth
+EyeTracking overlay
+optional visual reference
+QA contract
+≥2 required users
+the answer cannot collapse to one view
+single-user gap
+each user alone lacks a needed fact
+Main pipeline
+Build manifest
+join video / gaze / overlay by time token
+Observe clips
+per-user structured visual facts
+Mine candidates
+shared anchors + distinct facts
+Generate QA
+one five-option MCQ
+Review QA
+VLM reviewer checks sufficiency
+Validate outputs
+schema + deterministic gates
+Success criterion: combined evidence uniquely supports one option; every required user remains necessary.
+
+--- SLIDE 153 ---
+EVIDENCE + OBSERVATION + GAZE
+Evidence packets are built conservatively before the model writes questions
+Evidence preparation path
+1
+Manifest alignment
+`manifest.py` parses EgoLife paths and joins video, EyeGaze CSV, and EyeTracking overlay by day / agent / time_token.
+2
+Frame + gaze packet
+`observations.py` downloads or locates media, samples frames, computes gaze summary, and records source URLs.
+3
+Per-user observation
+Qwen3-VL converts each user clip into structured fields: location, objects, actions, gaze_focus, key_facts, uncertain_details.
+Gaze correction
+EgoEverything assumes image-space `gaze_x/gaze_y`.EgoLife EyeGaze is Aria CPF yaw / pitch / depth.Therefore, this pipeline does not make 2D gaze-to-object claims unless calibration projection succeeds.
+Projection status is evidence metadata
+`missing_calibration`: safe summary only`projected`: 2D gaze points are available`projection_failed`: reject object-proximity claims
+Important: the observation stage records what each user can support; it is not yet writing the final QA.
+
+--- SLIDE 154 ---
+MINING + GENERATION + REVIEW
+The final QA is generated only after semantic complementarity is found
+1. Mine candidates
+`mine_candidates` scores user combinations using shared anchors and distinct per-user facts within a bounded time gap. High score means the views talk about the same event but add different information.
+2. Generate MCQ
+`generate_qa` sends the evidence packet and sampled images to Qwen3-VL. The prompt requires one five-option question, at least two required users, and one unique fact from each required user.
+3. Review + validate
+`review_qa` checks whether single-user views are insufficient and combined evidence is sufficient. `validate_outputs` enforces schema and MCQ format deterministically.
+Quality gates
+required_users ≥ 2
+single user cannot answer
+combined evidence supports one option
+exactly five options
+natural memory wording
+The reviewer is not just checking syntax; it is enforcing the research claim that the question genuinely requires multiple people’s evidence.
+
+--- SLIDE 155 ---
+agent and relevant timeframe select
+[NOTES]
+‹#›
+
+--- SLIDE 156 ---
+[NOTES]
+‹#›
+
+--- SLIDE 157 ---
+[NOTES]
+‹#›
+
+--- SLIDE 158 ---
+Motivation and design
+Pipeline -- Video-First
+Main
+Current implementation: direct-video generation + judger + answerability gate
+The goal is to prove that each question is natural, agent-perspective, visually grounded, and two-user necessary.
+Caption-first risk
+Caption/observation text can compress away visual details.Questions may inherit caption artifacts or become incomplete.Wording can sound like a dataset observer: "in the video..."Single-user leakage is difficult to detect after evidence is summarized.
+Teacher feedback as requirements
+Put raw videos directly into the VLM.Ask from the user/agent memory perspective.Generate commonality and difference questions.Ask the judger why the question was asked and how to repair it.Measure answerability under single-video vs combined-video conditions.
+New acceptance principle
+A generated MCQ is accepted only if:1. judger says it is natural and grounded2. combined videos answer correctly3. each single-user/proper-subset condition is insufficient or wrong4. strict schema validation passes
+Loop
+Raw videos
+aligned EgoLife users
+Generator
+commonality / difference MCQ
+Judger
+reason + feedback
+Answerability
+single vs combined tests
+Key shift: captions are no longer the evidence representation. They are removed from the main generation path; the VLM sees videos and the pipeline verifies the generated question behaviorally.
+
+--- SLIDE 159 ---
+Runtime path and data packet
+Pipeline Map + Evidence Packet / Video Inputs
+Main
+Current implementation: direct-video generation + judger + answerability gate
+The main runtime path aligns multi-user clips, caches videos, then sends the raw videos into the video-first generation loop.
+build_manifest
+HF videos + gaze + overlays
+prepare_evidence
+day / agent / time_token
+generate_video_qa_loop
+generator + judger + eval
+validate_outputs
+strict schema gate
+qa_mcq.jsonl
+accepted rows only
+Evidence field
+Meaning
+required_users
+Users that must jointly support the final MCQ
+local_video
+Cached MP4 passed to Qwen3-VL in transformers-local
+video_url
+Source URL retained for provenance
+frames
+Fallback/debug images, not the main evidence
+gaze_summary
+CPF yaw/pitch/depth summary and projection_status
+projection_status
+Only projected permits 2D gaze-to-object claims
+Packet example
+{  "evidence_id": "EGOLIFE2U_DAY1_11100000_A1_A2",  "required_users": ["Jake", "Alice"],  "clips": [{    "agent_name": "Jake",    "day": "DAY1",    "time_token": "11100000",    "local_video": ".cache/.../DAY1_A1_JAKE_11100000.mp4",    "video_url": "https://huggingface.co/...mp4",    "gaze_summary": {      "projection_status": "missing_calibration",      "gaze_coordinate_frame": "Aria CPF; not image pixels"    }  }]}
+Main output root
+egolife_two_user_qa/outputs/pilot_20_video_first/
+Legacy caption path still exists for ablation/debugging, but the GPU pilot script now skips observe_clips and mine_candidates.
+
+--- SLIDE 160 ---
+Model I/O and generation contract
+Qwen3-VL Runner Interface + Generator Prompt
+Main
+Current implementation: direct-video generation + judger + answerability gate
+The runner exposes video_paths, while the generator prompt forces the VLM to look directly at raw videos and produce a self-justified two-user MCQ.
+Runner API
+def generate(    prompt: str,    image_paths: list[str] | None = None,    video_paths: list[str] | None = None,) -> str# transformers-local:{"type": "video", "video": local_video, "max_pixels": 262144, "fps": 1.0}
+Video message content
+content = [  {"type": "video", "video": "A1_JAKE.mp4"},  {"type": "video", "video": "A2_ALICE.mp4"},  {"type": "text", "text": prompt}]messages = [{"role": "user", "content": content}]processor.apply_chat_template(  messages, add_generation_prompt=True)
+Backend behavior
+transformers-local:  direct MP4 video inputopenai-compatible-local:  image fallback by default  video data URL only with:    --allow-openai-video-inputdry-run:  prompt manifest + path counts
+Generator prompt example
+You are given raw egocentric videos from multiple daily-life users.Look directly at the videos. Do not rely on captions or pre-written observations.Goal:- Create exactly one five-option multiple-choice question.- The question_type must be "commonality" or "difference".- At least two required users must be essential for answering.- Any single required user's video alone must be insufficient.- The combined required users' videos must make exactly one option correct.Agent-perspective style:- Ask as a natural memory or AR assistant question.- Do not use video, footage, recording, frame, dataset, camera, clip, or timestamp.
+Required JSON fields
+Explainability payload
+question_typegenerator_rationalewhy_two_users_neededper_user_evidence_claimssingle_user_answerabilitycombined_answerabilityreview.generator_self_check
+
+--- SLIDE 161 ---
+Quality gates
+Judger Feedback Loop + Answerability Evaluation
+Main
+Current implementation: direct-video generation + judger + answerability gate
+The loop first asks a judger to critique the question, then behaviorally tests whether single videos fail and combined videos succeed.
+Generate
+QA + rationale
+Judge
+reason + feedback
+If pass
+answerability eval
+Gate
+combined correct
+feedback_to_generator
+Retry
+max=3
+Judger criterion
+What it blocks
+natural wording
+god-view questions
+no video/camera terms
+dataset observer voice
+type match
+wrong common/diff target
+two-user necessity
+single-user leakage
+MCQ uniqueness
+ambiguous options
+gaze correctness
+invalid pixel gaze claims
+Answerability condition
+Videos provided
+Expected
+single_user::Jake
+Jake only
+insufficient or wrong
+single_user::Alice
+Alice only
+insufficient or wrong
+combined_all_users::Jake+Alice
+Jake + Alice
+correct option
+Deterministic gate
+combined_all_users:  choice must equal qa.correctsingle_user / proper_subset:  choice must be insufficient or != qa.correctif any reduced condition selects correct:  reject as not two-user necessary
+Accepted only when judger passed + answerability gate passed + strict validation passed
+Judge expands to a structured critique
+Checks:- agent-perspective wording; no video/camera phrasing- commonality/difference type match- every required user adds a necessary clue- unique MCQ answer; gaze-safety
+Returns: review_passed, judge_reason, feedback_to_generator
+
+--- SLIDE 162 ---
+Full prompt-level details
+Appendix A: Prompt Contracts
+Appendix
+Current implementation: direct-video generation + judger + answerability gate
+The prompts make video evidence the only source of truth, then require the model to explain why the question needs multiple users.
+Generator prompt contract
+You are given raw egocentric videos from multiple daily-life users.Look directly at the videos.Do not rely on captions or pre-written observations.Create exactly one five-option MCQ.question_type must be:  commonality - shared fact across required users  difference  - contrast or complementary fact across usersAt least two required users must be essential.Any single required user's video alone must be insufficient.Ask from an agent / memory / AR assistant perspective.
+Required generator JSON
+{  "question_type": "commonality | difference",  "question": "...",  "options": ["A...", "B...", "C...", "D...", "E..."],  "correct": "A|B|C|D|E",  "generator_rationale": "...",  "why_two_users_needed": "...",  "per_user_evidence_claims": [    {"user_id": "...", "needed_fact": "..."}  ],  "single_user_answerability": {...},  "combined_answerability": {...}}
+Judger prompt contract
+Evaluate the QA using the same raw videos.Explain why the generator may have asked this question.Hard pass criteria:- natural first-person / assistant style- no video, camera, frame, timestamp, dataset language- commonality/difference type matches the evidence- every required user contributes a necessary fact- five options, exactly one correct answer- no gaze-to-object claim unless projection_status=projectedReturn review_passed, checks, reason, feedback_to_generator.
+Answerability prompt contract
+Condition: single_user::<id> or combined_all_users::<ids>Use only the videos provided in this condition.If the videos do not contain enough information, do not guess.Return:{  "choice": "A|B|C|D|E|insufficient",  "confidence": 0.0-1.0,  "evidence_used": ["..."],  "insufficient_reason": "..."}The deterministic gate decides pass/fail from these answers.
+Failed judger feedback is appended to the next generator attempt for the same evidence packet.
+
+--- SLIDE 163 ---
+Operational details
+Appendix B: Output Schema, Validation, and Commands
+Appendix
+Current implementation: direct-video generation + judger + answerability gate
+Accepted rows are only written after schema checks, judger approval, and answerability behavior all agree.
+Accepted QA schema fields
+core:  qa_id, question_type, question  options[5], correct, answer  required_users, evidence  model_id, source_urlsvideo-first quality payload:  generator_rationale  why_two_users_needed  per_user_evidence_claims  judge_feedback  answerability_eval  attempt_count  reviewcompatibility:  category, single_user_answerability, combined_answerability
+Validation gate
+Required condition
+MCQ shape
+exactly 5 options and exactly one correct choice
+two-user contract
+required_users >= 2 and all users have evidence
+judger approval
+judge_feedback.review_passed == true
+answerability gate
+combined correct; every single/proper subset not correct
+final review flag
+review.review_passed == true only after all gates pass
+GPU regeneration command
+bash scripts/run_qwen3vl_gpu.sh \  --target-count 20 \  --model-id Qwen/Qwen3-VL-8B-Instruct \  --dtype bfloat16 \  --max-new-tokens 1536sbatch hpc/run_egolife_two_user_qwen3vl.sbatch
+Local CPU behavior
+CPU dry-run does not load the 8B VLM.It writes video-first generation, judger, and answerability prompt manifests.Real 20-row QA generation should run on GPU or a video-capable local VLM server.Final output root: outputs/pilot_20_video_first/
+
+--- SLIDE 164 ---
+Implementation reference
+Appendix C: Code Map and Acceptance Tests
+Appendix
+Current implementation: direct-video generation + judger + answerability gate
+The implementation separates prompt contracts, video-capable inference, retry logic, deterministic gates, and strict schema validation.
+Module
+Responsibility
+prompts.py
+generator, judger, and answerability prompts
+video_qa_loop.py
+attempt loop, feedback retry, answerability gate
+qwen3vl_runner.py
+generate(prompt, image_paths, video_paths) interface
+schema.py
+strict accepted/rejected QA validation
+manifest.py / evidence.py
+aligned day, agent, time_token video packets
+scripts/ + hpc/
+GPU and cluster entrypoints for regeneration
+Unit test focus
+runner video input does not break image inputgeneration prompt has no observation/caption dependencycommonality and difference pass schemaanswerability gate only passes combined-correct and single-insufficient cases
+Verification commands
+python3 -m unittest discover egolife_two_user_qa/testspython3 -m py_compile egolife_two_user_qa/*.pypython3 -m egolife_two_user_qa generate_video_qa_loop \  --dry-run --target-count 1
+Pilot acceptance
+20 accepted rows in qa_mcq.jsonl.Default target balance: 10 commonality and 10 difference, when enough candidates exist.Every row: judger passed, combined video answered correctly, single videos failed or insufficient, schema passed.
+Gaze rule stays conservative
+EgoLife gaze is CPF yaw/pitch/depth. The pipeline does not claim pixel-level gaze-to-object proximity unless Aria calibration projection succeeds.
+Legacy observe_clips / mine_candidates remain useful for debugging, but are no longer the pilot generation path.
+
+--- SLIDE 165 ---
+Judge + provenance delta
+What Changed Since the Previous Pipeline
+Tthe new layer added on top of the existing video-first QA pipeline: structured judging, deterministic gates, and audit traces.
+Main
+Before
+Judger returned a coarse review object.Main weakness:- review_passed hides failure mode- feedback is too vague for retry- human audit data is scattered
+review_passed: bool
+Now: structured judge
+8 blocking dimensionsPASS / FAIL / UNCERTAINreason + fix per checkThe generator gets specific repair instructions.
+Now: deterministic proof
+judge_gate requires every blocking check to PASS.Accepted rows also preserve video evidence and intermediate traces for manual audit.
+1
+Generator prompt stays video-first
+Prompt still tells Qwen3-VL to look directly at raw videos.
+2
+Judger becomes a rubric
+Question wording, source scope, type semantics, multi-video necessity, grounding, MCQ quality, gaze safety, and auditability are checked separately.
+3
+Acceptance becomes stricter
+Model-level review_passed is no longer enough when structured checks are present.
+4
+Trace becomes first-class
+video_evidence, human_audit, generation_trace, and qa_mcq.intermediate.jsonl preserve reviewable evidence.
+
+--- SLIDE 166 ---
+Generator contract
+Collaborator Generator Prompt Contract
+The new work strengthens judge/provenance around the generator prompt rather than replacing the generator prompt .
+Main
+Core prompt excerpt
+You are given raw egocentric videos from multiple daily-life users.Look directly at the videos.Do not rely on captions or pre-written observations.Goal:- Create exactly one five-option MCQ.- question_type = commonality | difference.- At least two required users must be essential.- Any single user's video alone must be insufficient.- Combined users' videos make exactly one option correct.
+Style + safety constraints
+Instruction:- MUST ask from FIRST person point of view.- Use "I", "me", "my", "we", or "our" when natural.- Do not use video, footage, recording, frame,  dataset, camera, clip, or timestamp.- Avoid god-view wording.- Do not speculate about private thoughts or off-screen facts.- Do not make 2D gaze-to-object claims unless  projection_status is "projected".
+commonality
+Answer identifies something shared, jointly established, or mutually verified across the required users' egocentric videos.
+difference
+Answer identifies a meaningful asymmetry or complementary detail between the required users' egocentric videos.
+Required output fields
+question_type, generator_rationale, why_two_users_needed, per_user_evidence_claims, referred_timestamps, single/combined answerability
+
+--- SLIDE 167 ---
+Structured rubric
+Structured Block Judge Dimensions
+The judger now reports a separate status, reason, and fix for each blocking dimension, making retries targeted instead of vague.
+Main
+Dimension
+What it checks
+What it blocks
+agent_perspective
+Natural first-person memory / AR-assistant wording
+dataset observer voice, god-view terms
+source_scope
+Answer uses raw videos + packet metadata only
+caption leakage, external facts, private thoughts
+question_type_semantics
+Commonality or difference means what the label says
+wrong common/diff target
+multi_video_necessity
+Each required user adds necessary non-redundant evidence
+single-video answer leakage
+visual_grounding
+Correct option is tied to visible moments
+uncheckable claims or vague evidence
+mcq_option_quality
+Five options, exactly one correct, plausible distractors
+ambiguous or multiple correct choices
+gaze_safety
+Pixel gaze claims only when projection_status=projected
+invalid yaw/pitch/depth-to-pixel claims
+human_auditability
+Enough provenance and trace for manual review
+accepted rows that cannot be inspected later
+Each check returns: { "status": "PASS/FAIL/UNCERTAIN", "reason": "...", "fix": "..." }
+Why this matters: feedback tells the next generator attempt exactly what to fix, such as wording, evidence scope, or single-user leakage.
+
+--- SLIDE 168 ---
+Judge gate
+Deterministic Judge Gate + Retry
+The model still writes review_passed, but acceptance is controlled by deterministic code over the structured checks.
+Main
+Generated QA
+question + optionsrationale + evidence
+Structured judger
+8 checksreason + fix
+judge_gate
+all blocking checksmust PASS
+Pass
+answerability eval
+Retry
+feedback_to_generatormax attempts = 3
+if failed: specific repair instruction
+Gate logic
+if judge.review_passed is not True:    rejectfor name in BLOCKING_JUDGE_CHECKS:    if checks[name].status != "PASS":        reject with failed_checksaccept judge only when all structured checks pass
+Important implication
+A model can no longer pass a question by saying review_passed=True while leaving one dimension weak. The code reads each structured check and blocks UNCERTAIN/FAIL. This separates model critique from deterministic acceptance.
+
+--- SLIDE 169 ---
+Audit trail
+Video Provenance + Intermediate Trace
+The output now stores the evidence needed for a human to reopen the same videos and audit why a question passed or failed.
+Main
+video_evidence
+Per required user:- user / agent_dir / day- time_token / clip_clock- duration_seconds- video_url / local_video- gaze_summary- sampled_frames
+human_audit
+A compact review packet:- evidence_id- required_users- source_urls- video_evidence- review instructions for manual inspection
+generation_trace
+Per attempt:- feedback_in- generation prompt/raw output- judge prompt/raw output- parsed judge + gate- answerability eval + result
+Condition-specific media now travels with answerability
+single_user::Jake  video_paths: [Jake.mp4]  video_evidence: [Jake clip metadata]single_user::Alice  video_paths: [Alice.mp4]  video_evidence: [Alice clip metadata]combined_all_users::Jake+Alice  video_paths: [Jake.mp4, Alice.mp4]
+Files written by the run
+qa_mcq.jsonl  accepted QA rows with embedded traceqa_mcq.rejected.jsonl  failed attempts with traceqa_mcq.intermediate.jsonl  standalone attempt-level audit trailvideo_first_prompts.jsonl  prompt manifest for reproduction/debugging
+Human-review payoff: a reviewer can inspect the same user videos, verify referred timestamps and per-user claims, and check whether a single video leaks the answer.
+
+--- SLIDE 170 ---
+Acceptance proof
+Accepted Row Now Proves More
+A final accepted row is no longer just a generated question; it is a question plus a judge proof, answerability behavior, and reviewable video provenance.
+Main
+1. Structured judge
+All 8 blocking checks are PASS.
+2. Combined videos
+combined_all_users selects qa.correct.
+3. Reduced evidence
+single_user/proper_subset is insufficient or wrong.
+4. Strict schema
+provenance + trace fields are present.
+Verification commands
+python3 -m unittest egolife_two_user_qa.tests.test_corepython -m egolife_two_user_qa generate_video_qa_loop \  --evidence .../evidence_manifest.jsonl \  --output .../qa_mcq.jsonl \  --intermediate-output .../qa_mcq.intermediate.jsonlpython -m egolife_two_user_qa validate_outputs \  --qa .../qa_mcq.jsonl --strict-review
+What changed in strict validation
+`judge_feedback.checks` must exist; each structured check must PASS. `video_evidence`, `human_audit`, and `generation_trace` must exist. The accepted file is therefore suitable for model evaluation and human audit.
+Bottom line: the new layer turns question quality from an opaque model opinion into a rubric-scored, behavior-tested, provenance-backed artifact.
+
+--- SLIDE 171 ---
+Appendix A
+Full Generator Prompt Structure
+This is the collaborator-updated video-first generator contract; this update keeps it and strengthens the judge/provenance layer around it.
+Appendix
+build_video_generation_prompt(...) - first half
+You are constructing one high-quality EgoLife multi-user video QA item.You are given raw egocentric videos from multiple daily-life users.Look directly at the videos.Do not rely on captions or pre-written observations.Goal:- Create exactly one five-option multiple-choice question.- The question_type must be "{question_type}".- commonality: shared, jointly established, or mutually verified.- difference: meaningful asymmetry or complementary detail.- At least two required users must be essential for answering.- Any single required user's video alone must be insufficient.- The combined required users' videos must make exactly one option correct.Instruction:- MUST ask the question from FIRST person point of view.- Do not put participant names in the question when they should be speakers.- Use "I", "me", "my", "we", or "our" instead.- Bad: "What item are Jake and Alice both handling together?"- Good: "What item are Alice and I both handling together?"
+build_video_generation_prompt(...) - second half
+Instruction continued:- If there are multiple name appears, replace one participant's name with "I".- Do not use video, footage, recording, frame, dataset, camera, clip, or timestamp.- Avoid god-view wording or third person view.- Do not speculate about private thoughts, identities, intentions, or off-screen facts unless visually supported.- Do not make 2D gaze-to-object claims unless projection_status is "projected".- Include referred_timestamps with approximate seconds within each user's clip.Previous judger/evaluator feedback to fix:{feedback}Evidence packet metadata:{ video_packet_brief(packet) }Return one valid JSON object only with VIDEO_GENERATION_SCHEMA:qa_id, question_type, question, options[5], correct, answer,category, required_users, evidence, referred_timestamps,single_user_answerability, combined_answerability,generator_rationale, why_two_users_needed,per_user_evidence_claims, review
+
+--- SLIDE 172 ---
+Appendix B
+Full Judger Prompt + JSON Shape
+The new judger is a structured rubric that returns a status, reason, and fix for every blocking dimension.
+Appendix
+Blocking dimensions in build_judger_prompt(...)
+Judge each dimension separately.A QA item should pass only when all blocking dimensions pass.1. agent_perspective   - natural first-person memory / AR-assistant question   - no dataset-observer or god-view wording   - no video / footage / recording / frame / dataset / camera / clip / timestamp2. source_scope   - answer judged from provided raw videos and packet metadata only   - no captions, observations, external knowledge, private thoughts, identities, off-screen facts3. question_type_semantics   - commonality = shared / jointly verified fact   - difference = meaningful asymmetry / complementary detail4. multi_video_necessity   - at least two users contribute necessary non-redundant visual evidence   - no single required user alone can answer completely   - aligned clips should be the same event/place/task or related interaction
+JUDGE_SCHEMA output
+5. visual_grounding   - correct option grounded in concrete visible moments   - claims/timestamps specific enough for human audit6. mcq_option_quality   - exactly five non-empty options   - exactly one correct answer   - plausible but non-ambiguous distractors7. gaze_safety   - gaze-to-object claim only when projection_status="projected"8. human_auditability   - enough user/video/time evidence for manual inspection   - rationale explains why each user matters{  "review_passed": true,  "checks": {    "<dimension>": {      "status": "PASS/FAIL/UNCERTAIN",      "reason": "...",      "fix": "..."    }  },  "blocking_failures": [],  "why_generator_asked_this": "...",  "feedback_to_generator": "..."}
+
+--- SLIDE 173 ---
+Appendix C
+Code / Output Map
+The implementation keeps generation video-first, adds a rubric judge gate, and persists audit data for accepted and rejected attempts.
+Appendix
+prompts.py
+Generator, judger, and answerability prompt contracts. JUDGE_SCHEMA defines the structured rubric.
+video_qa_loop.py
+judge_gate, retry loop, video_evidence, human_audit, generation_trace, and condition-specific media.
+schema.py
+Strict validation requires judge checks plus provenance/trace fields.
+scripts/run_qwen3vl_gpu.sh
+Writes qa_mcq.intermediate.jsonl in the GPU pilot run.
+New output files / fields
+qa_mcq.jsonl  video_evidence, human_audit, generation_traceqa_mcq.rejected.jsonl  attempts + generation_traceqa_mcq.intermediate.jsonl  standalone attempt-level tracevideo_first_prompts.jsonl  prompt manifest
+Validation and tests
+strict_review requires:  - judge_feedback.checks all PASS  - answerability gate passed  - video_evidence non-empty  - human_audit object  - generation_trace non-emptypython3 -m unittest egolife_two_user_qa.tests.test_core
+
+--- SLIDE 174 ---
+1. build_manifest   对齐 DAY / user / time_token，找到每个 clip 的 video、gaze CSV、metadata。2. prepare_evidence   组合至少两个 user 的视频，形成 evidence packet。   这里不会做 caption-first QA，只是准备视频路径、gaze summary、sample frames debug 信息。3. generate_video_qa_loop   对每个 packet：   - 把多个 user 的 raw video 传给 Qwen3-VL   - generator 直接基于视频生成 MCQ   - judger 判断这个问题是不是自然、可视化证据是否够、是不是必须多个 user   - answerability eval 测试：     A only 能不能答     B only 能不能答     A+B 能不能答对   - 只有 A/B 单独不能答、A+B 能答对，才 accept4. final output   accepted QA 写进 qa_mcq.jsonl   failed QA 如果传了 --rejected-output，会写进 rejected jsonl   prompts/raw outputs 如果传了 --intermediate-output，会写进 intermediate jsonl
+[NOTES]
+‹#›
+
+--- SLIDE 175 ---
+最重要：最终 QA less /scratch/xy3257/egolife_two_user_qa_outputs/.../qa_mcq.jsonl看每一行里面的："question" "options" "answer" "required_users" "evidence" "video_evidence" "referred_timestamps" "review"看 review 是否真的通过：python - <<'PY'import jsonfrom pathlib import Pathp = Path("/scratch/xy3257/egolife_two_user_qa_outputs/.../qa_mcq.jsonl")row = json.loads(p.read_text().splitlines()[0])print(row["question"])print(row["options"])print(json.dumps(row["review"], ensure_ascii=False, indent=2))PY重点看："review.status": "passed""review.review_passed": true"review.judger.gate.passed": true"review.answerability.gate.passed": true"review.schema_validation.passed": true如果题目被 reject，看 rejected：less /scratch/xy3257/egolife_two_user_qa_outputs/.../qa_mcq.rejected.jsonl里面的 review.status 可能是：rejected_by_judger/rejected_by_answerability/rejected_by_schema
+[NOTES]
+‹#›
+
+--- SLIDE 176 ---
+[NOTES]
+‹#›
+
+--- SLIDE 177 ---
+EgoLife Two-User QA Pipeline
+Candidate questions move forward only when every quality gate returns PASS.
+Raw videoevidence packet
+Generatecandidate QA
+SchemaOK?
+JudgerPASS?
+Needsboth?
+AcceptedQA row
+Reviewbundle
+Reject wrapper+ intermediate log
+YES
+YES
+YES
+NO
+NO
+NO
+PASS path is blue. Any failed gate produces a rejected record and the loop tries another candidate.
+
+--- SLIDE 178 ---
+Candidate Generation
+The generator is steered by taxonomy cells, existing accepted context, and raw-video media records.
+Evidence
+Raw videospresent?
+Choose designcell
+Add acceptedcontext
+Build video-firstprompt
+Model returnsJSON QA
+NO: skip packetor repair media
+YES
+NO
+When video_paths exists, image_paths stays empty for generation, judging, and answerability.
+Design cells balance question_type, content_category, utility, reasoning pattern, and question style.
+
+--- SLIDE 179 ---
+Quality Gates
+A candidate must pass structure, semantic review, and two-user dependency before it is accepted.
+CandidateJSON
+Strict schemavalid?
+JudgerPASS?
+Needsboth?
+Final reviewpassed
+Reject wrapper+ intermediate log
+Retry until10 accepted rows
+YES
+YES
+YES
+NO
+NO
+NO
+No top-level judge_feedback or answerability_eval is kept in final accepted rows; diagnostics stay in intermediate artifacts.
+
+--- SLIDE 180 ---
+Answerability Gate
+The key test: the question must require both users, not just one viewpoint.
+Candidate QA+ answer choices
+All users togetherchoose correct?
+Any single useror subset alsochooses correct?
+PASSTwo-user dependent
+NO:not answerable
+YES:not two-userspecific
+YES
+NO
+NO
+YES
+Combined evidence must solve the QA. If one user's video is enough, the item fails the dependency check.
+
+--- SLIDE 181 ---
+Outputs
+Accepted rows are packaged only after row count, metadata, raw-video records, and diversity checks are clean.
+Exactly 10accepted rows?
+Write final filesJSONL / CSV / MD
+Build localreview bundle
+Push branch
+NO:diagnose failures
+Adjust generatorprompt or sampling
+Resubmitjob
+YES
+NO
+Expected bundle: qa_mcq.jsonl, qa_mcq.csv, human_review_sheet.md, generation_report.md, video_first_prompts.jsonl, qa_mcq.intermediate.jsonl, accepted review HTML, logs, prompt traces, and source diff.
+Current branch: egolife-qa-followup-dedupe. It adds accepted-context dedupe and balanced design-cell sampling; answerability gate remains unchanged.
+
+--- SLIDE 182 ---
+Generator Prompt
+"You are an assistant tasked with generating one meaningful, contextually grounded MCQ from raw egocentric videos.Input: raw videos from multiple people during the same time interval. They may be near each other, or in different places. Look directly at the videos and use only visual evidence, video metadata, and the provided 2D gaze coordinates when available. Do not use captions, subtitles, transcripts, or pre-written observations.Your job:1. Generate exactly one five-option multiple-choice question.2. The question_type must be "{question_type}": {type_instruction}3. The question must be asked from one user's first-person speaker/base perspective, starting from that user's own memory, action, attention, or location context.4. The question must ask about a missing related detail that is supplied by another required user's video. The users may be in the same area, another room, or different parts of a shared task.5. The question must use the assigned diversity design cell below; do not default to the same "After I..., what was..." skeleton unless that is clearly the most natural wording for the assigned style.6. The question must require visual evidence from at least two required users. Timestamp overlap is not enough.7. Any single required user's video alone must be insufficient; the combined required users' videos must make exactly one option correct.You can choose from {Question Type}.….”
+"memory_gap": [        "I remember [speaker anchor], but what was still happening with [target]?",        "What did I miss about [target] after [speaker anchor]?",    ],    "simultaneity": [        "While I was [speaker action], what was happening around [target/place/person]?",        "At the moment I was focused on [anchor], what else was going on with [target]?",    ],    "follow_up": [        "Once I [left/turned away/shifted attention], what happened next with [target]?",        "What was still going on in [place] after I [speaker anchor]?",    ],    "handoff": [        "After [object/task] left my view, who handled it next?",        "Which step happened next after I [speaker anchor]?",    ],    "disambiguation": [        "From my angle, I could only tell [partial clue]. What did the other view clarify?",        "Which detail about [object/person/action] was unclear from my view but clear from another view?",    ],    "role_split": [        "During [shared task], what role did [other person/group] take while I was [speaker role]?",        "How was the task divided while I was [speaker action]?",    ],    "object_state": [        "What changed about [object/place] while I was [speaker action]?",        "Where was [object] when my view no longer showed it clearly?",    ],
+Question Type
+[NOTES]
+‹#›
+
+--- SLIDE 183 ---
+Judger Prompt
+You are a strict judger for EgoLife video-first two-user MCQ generation.You will see the same raw egocentric videos used by the generator. Judge whether the generated question is acceptable.Return every check in the JSON schema. Judge all checks, but focus most carefully on multi_video_necessity.Brief checks:1. first_person_naturalness: natural first-person memory/AR-assistant wording.2. agent_perspective: no dataset-observer wording and no video/footage/recording/frame/camera/clip/timestamp in the question or options.3. source_scope: answerable from provided raw videos and metadata only.4. question_type_semantics: commonality means shared/jointly verified; difference means meaningful asymmetry or complementary detail.6. visual_grounding: correct option and evidence claims are visually grounded in concrete moments.7. mcq_option_quality: exactly five plausible options and exactly one correct answer.8. gaze_safety: do not invent exact gaze-to-object claims when 2D gaze is unavailable.9. human_auditability: enough user/video/time evidence exists for a human to inspect later.Main check, 5. multi_video_necessity:- Judge whether the QA has a situated cross-video dependency, not just two synchronized clips.- PASS only if one required user's video provides a speaker-side anchor event and another required user's video provides a missing visual detail that is simultaneous, follow-up, or otherwise naturally related.- PASS only if both videos are necessary: removing either user's video would make the question unanswerable or would leave more than one plausible option.- PASS only if the connection would be a plausible memory or AR-assistant question from someone involved in the situation.- PASS can include offscreen, different-room, or after-I-left questions when the speaker/base user's own event sets the time/context and another user's view supplies a concrete missing state, action, object, or response.- FAIL if the question merely stitches together two clips because they share a time interval.- FAIL if the activities are unrelated, such as one person discussing/checking a device while another person is washing dishes, unless the question identifies a concrete shared task or natural dependency.- FAIL if the question asks what both users saw, both noticed, or both looked at; do not ask what both users saw or noticed because one user may not know the other user's perception.- FAIL if the question is a generic comparison of two views, rooms, or camera angles rather than a speaker anchor plus missing visual detail.
+[NOTES]
+‹#›
+
+--- SLIDE 184 ---
+Examples
+[NOTES]
+‹#›
+
+--- SLIDE 185 ---
+32B Relaxed PromptHuman-Review QA Pipeline
+uses relaxed 32B generation, schema + judger filtering, and human review to build a candidate pool while iterating on diversity issues
+Time-spreadevidence
+32B relaxedgenerator
+Schema +Judger
+Human reviewpool
+
+--- SLIDE 186 ---
+32B QA Flow
+relaxed generation + human-in-the-loop selection
+Time-spreadevidence
+32B relaxednatural prompt
+Schemavalid?
+Judgerpass?
+Human reviewpool
+Pick final10
+Generation mode
+Qwen3-VL-32B receives raw paired videos and a relaxed natural-question prompt. It is not forced into a fixed question type.
+Automatic checks kept
+Schema validation and the judger still filter weak candidates as they enter the review pool.
+Human decision layer
+The answerability gate is skipped for this experiment. Humans decide naturalness, two-view necessity, grounding, and duplicates.
+The goal is to test whether a stronger model can produce more natural two-user QA candidates when rigid type constraints are relaxed, then use review feedback to tune prompt and sampling.
+
+--- SLIDE 187 ---
+EGOLIFE TWO-USER QA GENERATION
+Current 32B Pipeline
+Balanced +time-stratifiedevidence
+Qwen3-VL-32Brelaxed naturalgeneration
+Schemavalid?
+Judgerpass?
+Pendinghuman-reviewcandidate
+YES
+YES
+Reject /retry
+Reject /retry
+NO
+NO
+Human asks:Is it natural?
+Does it trulyneed two views?
+Is the answergrounded?
+Keep /maybe / reject
+Answerability is a human decision here, not an automatic model gate.
+
+--- SLIDE 188 ---
+QA Issues Found and How I Corrected
+Observed issue
+Why it matters
+Correction
+Object-movement collapse
+All questions asked who took anobject or where it ended up.
+Relaxed prompt gained diversityguard.
+Handoff collapse
+The model replaced one templatewith another: who took over / whostarted.
+Accepted-context lockouts blockrepeated openings, relations, andtargets.
+Viewpoint attribution risk
+The visible person can bedifferent from the camera wearer.
+Prompt says viewpoint owner !=visible person; describe actionsby visible person.
+Adjacent evidence windows
+Different pairs still saw nearlythe same scene, causing similarquestions.
+Time-stratified sampling spreadsday/time/pairs and creates a30-item review pool.
+schema and judger remain; answerability stays human-in-the-loop
+
+--- SLIDE 189 ---
+模型看时推理会有hallucination，比如提到record with phone，但视频中没有recording with phone视角/人物错位，如Jake提问red object，实际red object只在alice视频出现，jake应该无法问生成问题的两个视频和两个人不在同一个地方问题可以更自然，比如red container实际上是外卖盒是否需要假如隐私考虑？比如一个问题在问另一个人在干什么，问题等于我在问另一个他在干什么，然后拿到另一个人的记忆去回答
+Current human review
+[NOTES]
+‹#›
+
+--- SLIDE 190 ---
+Prompt Construction Pipeline
+Evidencepacket
+→
+Generatorprompt
+→
+Qwen3-VLgenerate
+→
+QA JSON
+→
+Judgerprompt
+→
+Qwen3-VLjudge
+→
+Reviewbundle
+Generator = build_video_generation_prompt(...) + Qwen3-VL callJudger = build_judger_prompt(...) + Qwen3-VL callAnswerability prompt exists but these smoke runs used answerability_mode=skip
+Prompt traces are saved in video_first_prompts.jsonl, then split into:prompts/*_generation.txtprompts/*_judge.txtReview folders preserve QA JSON, summary, quality notes, and traces.
+1
+
+--- SLIDE 191 ---
+Experiment 1: Referential Binding
+Result10 QA rows, validation PASS12 intermediate rows; 2 rejected by gatesNo accepted row repeats tablet-style loophole phrasesFailure mode addressedModel could say “physical identity required: no” while the question grammar still bound a speaker-side object to another view.
+Representative QAQ: “I saw the person walk away from the table with a device in hand... did they place it on the bed, leave it on the floor, or put it on a surface near the doorway?”A: “They put it on a surface near the doorway.”Audit signalphysical identity required: yes — same person and same dark rectangular device, linked by movement from table to doorway.
+
+--- SLIDE 192 ---
+Prompt Delta: Referential Binding
+Generator prompt“Referential binding implies physical identity.”Bound phrases require visible continuity: their tablet, that phone, its screen, the screen on the tablet, what was on it, who handled it next.If continuity is absent, rewrite as view-qualified: “the other user’s view showed...”
+Judger promptFAIL if grammar binds a speaker-side object/person/place to another view while rationale claims identity is not required.FAIL screen/content cases without same device/person relation evidence.PASS only when physical continuity is visually supported or the wording avoids cross-view binding.
+Key move: the prompt now forces “physical identity required: yes/no” into retained rationale fields.
+
+--- SLIDE 193 ---
+Experiment 2: Visual Truth / Speaker Entitlement / Privacy
+Result10 QA rows, validation PASS14 intermediate rows; 4 rejectedNo accepted row contains recording hallucination keyword patternNo accepted row uses vague red object / red container wordingManual flagsSame-room / same-sink cases still slipped through as “identity required: no”.
+Positive QAQ: tablet on the floor in front of me — who interacted with that tablet after I looked away?A: person with short hair and black shirt.Audit: physical identity required: yes — same tablet, same floor pattern, same surrounding shoes.
+Exposed by this batchRows 7 and 9 used “who else was in the room” / “what was being washed at the sink” but rationale marked identity not required.Interpretation: same room/sink/table wording also binds physical place and event continuity.
+
+--- SLIDE 194 ---
+Prompt Delta: Visual Truth + Place Exposure
+Tighten false speaker claims and unnatural or privacy-intrusive questions.
+Rules added in generator + judgerSpeaker entitlement: first-person claims must be visible in the speaker video.Recording truth: holding/using a phone is not recording without recording UI, indicator, or aimed capture evidence.Separate-place rule: no “nearby”, “in the room”, or shared table/path unless same place is visually established.Object naming: use everyday names like takeout box or food container when visually clear.Privacy/social appropriateness: avoid unrelated surveillance or private screen/message questions.
+What this exposedSame-place wording had to be treated like physical identity.Examples requiring continuity:who was in the roomnear the tableat the sinkwhat was being washed thereduring that time
+
+--- SLIDE 195 ---
+Experiment 3: Same-Place Continuity
+Result10 QA rows, validation PASS11 intermediate rows; 1 rejectedManual quality: WARNPositive exampleRow 7: speaker hands off a small white container; other view shows the same container used at the sink.Audit: physical identity required: yes — handoff + same sink + immediate use.
+Remaining failuresRow 8: question says “berries I picked up later”, but speaker video only shows box/bag movement; berries and handler appear only in Lucia view.Row 10: question asks how the other person reacted when “I pointed”; rationale says physical identity required: no.Interpretation: social responses are event bindings. They require same room/person/event continuity, not just synchronized clips.
+
+--- SLIDE 196 ---
+EGOLIFE TWO-USER QA GENERATION
+Model Upgrade + Relaxed Prompt Update
+Qwen3-VL-32B and Gemini 2.5 Pro for more natural two-user QA candidates
+1Stronger models
+2Relaxed prompt
+3Human review
+Goal: produce natural QA that truly needs two egocentric views.
+
+--- SLIDE 197 ---
+EGOLIFE TWO-USER QA GENERATION
+What Changed
+Old setupsmaller / stricterfixed prompt pattern
+Qwen3-VL-32Brelaxed naturalgeneration
+Gemini 2.5 Proreplay / comparepromising quality
+WhyLess template-likequestions
+RiskMore grounding errors
+ControlHuman review decides
+Main update: stronger models + relaxed prompts, with human review as the final quality gate.
+
+--- SLIDE 198 ---
+EGOLIFE TWO-USER QA GENERATION
+Current 32B Pipeline
+Balanced +time-stratifiedevidence
+Qwen3-VL-32Brelaxed naturalgeneration
+Schemavalid?
+Judgerpass?
+Pendinghuman-reviewcandidate
+YES
+YES
+Reject /retry
+Reject /retry
+NO
+NO
+Human asks:Is it natural?
+Does it trulyneed two views?
+Is the answergrounded?
+Keep /maybe / reject
+Answerability is a human decision here, not an automatic model gate.
+
+--- SLIDE 199 ---
+EGOLIFE TWO-USER QA GENERATION
+Intermediate Metadata
+The JSON stores supervision signals, not just the final question and answer.
+Task labels
+• Type / category• Required users• Reasoning style
+Evidence anchors
+• Evidence ID• Video + gaze links• Timestamps / frames
+Two-view need
+• Each user alone?• Combined view enough?• Why two users?
+Audit signals
+• Schema result• Judger checks• Human-review state
+Use later for training targets, filtering, answerability tests, and error analysis.
+Example fields: question_type, evidence_id, video_evidence, source_urls, single-user vs combined answerability.
+
+--- SLIDE 200 ---
+EGOLIFE TWO-USER QA GENERATION
+Gemini 2.5 Pro Comparison
+Same evidence+ same task
+Qwen3-VL-32Bcandidate QA
+Gemini 2.5 Procandidate QA
+Comparequality
+Human selectsstronger QA
+Use Gemini asquality reference
+Gemini is not replacing review yet; it helps estimate the stronger-model ceiling.
+
+--- SLIDE 201 ---
+EGOLIFE TWO-USER QA GENERATION
+Relaxed Prompt Direction
+Strict promptfixed question typesmore template-like
+Relaxed promptnatural wordingopen question types
+Review rulesphysical identitygrounding / viewpoint
+• Avoid forcing the model into narrow commonality / difference templates.• Still block invalid co-reference: same place, same object, same event, or same person.• Do not call a candidate final only because schema and judger pass.
+Relaxing the prompt improves naturalness, but moves quality control into review.
+
+--- SLIDE 202 ---
+EGOLIFE TWO-USER QA GENERATION
+Current Status
+Donepipeline runsreview bundlesGemini backend
+Not final yetcandidate poolsneed human curation
+Nextselect 10 strong QAfreeze evidence
+The clean takeaway: stronger models improved generation; review now defines benchmark quality.
+
+--- SLIDE 203 ---
+Template
+While we were all setting up the projector screen, I noticed someone working on the wall near the doorway. What were they installing up there?
+During the whiteboard presentation, I saw the person across the table was working with flowers, but I couldn't make out the details. What exactly were they doing?
+While I was plugging in that power bank near the whiteboard, I heard the others at the table talking about a game. What was actually happening on the tablet that they were discussing?
+A guy in a black shirt came into my room and we talked for a moment. What was happening on the whiteboard in the other room around that same time?
+[NOTES]
+‹#›
+
+--- SLIDE 204 ---
+Without Question Style Template
+I saw Tasha were looking down at your phone while we were talking about the trip. I couldn't see clearly from my angle, what was Tasha’s phone resting on?
+As the grill was being lit for our barbecue, I know others were inside preparing food. What specific cooking task were they working on at that moment?
+At the party, I was focused on taking pictures of our friends. I'm curious, what was on Alice's phone screen while she was out walking at the same time?
+That store employee near me was looking over a really long receipt. Meanwhile, what was Alice doing at the self-checkout kiosk?
+[NOTES]
+‹#›
+
+--- SLIDE 205 ---
+Multi-user Egocentric Benchmark Generation
+考虑隐私问题，比如有的问题如果需要的video证据为其他用户的隐私视频数据，答案标签无法回答？问题需要多人视角，同时只能1和2的视频才能回答，1和4不行问题生成，统一场景（common），完全不同场景（difference)其他，egoeverything特点，第一人称，自然问问题语气，gaze如何efficient查询回答问题，选取哪个user的video
+[NOTES]
+‹#›
+
+--- SLIDE 206 ---
+[NOTES]
+‹#›
+
+--- SLIDE 207 ---
+[NOTES]
+‹#›
+
+--- SLIDE 208 ---
+[NOTES]
+‹#›
+
+--- SLIDE 209 ---
+StreamForest
+[2509.24871] StreamForest: Efficient Online Video Understanding with Persistent Event Memory
+NeurIPS 2025 Spotlight
+[NOTES]
+Streamforest 的核心思想是长期记忆按事件树进行存储，即把 Memory 模块分成一个个 MetaEvent 节点，再将多个事件节点组织成一片 Forest。每棵树代表经过层次化合并后的事件记忆结构。
+接下来具体讲一下这篇论文的方法：
+1. Fine-Grained Spatial-Temporal Window
+(a) Real-time Perception：直接保留当前帧的视觉 Token，并在特征中加入时空位置信息。
+我觉得这也是一个我们可以参考的点：对于每个事件，加入它的时间信息和空间信息。这样就可以便于大模型做出一些规律的识别，例如可以检测：  1. 前后两次同样事件间隔的时间 2. 在一天、一周或者一个月内，是否存在固定的发生时间（比如都是在周末，或者都是在早上）
+(b) 短期时空记忆：新帧到来后，旧帧不会立刻丢弃，而是先存入一个持续 TS 秒的短期记忆序列。
+(c) 模型会计算窗口内新旧帧之间的相似度，为后续事件切分做准备。
+2. 长期记忆模块 (PEMF)
+当短期记忆满了之后，会送入长期记忆模块（Persistent Event Memory Forest）并进行事件切分。
+(a) 切分做法：在连续帧序列中利用帧间相似度寻找局部最小值。局部最小值对应明显的状态变化点，以此将视频划分为若干 MetaEvent。
+(b) 记忆维护：系统设有明确的 Vision Token 上限。当 Token 超过上限时，必须执行层次化的记忆整合。
+(c) 合并策略：模型在相邻 MetaEvent 节点中寻找最适合合并的一对。合并依据是“总惩罚分数”，由以下三项组成：
+- 相似度惩罚：计算两个节点 Token 间的余弦相似度矩阵，选出 TopK 最相似的对，取平均相似度。相似度越高，惩罚越低。
+- 合并次数惩罚：防止局部区域被反复压缩。
+- 时间距离惩罚：对旧事件的压缩容忍度更高。
+然后执行合并，合并的方式使用 ToMe，同时更新这个新的 MetaEvent 的时间戳。
+当用户在某一时刻提出问题时，模型会把 PEMF 中所有根节点的长期事件记忆，以及 FSTW 中保存的当前帧和短期时空记忆同时送入 LLM。
+这个时候，LLM 就可以同时访问：
+1. 当前的局部细节
+2. 最近的短期动态
+3. 长期记忆中的一些事件级摘要
+
+--- SLIDE 210 ---
+StreamForest
+[2509.24871] StreamForest: Efficient Online Video Understanding with Persistent Event Memory
+NeurIPS 2025 Spotlight
+memory_now：当前最近帧，高分辨率，每帧压到 729 tokens。memory_short：短期窗口，每帧压到 128 tokens。memory_long：长期事件记忆，每帧压到 64 tokens，并按 event/meta-event 组织。long_memory_tokens_quota=5120：长期记忆最多保留约 5120 个 visual tokens，超过就触发合并。
+update(new_frame) 把当前帧 flatten，和上一帧算 cosine similarity。把当前帧 token 压到 st_memory_tokens[0] = 729，放进 memory_now。frame_sim_buffer 记录相邻帧之间的相似度
+[T1 + T2, 64, C] -> [ceil((T1 + T2) / 2), 64, C]
+
+--- SLIDE 211 ---
+Working-Episodic-Semantic
+Working Memory 对应当前高分辨率 FSTW/KV cache，负责实时感知和当前 query；Episodic Memory 对应带有时间、地点、人物、物体、动作和证据指针的 EventNode，负责保存具体发生过的事件；Semantic Memory 对应由多个 EventNode consolidation 得到的 PatternNode、RoutineNode 和个人语义事实，负责表示用户长期习惯、周期性行为、稳定物体位置和人物关系。在线阶段，视频流首先进入 Working Memory；当检测到 event boundary、显著性提升、用户 query 或 prediction error 时，系统将短期窗口写入 Episodic Memory。离线或低负载阶段，系统通过 replay、聚类和模式挖掘，将重复的 episodic events 抽象为 semantic patterns，并对冗余事件执行压缩或遗忘。查询阶段，系统根据问题类型动态选择检索层级：当前感知问题主要访问 Working Memory，近期回忆问题访问 Episodic Memory，习惯/规律/异常问题访问 Semantic Memory，并在固定 token/KV budget 下组合少量相关证据，从而支持 lifelong video understanding 中近似 O(C) 的推理成本。
+lifelong video memory 不只要理解当前画面，还要能回忆具体历史事件，并抽象出用户长期习惯和规律。
+
+--- SLIDE 212 ---
+[NOTES]
+‹#›
+
+--- SLIDE 213 ---
+Working-Episodic
+保留 StreamForest 的相似度分割作为 baseline，用视觉相似度下降检测候选边界物体状态变化、用户 query、手-物交互只作为辅助触发Prediction Error不是判断“画面是否变化”，判断“当前观察是否超出 Working Memory 对下一步的预测”若短期预测失败，说明当前 event model 可能失效，应切出新 EventNode实现思路：用最近短时窗口预测下一步低维 state(embedding)boundary_score = visual_similarity_drop + normalized_prediction_error + query_or_salience_trigger限制：存在额外开销，光照、晃动、遮挡可能造成误触发
+什么时候把 Working Memory 的短时窗口写成一个具体Event Node？
+
+--- SLIDE 214 ---
+Episodic Memory → Semantic Memory
+Consolidation 流程Replay selection：选择高价值事件进入后台整理Salience penumbra：显著事件增强前后相关事件的 replay priorityPattern completion：用 entity / place / action / time 召回候选模式Pattern separation：避免相似但不同的事件被误合并Schema update：更新 PatternNode 的时间、地点、实体、动作分布Schema violation：违反长期模式的事件作为 anomaly / counterexample 保留
+如何把重复事件整合成长期模式？ 找候选pattern node -> 计算match_score和conflict_score ->更新 PatternNode
+保留策略普通重复事件 → 合并进 PatternNode代表性事件 → 保留少量证据异常或 query-hit 事件 → 保留更多细节
+
+--- SLIDE 215 ---
+CLIP-based exclusiveness
+egolife clip（12s, two users Alice and Jake, synchronized）
+sample frames(e.g. 9 frames/12 s)
+embed w/ clip
+cluster rep. frames w/ cos k-means(k=4)
+anchor frames(mutual closest sim & > thresh)
+compute novelty
+find gap frames
+anchor: certifies that two views rae on the same page/event→a pair of frames from two POV are anchor frames if they are mutually the closest frame and similarity > threshold (0.75)
+[NOTES]
+anchor frame没有用，先不考虑
+‹#›
+
+--- SLIDE 216 ---
+novelty
+novelty for A at frame i =	1 - max_j cos(A_i, b_j)→ideally, high novelty means that at frame i, A sees different things than B→highest novelty→gap frame→ask questions based on these frames
+[NOTES]
+‹#›
+
+--- SLIDE 217 ---
+Pair of shared anchors
+gap frames found
+B’s closest frame
+A’s gap frame
+[NOTES]
+‹#›
+
+--- SLIDE 218 ---
+corners and annotations
+original
+cropped
+"model_id": "openai/clip-vit-base-patch32",    "comparisons": {      "source_original_vs_source_cropped": 0.833689,      "source_original_vs_compare_original": 0.833808,      "source_original_vs_compare_cropped": 0.78114,      "source_cropped_vs_compare_original": 0.755536,      "source_cropped_vs_compare_cropped": 0.798437,      "compare_original_vs_compare_cropped": 0.846824
+找两个frames，分别crop和不变→CLIP→cos sim:
+[NOTES]
+‹#›
+
+--- SLIDE 219 ---
+current pipeline
+find synchronized clips for two users
+prepare evidence-prepares videos/sample frames/writes evidence-earliest eligible groups are selected first
+generate video qa loop-feed videos to Qwen3 VL→use prompt to generate question
+judge
+answerability check-single video sufficient cases fail
+final acceptance
+[NOTES]
+‹#›
