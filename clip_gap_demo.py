@@ -292,26 +292,31 @@ def sample_short_video(
         timestamp = start_seconds + index * sample_interval_seconds
         if timestamp > start_seconds + duration_seconds + 1e-9:
             break
-        path = output_dir / f"frame_{index:03d}_{timestamp:.2f}s.jpg"
-        if not path.exists():
+        path = output_dir / f"frame_{index:03d}_{timestamp:.2f}s.png"
+        if not path.exists() or path.stat().st_size == 0:
             subprocess.run(
                 [
                     ffmpeg,
                     "-hide_banner",
                     "-loglevel",
                     "error",
+                    "-y",
                     "-ss",
                     f"{timestamp:.3f}",
                     "-i",
                     str(video_path),
                     "-frames:v",
                     "1",
-                    "-q:v",
-                    "2",
+                    "-vf",
+                    "format=rgb24",
+                    "-f",
+                    "image2",
                     str(path),
                 ],
                 check=True,
             )
+        if not path.exists() or path.stat().st_size == 0:
+            raise RuntimeError(f"ffmpeg did not write sampled frame: {path}")
         frames.append({"timestamp_seconds": round(timestamp, 3), "path": str(path)})
     return frames
 

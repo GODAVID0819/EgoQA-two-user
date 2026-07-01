@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import copy
+from pathlib import Path
 
-from .evidence import prepare_evidence
+from .evidence import local_cache_path, prepare_evidence
+from .io_utils import iter_jsonl
 from .manifest import build_manifest
 from .candidate_mining import mine_candidates
 from .clip_gap_demo import (
@@ -23,6 +26,150 @@ def _csv(value: str | None) -> list[str] | None:
     if not value:
         return None
     return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _source_video_name(clip: dict) -> str | None:
+    for key in ("video_path", "local_video", "video_url"):
+        value = clip.get(key)
+        if value:
+            name = Path(str(value)).name
+            if name.lower().endswith((".mp4", ".mov", ".mkv", ".avi", ".webm")):
+                return name
+    day = clip.get("day")
+    agent_dir = clip.get("agent_dir")
+    time_token = clip.get("time_token")
+    if day and agent_dir and time_token:
+        return f"{day}_{agent_dir}_{time_token}.mp4"
+    return None
+
+
+def _cache_day_dir_candidates(day: str) -> list[str]:
+    text = str(day or "")
+    candidates = []
+    if text.startswith("DAY_") and text[4:].isdigit():
+        candidates.extend([text, "DAY" + text[4:]])
+    elif text.startswith("DAY") and text[3:].isdigit():
+        candidates.extend(["DAY_" + text[3:], text])
+    elif text:
+        candidates.append(text)
+    return list(dict.fromkeys(candidates))
+
+
+def cache_video_candidates(clip: dict, cache_dir: str | Path | None) -> list[Path]:
+    """Return expected cache paths, accepting both DAY_N and DAYN folders."""
+
+    candidates: list[Path] = []
+    local_video = clip.get("local_video")
+    if local_video:
+        candidates.append(Path(local_video))
+    if not cache_dir:
+        return candidates
+
+    agent_dir = clip.get("agent_dir")
+    day = clip.get("day")
+    video_name = _source_video_name(clip)
+    if not (agent_dir and day):
+        return candidates
+
+    day_dirs = [Path(cache_dir) / str(agent_dir) / day_name for day_name in _cache_day_dir_candidates(str(day))]
+    if video_name:
+        candidates.extend(day_dir / video_name for day_dir in day_dirs)
+    else:
+        candidates.extend(day_dir / "placeholder.mp4" for day_dir in day_dirs)
+    for day_dir in day_dirs:
+        if day_dir.is_dir():
+            candidates.extend(sorted(day_dir.glob("*.mp4")))
+    return list(dict.fromkeys(candidates))
+
+
+def resolve_cached_local_video(clip: dict, cache_dir: str | Path | None) -> Path | None:
+    """Resolve a clip to an existing local video in the expected cache layout."""
+
+    for candidate in cache_video_candidates(clip, cache_dir):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def preflight_cached_evidence(
+    evidence_path: str | Path,
+    target_count: int,
+    *,
+    cache_dir: str | Path | None = None,
+    resolved_output: str | Path | None = None,
+) -> int:
+    """Verify evidence rows and optionally write resolved cache local_video paths."""
+
+    missing: list[str] = []
+    checked_packets = 0
+    checked_videos = 0
+    resolved_packets: list[dict] = []
+    for packet_index, packet in enumerate(iter_jsonl(evidence_path)):
+        packet_out = copy.deepcopy(packet)
+        should_check = packet_index < target_count
+        if should_check:
+            checked_packets += 1
+        evidence_id = packet.get("evidence_id") or f"row_{packet_index + 1}"
+        clips = packet.get("clips")
+        clips_out = packet_out.get("clips")
+        if not isinstance(clips, list) or not clips:
+            if should_check:
+                missing.append(f"{evidence_id}: missing clips list")
+            resolved_packets.append(packet_out)
+            continue
+        if not isinstance(clips_out, list):
+            clips_out = []
+            packet_out["clips"] = clips_out
+        for clip_index, clip in enumerate(clips, start=1):
+            user = clip.get("agent_name") or clip.get("agent_dir") or f"clip_{clip_index}"
+            resolved = resolve_cached_local_video(clip, cache_dir)
+            if resolved and clip_index <= len(clips_out) and isinstance(clips_out[clip_index - 1], dict):
+                clips_out[clip_index - 1]["local_video"] = str(resolved)
+            if should_check:
+                checked_videos += 1
+                if not resolved:
+                    candidates = [str(path) for path in cache_video_candidates(clip, cache_dir)]
+                    video_name = _source_video_name(clip) or "<video_file>"
+                    expected_path = (
+                        local_cache_path(
+                            cache_dir,
+                            f"{clip.get('agent_dir')}/{clip.get('day')}/{video_name}",
+                        )
+                        if cache_dir and clip.get("agent_dir") and clip.get("day")
+                        else None
+                    )
+                    expected = (
+                        str(expected_path.parent) + "/ or matching DAYN folder/"
+                        if expected_path
+                        else "no --cache-dir provided"
+                    )
+                    missing.append(
+                        f"{evidence_id}/{user}: local_video not found; expected cache layout {expected}; "
+                        f"tried {candidates}"
+                    )
+        resolved_packets.append(packet_out)
+        if should_check and checked_packets >= target_count and not resolved_output:
+            break
+
+    if checked_packets < target_count:
+        missing.append(
+            f"only found {checked_packets} evidence rows, but target_count is {target_count}"
+        )
+
+    if resolved_output:
+        from .io_utils import write_jsonl
+
+        write_jsonl(resolved_output, resolved_packets)
+
+    print(
+        "cached_evidence_preflight "
+        f"packets={checked_packets} videos={checked_videos} missing={len(missing)}"
+    )
+    for item in missing[:20]:
+        print(f"missing_cached_evidence {item}")
+    if len(missing) > 20:
+        print(f"missing_cached_evidence ... {len(missing) - 20} more")
+    return 1 if missing else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -131,6 +278,15 @@ def main(argv: list[str] | None = None) -> int:
     review_media.add_argument("--qa")
     review_media.add_argument("--output-dir", required=True)
     review_media.add_argument("--no-download", action="store_true")
+
+    preflight = sub.add_parser(
+        "hpc_preflight_cached_evidence",
+        help="Verify evidence rows reference existing cached local_video files",
+    )
+    preflight.add_argument("--evidence", required=True)
+    preflight.add_argument("--target-count", type=int, default=5)
+    preflight.add_argument("--cache-dir")
+    preflight.add_argument("--resolved-output")
 
     args = parser.parse_args(argv)
     if args.command == "build_manifest":
@@ -315,6 +471,13 @@ def main(argv: list[str] | None = None) -> int:
             f"({manifest['video_count_error']} errors, {manifest['video_count_missing']} missing)"
         )
         return 0
+    if args.command == "hpc_preflight_cached_evidence":
+        return preflight_cached_evidence(
+            evidence_path=args.evidence,
+            target_count=args.target_count,
+            cache_dir=args.cache_dir,
+            resolved_output=args.resolved_output,
+        )
     raise AssertionError(args.command)
 
 

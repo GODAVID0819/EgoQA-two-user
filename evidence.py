@@ -48,8 +48,23 @@ def _safe_rel_path(repo_path: str) -> Path:
     return Path(*Path(repo_path).parts)
 
 
+def _cache_day_dir_name(day: str) -> str:
+    if day.startswith("DAY_"):
+        return day
+    suffix = day.removeprefix("DAY")
+    return f"DAY_{suffix}" if suffix.isdigit() else day
+
+
 def local_cache_path(cache_dir: str | Path, repo_path: str) -> Path:
-    return Path(cache_dir) / _safe_rel_path(repo_path)
+    rel_path = _safe_rel_path(repo_path)
+    parts = rel_path.parts
+    normalized_parts = [
+        _cache_day_dir_name(part) if part.startswith("DAY") else part
+        for part in parts
+    ]
+    if normalized_parts:
+        return Path(cache_dir).joinpath(*normalized_parts)
+    return Path(cache_dir) / rel_path
 
 
 def ffprobe_duration(video_path: str | Path) -> float | None:

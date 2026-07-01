@@ -9,8 +9,8 @@ from typing import Any
 VIDEO_GENERATION_SCHEMA = {
     "qa_id": "string",
     "question_type": "commonality or difference",
-    "question": "natural first-person question from an AR-glasses user's perspective; do not mention timestamps, video, footage, recordings, frames, or cameras",
-    "options": ["A option", "B option", "C option", "D option", "E option"],
+    "question": "natural and casual question generated from a first-person perspective",
+    "options": ["option A", "option A", "option C", "option D", "option E"],
     "correct": "A/B/C/D/E",
     "answer": "exact text of the correct option",
     "category": "one of: social_interaction, task_coordination, theory_of_mind, temporal_reasoning, environmental_interaction",
@@ -87,7 +87,7 @@ ANSWERABILITY_SCHEMA = {
 }
 
 
-GENERATION_MODES = ("baseline", "clip_guided", "discovery")
+GENERATION_MODES = ("baseline", "clip_guided", "discovery", "discovery_control")
 
 
 JUDGE_CHECK_SCHEMA = {
@@ -126,6 +126,9 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
                 "clip_clock": clip.get("clip_clock"),
                 "video_url": clip.get("video_url"),
                 "local_video": clip.get("local_video"),
+                "source_local_video": clip.get("source_local_video"),
+                "generator_media_mode": clip.get("generator_media_mode"),
+                "temporal_pruning": clip.get("temporal_pruning"),
                 "gaze_summary": clip.get("gaze_summary"),
                 "projection_status": clip.get("gaze_summary", {}).get("projection_status"),
             }
@@ -265,23 +268,11 @@ def build_video_generation_prompt(
     }[question_type]
     feedback_block = _feedback_block(feedback)
     retrieval_block = clip_guidance_block(packet) if generation_mode == "clip_guided" else ""
-    example_block = """One good example of natural multi-user QA design.
-This example shows the desired reasoning pattern only. Do not copy its objects, activities, answers, names, or options into the new QA item.
-Do not treat it as evidence for the current videos. For the actual QA, use only the current raw videos and packet metadata.
-
-Good example: setup check followed by missing room state
-Video situation:
-- One person checks a device/timer/setup near a practice or presentation room, then walks toward the stairwell.
-- Another person's view still shows the front of that room, where an exercise or dance tutorial continues on the big screen.
-Good question:
-- "After I checked the setup and walked toward the stairwell, what was still going on at the front of the room I had just left?"
-Why good:
-- It starts from what the speaker experienced: checking the setup and leaving.
-- The other video answers the missing follow-up state after the speaker left.
-- The answer requires combining the speaker's anchor event with another user's visual evidence.
-
-Compact design rules:
-- A good question starts from one user's own anchor event and asks for a related missing detail supplied by another user's video.
+    design_block = """Design rules:
+- The question must combine a contextual clue from one required user's own view with complementary information from another required user's view.
+- The question does not need to begin with the contextual clue. Choose the most natural wording for the situation.
+- Do not use a fixed question template or repeat a stock opening. In particular, avoid opening with a temporal setup clause such as "After I ...", "When I ...", or "Once I ...".
+- Prefer varied everyday forms: checking where something ended up, identifying which object/person/action mattered, clarifying what changed, asking what was still true, or resolving a small uncertainty from the speaker's perspective.
 - The speaker's video must not already reveal the correct answer; another user's video must add the missing visual detail.
 - If either single user's video can select the correct option, discard the question and create a different one.
 - Do not make a question just because clips share a timestamp.
@@ -294,10 +285,10 @@ Compact design rules:
 
 Input: raw videos from multiple people during the same time interval. They may be near each other, or in different places. Look directly at the videos and use only visual evidence, video metadata, and the provided 2D gaze coordinates when available. Do not use captions, subtitles, transcripts, or pre-written observations.
 
-Your job:
+Your task:
 1. Generate exactly one five-option multiple-choice question.
 2. The question_type must be "{question_type}": {type_instruction}
-3. The question must start from one user's speaker-side anchor event, then ask about a related missing detail that is visible only in another required user's video.
+3. The question must use visual evidence from one required user's contextual clue and another required user's complementary detail, but it should not follow a fixed wording pattern.
 4. The question must require visual evidence from at least two required users. Timestamp overlap is not enough.
 5. Any single required user's video alone must be insufficient; the combined required users' videos must make exactly one option correct.
 6. Fill the evidence field with each needed user's visual fact and a specific timeframe.
@@ -305,13 +296,12 @@ Your job:
 8. The answer field must exactly equal the text of options[correct], and correct must be one letter: A, B, C, D, or E.
 
 Guidelines:
-1) Ask in a natural, informal, everyday way, like someone looking back on their memories.
-For example, "Where did I put my glasses when I was having lunch with Tasha and Alice?"
+1) Ask in a natural, informal, everyday way, like someone looking back on their memories. Use varied question forms such as where, which, what changed, what remained, what ended up happening, or which detail explains the situation.
 2) Use first-person or shared-memory wording from an AR-glasses user's perspective, such as "I", "me", "my", "we", or "our".
 3) Do not name a required user in the question or the answer when the question is asked from that person's perspective.
 For example, if the question is asked from Jake's perspective, Jake's name should not appear in the question or the answer.
 4) Do not use words such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, or timestamp in the question or options.
-5) Keep the question specific, concrete, conversational, and visually grounded.
+5) Keep the question specific, concrete, conversational, visually grounded, and phrased differently from common "setup then what" templates.
 6) Options must be multi-word, plausible, parallel in length/style, and have exactly one correct answer.
 7) False options may use names such as Jake, Alice, Tasha, Lucia, Katrina, or Shure when helpful, but follow guideline 3.
 8) When 2D gaze coordinates are available, they are provided as <gaze_coordinate> values indicating the user's attended image area. You may ask about visible objects, regions, or actions near that area.
@@ -319,9 +309,9 @@ For example, if the question is asked from Jake's perspective, Jake's name shoul
 10) combined_answerability must explicitly say "sufficient because ..." and explain why the combined videos support the correct option.
 11) Before returning, mentally run the single-user test. If Jake alone, Alice alone, or any other single required user can answer the question, rewrite it.
 12) Avoid these rejected patterns: "What did we both...", "What did we all...", "What did everyone...", "What did I and Alice both...", "What were we doing together...", and "What was the other person doing nearby?".
-13) For commonality questions, the commonality must be the relationship between the speaker's anchor and another user's missing detail, not merely a shared object or shared action visible in both views.
+13) For commonality questions, the commonality should be the relationship between one user's contextual clue and another user's complementary detail, not merely a shared object or shared action visible in both views.
 
-{example_block}
+{design_block}
 
 {retrieval_block}
 

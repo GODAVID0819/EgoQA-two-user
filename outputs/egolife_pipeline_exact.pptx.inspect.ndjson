@@ -1,0 +1,297 @@
+{"kind":"deck","id":"pr/9o031v","name":"Deck"}
+{"kind":"layout","layoutId":"cf94fdae-de0a-4bf8-bf80-360eb9de9ebf","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"b3a315b0-e687-4ea6-acc7-fc7f78e38ea1","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/bef96g","slide":1,"title":"EgoLife Two-User QA Pipeline","textShapes":5}
+{"kind":"textbox","id":"sh/7ed8bat4","slide":1,"text":"EgoLife Two-User QA Pipeline","textPreview":"EgoLife Two-User QA Pipeline","textChars":28,"textLines":1,"bbox":[42,104,1040,130]}
+{"kind":"textbox","id":"sh/0z61032l","slide":1,"text":"Exact current flow: baseline, discovery, reviewer gates, answerability, retries, and accepted outputs","textPreview":"Exact current flow: baseline, discovery, reviewer gates, answerability, retries, and accepted outputs","textChars":101,"textLines":1,"bbox":[44,264,860,86]}
+{"kind":"shape","id":"sh/pkzupwb2","slide":1,"bbox":[42,416,520,0]}
+{"kind":"textbox","id":"sh/ih4byhgn","slide":1,"text":"Built from current repo behavior","textPreview":"Built from current repo behavior","textChars":32,"textLines":1,"bbox":[42,450,620,34]}
+{"kind":"textbox","id":"sh/72x4nap4","slide":1,"text":"Core files: prompts.py, video_qa_loop.py, schema.py, cli.py","textPreview":"Core files: prompts.py, video_qa_loop.py, schema.py, cli.py","textChars":59,"textLines":1,"bbox":[42,488,760,36]}
+{"kind":"textbox","id":"sh/0nuxc3yl","slide":1,"text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[1184,661,54,24]}
+{"kind":"notes","id":"nt/bef96g","slide":1,"text":""}
+{"kind":"slide","id":"sl/ta7jdk","slide":2,"title":"PIPELINE OVERVIEW","textShapes":28}
+{"kind":"textbox","id":"sh/vmtwra5g","slide":2,"text":"PIPELINE OVERVIEW","textPreview":"PIPELINE OVERVIEW","textChars":17,"textLines":1,"bbox":[42,36,400,30]}
+{"kind":"textbox","id":"sh/o7qpg3ex","slide":2,"text":"The loop accepts a QA only after every gate agrees","textPreview":"The loop accepts a QA only after every gate agrees","textChars":50,"textLines":1,"bbox":[42,74,1060,66]}
+{"kind":"shape","id":"sh/dsji5sne","slide":2,"bbox":[42,650,1196,0]}
+{"kind":"textbox","id":"sh/6dcbulwv","slide":2,"text":"EgoLife two-user QA pipeline","textPreview":"EgoLife two-user QA pipeline","textChars":28,"textLines":1,"bbox":[42,661,720,24]}
+{"kind":"textbox","id":"sh/vy90je9c","slide":2,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[1180,661,58,24]}
+{"kind":"textbox","id":"sh/oj2t83it","slide":2,"text":"One evidence packet is processed through generation, review, answerability testing, and strict validation. Rejections become feedback for another attempt.","textPreview":"One evidence packet is processed through generation, review, answerability testing, and strict validation. Rejections become feedback for...","textChars":154,"textLines":1,"bbox":[42,150,1040,54]}
+{"kind":"shape","id":"sh/d4vmtwra","slide":2,"bbox":[42,255,150,126]}
+{"kind":"shape","id":"sh/6hcrmhk3","slide":2,"bbox":[56,269,32,32]}
+{"kind":"textbox","id":"sh/z25kb6xk","slide":2,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[56,273,32,26]}
+{"kind":"textbox","id":"sh/vy90je9c","slide":2,"text":"Evidence","textPreview":"Evidence","textChars":8,"textLines":1,"bbox":[58,309,118,34]}
+{"kind":"textbox","id":"sh/6dcbulwv","slide":2,"text":"packet with users, clips, paths, gaze summaries","textPreview":"packet with users, clips, paths, gaze summaries","textChars":47,"textLines":1,"bbox":[58,343,118,28]}
+{"kind":"shape","id":"sh/d4vmtwra","slide":2,"bbox":[193,307,18,20]}
+{"kind":"shape","id":"sh/oj2t83it","slide":2,"bbox":[209,255,150,126]}
+{"kind":"shape","id":"sh/vmtwra5g","slide":2,"bbox":[223,269,32,32]}
+{"kind":"textbox","id":"sh/61032lsz","slide":2,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[223,273,32,26]}
+{"kind":"textbox","id":"sh/dsji5sne","slide":2,"text":"Mode fork","textPreview":"Mode fork","textChars":9,"textLines":1,"bbox":[225,309,118,34]}
+{"kind":"textbox","id":"sh/o7qpg3ex","slide":2,"text":"baseline or discovery selects generator path","textPreview":"baseline or discovery selects generator path","textChars":44,"textLines":1,"bbox":[225,343,118,28]}
+{"kind":"shape","id":"sh/vahoza1g","slide":2,"bbox":[360,307,18,20]}
+{"kind":"shape","id":"sh/6tovahoz","slide":2,"bbox":[376,255,150,126]}
+{"kind":"shape","id":"sh/epkzupwb","slide":2,"bbox":[390,269,32,32]}
+{"kind":"textbox","id":"sh/7adsji5s","slide":2,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[390,273,32,26]}
+{"kind":"textbox","id":"sh/wval87ed","slide":2,"text":"Generate","textPreview":"Generate","textChars":8,"textLines":1,"bbox":[392,309,118,34]}
+{"kind":"textbox","id":"sh/pg3ex0nu","slide":2,"text":"one MCQ JSON with evidence fields","textPreview":"one MCQ JSON with evidence fields","textChars":33,"textLines":1,"bbox":[392,343,118,28]}
+{"kind":"shape","id":"sh/e1w7mp0b","slide":2,"bbox":[527,307,18,20]}
+{"kind":"shape","id":"sh/7mp0bi9s","slide":2,"bbox":[543,255,150,126]}
+{"kind":"shape","id":"sh/w7mp0bi9","slide":2,"bbox":[557,269,32,32]}
+{"kind":"textbox","id":"sh/psfil0rq","slide":2,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[557,273,32,26]}
+{"kind":"textbox","id":"sh/ed8bat47","slide":2,"text":"Schema","textPreview":"Schema","textChars":6,"textLines":1,"bbox":[559,309,118,34]}
+{"kind":"textbox","id":"sh/7u54zido","slide":2,"text":"basic structure and answer consistency","textPreview":"basic structure and answer consistency","textChars":38,"textLines":1,"bbox":[559,343,118,28]}
+{"kind":"shape","id":"sh/twra5gbq","slide":2,"bbox":[694,307,18,20]}
+{"kind":"shape","id":"sh/4byhgn29","slide":2,"bbox":[710,255,150,126]}
+{"kind":"shape","id":"sh/bq1oryts","slide":2,"bbox":[724,269,32,32]}
+{"kind":"textbox","id":"sh/m58z25kb","slide":2,"text":"5","textPreview":"5","textChars":1,"textLines":1,"bbox":[724,273,32,26]}
+{"kind":"textbox","id":"sh/t83itgfm","slide":2,"text":"Reviewer","textPreview":"Reviewer","textChars":8,"textLines":1,"bbox":[726,309,118,34]}
+{"kind":"textbox","id":"sh/4nap4r65","slide":2,"text":"nine structured checks must pass","textPreview":"nine structured checks must pass","textChars":32,"textLines":1,"bbox":[726,343,118,28]}
+{"kind":"shape","id":"sh/b2hwfyxo","slide":2,"bbox":[861,307,18,20]}
+{"kind":"shape","id":"sh/mhk3q5o7","slide":2,"bbox":[877,255,150,126]}
+{"kind":"shape","id":"sh/tgfmlkjm","slide":2,"bbox":[891,269,32,32]}
+{"kind":"textbox","id":"sh/4vmtwra5","slide":2,"text":"6","textPreview":"6","textChars":1,"textLines":1,"bbox":[891,273,32,26]}
+{"kind":"textbox","id":"sh/c3ylc7u5","slide":2,"text":"Answer gate","textPreview":"Answer gate","textChars":11,"textLines":1,"bbox":[893,309,118,34]}
+{"kind":"textbox","id":"sh/1kre1w7m","slide":2,"text":"singles fail, combined succeeds","textPreview":"singles fail, combined succeeds","textChars":31,"textLines":1,"bbox":[893,343,118,28]}
+{"kind":"shape","id":"sh/uxc3ylc7","slide":2,"bbox":[1028,307,18,20]}
+{"kind":"shape","id":"sh/ji5snelo","slide":2,"bbox":[1044,255,150,126]}
+{"kind":"shape","id":"sh/crmhk3q5","slide":2,"bbox":[1058,269,32,32]}
+{"kind":"textbox","id":"sh/1cfa9w3m","slide":2,"text":"7","textPreview":"7","textChars":1,"textLines":1,"bbox":[1058,273,32,26]}
+{"kind":"textbox","id":"sh/ulwval87","slide":2,"text":"Strict accept","textPreview":"Strict accept","textChars":13,"textLines":1,"bbox":[1060,309,118,34]}
+{"kind":"textbox","id":"sh/j6tovaho","slide":2,"text":"review, trace, audit, gates present","textPreview":"review, trace, audit, gates present","textChars":35,"textLines":1,"bbox":[1060,343,118,28]}
+{"kind":"shape","id":"sh/8nqxs72x","slide":2,"bbox":[130,455,1020,78]}
+{"kind":"textbox","id":"sh/18jqh0fe","slide":2,"text":"Retry rule","textPreview":"Retry rule","textChars":10,"textLines":1,"bbox":[156,475,160,32]}
+{"kind":"textbox","id":"sh/7qpg3ex0","slide":2,"text":"If JSON parsing, schema, reviewer, answerability, or strict validation fails, the attempt is recorded and feedback is injected into the next attempt.","textPreview":"If JSON parsing, schema, reviewer, answerability, or strict validation fails, the attempt is recorded and feedback is injected into the n...","textChars":149,"textLines":1,"bbox":[320,469,780,44]}
+{"kind":"notes","id":"nt/ta7jdk","slide":2,"text":""}
+{"kind":"slide","id":"sl/c5vp8o","slide":3,"title":"INPUT SETUP","textShapes":14}
+{"kind":"textbox","id":"sh/b6xkf6dc","slide":3,"text":"INPUT SETUP","textPreview":"INPUT SETUP","textChars":11,"textLines":1,"bbox":[42,36,400,30]}
+{"kind":"textbox","id":"sh/0rqd4vmt","slide":3,"text":"Each packet is converted into media plus metadata context","textPreview":"Each packet is converted into media plus metadata context","textChars":57,"textLines":1,"bbox":[42,74,1060,66]}
+{"kind":"shape","id":"sh/tcj6tova","slide":3,"bbox":[42,650,1196,0]}
+{"kind":"textbox","id":"sh/idonyd0z","slide":3,"text":"EgoLife two-user QA pipeline","textPreview":"EgoLife two-user QA pipeline","textChars":28,"textLines":1,"bbox":[42,661,720,24]}
+{"kind":"textbox","id":"sh/byhgn29g","slide":3,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[1180,661,58,24]}
+{"kind":"textbox","id":"sh/0je9cvix","slide":3,"text":"The loop reads JSONL evidence rows, chooses a question type, gathers media paths, and starts a per-packet attempt trace.","textPreview":"The loop reads JSONL evidence rows, chooses a question type, gathers media paths, and starts a per-packet attempt trace.","textChars":120,"textLines":1,"bbox":[42,150,1040,50]}
+{"kind":"shape","id":"sh/t47y1kre","slide":3,"bbox":[42,250,258,300]}
+{"kind":"textbox","id":"sh/i9s36hcr","slide":3,"text":"Evidence packet","textPreview":"Evidence packet","textChars":15,"textLines":1,"bbox":[62,276,218,36]}
+{"kind":"textbox","id":"sh/bulwval8","slide":3,"text":"- evidence_id\n- required_users\n- clips\n- source_urls","textPreview":"- evidence_id | - required_users | - clips | - source_urls","textChars":52,"textLines":4,"bbox":[62,334,218,160]}
+{"kind":"shape","id":"sh/j6tovaho","slide":3,"bbox":[341,250,258,300]}
+{"kind":"textbox","id":"sh/ulwval87","slide":3,"text":"Clip fields","textPreview":"Clip fields","textChars":11,"textLines":1,"bbox":[361,276,218,36]}
+{"kind":"textbox","id":"sh/1cfa9w3m","slide":3,"text":"- agent_name\n- day/time\n- local_video\n- video_url","textPreview":"- agent_name | - day/time | - local_video | - video_url","textChars":49,"textLines":4,"bbox":[361,334,218,160]}
+{"kind":"shape","id":"sh/crmhk3q5","slide":3,"bbox":[640,250,258,300]}
+{"kind":"textbox","id":"sh/ji5snelo","slide":3,"text":"Context passed","textPreview":"Context passed","textChars":14,"textLines":1,"bbox":[660,276,218,36]}
+{"kind":"textbox","id":"sh/uxc3ylc7","slide":3,"text":"- gaze_summary\n- projection_status\n- source metadata\n- human audit packet","textPreview":"- gaze_summary | - projection_status | - source metadata | - human audit packet","textChars":73,"textLines":4,"bbox":[660,334,218,160]}
+{"kind":"shape","id":"sh/1kre1w7m","slide":3,"bbox":[939,250,258,300]}
+{"kind":"textbox","id":"sh/c3ylc7u5","slide":3,"text":"Question type","textPreview":"Question type","textChars":13,"textLines":1,"bbox":[959,276,218,36]}
+{"kind":"textbox","id":"sh/jqh0fepk","slide":3,"text":"- commonality\n- difference\n- balanced target counts\n- optional fixed schedule","textPreview":"- commonality | - difference | - balanced target counts | - optional fixed schedule","textChars":77,"textLines":4,"bbox":[959,334,218,160]}
+{"kind":"textbox","id":"sh/q5o7qpg3","slide":3,"text":"Where: generate_video_qa_loop(...) prepares runner, StreamingJsonlRows, counts, media_for_clips, and question_type before any model call.","textPreview":"Where: generate_video_qa_loop(...) prepares runner, StreamingJsonlRows, counts, media_for_clips, and question_type before any model call.","textChars":137,"textLines":1,"bbox":[42,590,1080,34]}
+{"kind":"notes","id":"nt/c5vp8o","slide":3,"text":""}
+{"kind":"slide","id":"sl/vtkeqh","slide":4,"title":"MODE FORK","textShapes":14}
+{"kind":"textbox","id":"sh/nih4byhg","slide":4,"text":"MODE FORK","textPreview":"MODE FORK","textChars":9,"textLines":1,"bbox":[42,36,400,30]}
+{"kind":"textbox","id":"sh/g3ex0nux","slide":4,"text":"The generation mode changes only the generator branch","textPreview":"The generation mode changes only the generator branch","textChars":53,"textLines":1,"bbox":[42,74,1060,66]}
+{"kind":"shape","id":"sh/5o7qpg3e","slide":4,"bbox":[42,650,1196,0]}
+{"kind":"textbox","id":"sh/ylc7u54z","slide":4,"text":"EgoLife two-user QA pipeline","textPreview":"EgoLife two-user QA pipeline","textChars":28,"textLines":1,"bbox":[42,661,720,24]}
+{"kind":"textbox","id":"sh/r65wjudg","slide":4,"text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[1180,661,58,24]}
+{"kind":"textbox","id":"sh/gr2p8nqx","slide":4,"text":"All modes share the same downstream reviewer, answerability gate, strict validation, retry bookkeeping, and output files.","textPreview":"All modes share the same downstream reviewer, answerability gate, strict validation, retry bookkeeping, and output files.","textChars":121,"textLines":1,"bbox":[42,150,1060,50]}
+{"kind":"shape","id":"sh/9cvixcze","slide":4,"bbox":[42,255,356,290]}
+{"kind":"textbox","id":"sh/yd0z6103","slide":4,"text":"baseline","textPreview":"baseline","textChars":8,"textLines":1,"bbox":[66,282,300,42]}
+{"kind":"textbox","id":"sh/rytsvu9k","slide":4,"text":"One VLM call writes the MCQ directly from videos and metadata.","textPreview":"One VLM call writes the MCQ directly from videos and metadata.","textChars":62,"textLines":1,"bbox":[66,344,306,86]}
+{"kind":"shape","id":"sh/bi9s36hc","slide":4,"bbox":[66,452,300,0]}
+{"kind":"textbox","id":"sh/ixczed8v","slide":4,"text":"Fastest path; relation discovery and question writing are bundled.","textPreview":"Fastest path; relation discovery and question writing are bundled.","textChars":66,"textLines":1,"bbox":[66,476,306,58]}
+{"kind":"shape","id":"sh/tovahoza","slide":4,"bbox":[441,255,356,290]}
+{"kind":"textbox","id":"sh/032lszqt","slide":4,"text":"clip_guided","textPreview":"clip_guided","textChars":11,"textLines":1,"bbox":[465,282,300,42]}
+{"kind":"textbox","id":"sh/bulwval8","slide":4,"text":"Same direct generator path, but with CLIP retrieval hints.","textPreview":"Same direct generator path, but with CLIP retrieval hints.","textChars":58,"textLines":1,"bbox":[465,344,306,86]}
+{"kind":"shape","id":"sh/i9s36hcr","slide":4,"bbox":[465,452,300,0]}
+{"kind":"textbox","id":"sh/p0bi9s36","slide":4,"text":"Useful when candidate distinctive moments are pre-mined.","textPreview":"Useful when candidate distinctive moments are pre-mined.","textChars":56,"textLines":1,"bbox":[465,476,306,58]}
+{"kind":"shape","id":"sh/0fepkzup","slide":4,"bbox":[840,255,356,290]}
+{"kind":"textbox","id":"sh/byhgn29g","slide":4,"text":"discovery","textPreview":"discovery","textChars":9,"textLines":1,"bbox":[864,282,300,42]}
+{"kind":"textbox","id":"sh/idonyd0z","slide":4,"text":"Planner VLM call selects a relation, then generator writes the MCQ.","textPreview":"Planner VLM call selects a relation, then generator writes the MCQ.","textChars":67,"textLines":1,"bbox":[864,344,306,86]}
+{"kind":"shape","id":"sh/65wjudg7","slide":4,"bbox":[864,452,300,0]}
+{"kind":"textbox","id":"sh/zqtcj6to","slide":4,"text":"More traceable; lets retries choose a different relation.","textPreview":"More traceable; lets retries choose a different relation.","textChars":57,"textLines":1,"bbox":[864,476,306,58]}
+{"kind":"notes","id":"nt/vtkeqh","slide":4,"text":""}
+{"kind":"slide","id":"sl/i1dye1","slide":5,"title":"BASELINE PATH","textShapes":10}
+{"kind":"textbox","id":"sh/zidonyd0","slide":5,"text":"BASELINE PATH","textPreview":"BASELINE PATH","textChars":13,"textLines":1,"bbox":[42,36,400,30]}
+{"kind":"textbox","id":"sh/s36hcrmh","slide":5,"text":"Baseline combines relation search and MCQ writing","textPreview":"Baseline combines relation search and MCQ writing","textChars":49,"textLines":1,"bbox":[42,74,1060,66]}
+{"kind":"shape","id":"sh/hoza1gvy","slide":5,"bbox":[42,650,1196,0]}
+{"kind":"textbox","id":"sh/ap4r65wj","slide":5,"text":"EgoLife two-user QA pipeline","textPreview":"EgoLife two-user QA pipeline","textChars":28,"textLines":1,"bbox":[42,661,720,24]}
+{"kind":"textbox","id":"sh/za1gvy90","slide":5,"text":"05","textPreview":"05","textChars":2,"textLines":1,"bbox":[1180,661,58,24]}
+{"kind":"textbox","id":"sh/svu9knih","slide":5,"text":"Function: build_video_generation_prompt(packet, question_type, feedback, generation_mode='baseline')","textPreview":"Function: build_video_generation_prompt(packet, question_type, feedback, generation_mode='baseline')","textChars":100,"textLines":1,"bbox":[42,160,1050,28]}
+{"kind":"shape","id":"sh/hgn29gr2","slide":5,"bbox":[42,215,560,350]}
+{"kind":"shape","id":"sh/adsji5sn","slide":5,"bbox":[678,215,560,350]}
+{"kind":"textbox","id":"sh/3ylc7u54","slide":5,"text":"Direct prompt responsibilities","textPreview":"Direct prompt responsibilities","textChars":30,"textLines":1,"bbox":[68,243,500,34]}
+{"kind":"textbox","id":"sh/bat47y1k","slide":5,"text":"- Look directly at the raw videos\n- Create exactly one five-option MCQ\n- Use a speaker-side anchor plus missing detail\n- Return every schema field\n- Run the single-user test mentally before returning","textPreview":"- Look directly at the raw videos | - Create exactly one five-option MCQ | - Use a speaker-side anchor plus missing detail | - Return eve...","textChars":199,"textLines":5,"bbox":[68,301,500,230]}
+{"kind":"textbox","id":"sh/mp0bi9s3","slide":5,"text":"Built-in guardrails","textPreview":"Built-in guardrails","textChars":19,"textLines":1,"bbox":[704,243,500,34]}
+{"kind":"textbox","id":"sh/tgfmlkjm","slide":5,"text":"- Timestamp overlap is not enough\n- Single required user alone must be insufficient\n- Combined videos must support exactly one option\n- Question/options must avoid video/camera/frame language\n- Commonality cannot be just a shared object or action","textPreview":"- Timestamp overlap is not enough | - Single required user alone must be insufficient | - Combined videos must support exactly one option...","textChars":246,"textLines":5,"bbox":[704,301,500,230]}
+{"kind":"textbox","id":"sh/4vmtwra5","slide":5,"text":"Baseline is operationally simple: one generation prompt, then the same gates as every other mode.","textPreview":"Baseline is operationally simple: one generation prompt, then the same gates as every other mode.","textChars":97,"textLines":1,"bbox":[42,590,1060,34]}
+{"kind":"notes","id":"nt/i1dye1","slide":5,"text":""}
+{"kind":"slide","id":"sl/oqas4e","slide":6,"title":"DISCOVERY PATH","textShapes":12}
+{"kind":"textbox","id":"sh/fyxobm58","slide":6,"text":"DISCOVERY PATH","textPreview":"DISCOVERY PATH","textChars":14,"textLines":1,"bbox":[42,36,400,30]}
+{"kind":"textbox","id":"sh/8jqh0fep","slide":6,"text":"Discovery splits generation into planning first, MCQ second","textPreview":"Discovery splits generation into planning first, MCQ second","textChars":59,"textLines":1,"bbox":[42,74,1060,66]}
+{"kind":"shape","id":"sh/x4nap4r6","slide":6,"bbox":[42,650,1196,0]}
+{"kind":"textbox","id":"sh/qpg3ex0n","slide":6,"text":"EgoLife two-user QA pipeline","textPreview":"EgoLife two-user QA pipeline","textChars":28,"textLines":1,"bbox":[42,661,720,24]}
+{"kind":"textbox","id":"sh/fa9w3m94","slide":6,"text":"06","textPreview":"06","textChars":2,"textLines":1,"bbox":[1180,661,58,24]}
+{"kind":"textbox","id":"sh/8v6psfil","slide":6,"text":"This is the current discovery-mode difference: an intermediate selected_relation exists before the MCQ generator runs.","textPreview":"This is the current discovery-mode difference: an intermediate selected_relation exists before the MCQ generator runs.","textChars":118,"textLines":1,"bbox":[42,150,1060,48]}
+{"kind":"shape","id":"sh/xczed8v6","slide":6,"bbox":[72,240,310,230]}
+{"kind":"shape","id":"sh/qtcj6tov","slide":6,"bbox":[485,240,310,230]}
+{"kind":"shape","id":"sh/je9cvixc","slide":6,"bbox":[898,240,310,230]}
+{"kind":"shape","id":"sh/nih4byhg","slide":6,"bbox":[408,343,48,20]}
+{"kind":"shape","id":"sh/yxobm58z","slide":6,"bbox":[821,343,48,20]}
+{"kind":"textbox","id":"sh/5o7qpg3e","slide":6,"text":"1. Relation planner","textPreview":"1. Relation planner","textChars":19,"textLines":1,"bbox":[98,272,260,34]}
+{"kind":"textbox","id":"sh/g3ex0nux","slide":6,"text":"- Do not write the MCQ yet\n- List 3-5 cross-user needs\n- Select one relation\n- Explain why it is natural and not single-user-answerable","textPreview":"- Do not write the MCQ yet | - List 3-5 cross-user needs | - Select one relation | - Explain why it is natural and not single-user-answer...","textChars":135,"textLines":4,"bbox":[98,324,250,120]}
+{"kind":"textbox","id":"sh/r65wjudg","slide":6,"text":"selected_relation","textPreview":"selected_relation","textChars":17,"textLines":1,"bbox":[514,272,260,34]}
+{"kind":"textbox","id":"sh/ylc7u54z","slide":6,"text":"- speaker_user\n- other_required_users\n- what_speaker_knows_sees\n- what_others_know_see\n- only_clear_when_combining","textPreview":"- speaker_user | - other_required_users | - what_speaker_knows_sees | - what_others_know_see | - only_clear_when_combining","textChars":114,"textLines":5,"bbox":[514,324,250,120]}
+{"kind":"textbox","id":"sh/9cvixcze","slide":6,"text":"2. MCQ generator","textPreview":"2. MCQ generator","textChars":16,"textLines":1,"bbox":[924,272,260,34]}
+{"kind":"textbox","id":"sh/gr2p8nqx","slide":6,"text":"- Use selected relation\n- Write natural first-person MCQ\n- Return VIDEO_GENERATION_SCHEMA\n- Satisfy two-user necessity","textPreview":"- Use selected relation | - Write natural first-person MCQ | - Return VIDEO_GENERATION_SCHEMA | - Satisfy two-user necessity","textChars":118,"textLines":4,"bbox":[924,324,250,120]}
+{"kind":"textbox","id":"sh/rytsvu9k","slide":6,"text":"Why it matters: if a gate fails, the next attempt can search for a different relation rather than only rephrasing the same flawed question.","textPreview":"Why it matters: if a gate fails, the next attempt can search for a different relation rather than only rephrasing the same flawed question.","textChars":139,"textLines":1,"bbox":[72,535,1060,54]}
+{"kind":"notes","id":"nt/oqas4e","slide":6,"text":""}
+{"kind":"slide","id":"sl/tmpfrv","slide":7,"title":"SCHEMA AND METADATA","textShapes":9}
+{"kind":"textbox","id":"sh/h4byhgn2","slide":7,"text":"SCHEMA AND METADATA","textPreview":"SCHEMA AND METADATA","textChars":19,"textLines":1,"bbox":[42,36,400,30]}
+{"kind":"textbox","id":"sh/adsji5sn","slide":7,"text":"After generation, the loop normalizes and checks the QA structure","textPreview":"After generation, the loop normalizes and checks the QA structure","textChars":65,"textLines":1,"bbox":[42,74,1060,66]}
+{"kind":"shape","id":"sh/3ylc7u54","slide":7,"bbox":[42,650,1196,0]}
+{"kind":"textbox","id":"sh/s72x4nap","slide":7,"text":"EgoLife two-user QA pipeline","textPreview":"EgoLife two-user QA pipeline","textChars":28,"textLines":1,"bbox":[42,661,720,24]}
+{"kind":"textbox","id":"sh/lszqtcj6","slide":7,"text":"07","textPreview":"07","textChars":2,"textLines":1,"bbox":[1180,661,58,24]}
+{"kind":"textbox","id":"sh/a5gbq1or","slide":7,"text":"The generator may omit or weaken some metadata. complete_generator_metadata(...) fills safe defaults before basic validation.","textPreview":"The generator may omit or weaken some metadata. complete_generator_metadata(...) fills safe defaults before basic validation.","textChars":125,"textLines":1,"bbox":[42,150,1080,50]}
+{"kind":"shape","id":"sh/3m94fu18","slide":7,"bbox":[42,220,560,350]}
+{"kind":"shape","id":"sh/s36hcrmh","slide":7,"bbox":[678,220,560,350]}
+{"kind":"textbox","id":"sh/hoza1gvy","slide":7,"text":"Backfilled or normalized","textPreview":"Backfilled or normalized","textChars":24,"textLines":1,"bbox":[68,248,500,34]}
+{"kind":"textbox","id":"sh/58z25kb6","slide":7,"text":"- qa_id if missing\n- question_type from loop target\n- required_users from packet\n- category default: environmental_interaction\n- answer text from options[correct] when possible\n- trace, human_audit, source URLs, video_evidence","textPreview":"- qa_id if missing | - question_type from loop target | - required_users from packet | - category default: environmental_interaction | - ...","textChars":226,"textLines":6,"bbox":[68,306,500,230]}
+{"kind":"textbox","id":"sh/gn29gr2p","slide":7,"text":"Basic schema gate","textPreview":"Basic schema gate","textChars":17,"textLines":1,"bbox":[704,248,500,34]}
+{"kind":"textbox","id":"sh/n29gr2p8","slide":7,"text":"- Required fields exist\n- Exactly five non-empty options\n- correct is A-E\n- answer equals options[correct]\n- at least two unique required users\n- single-user and combined answerability text exists","textPreview":"- Required fields exist | - Exactly five non-empty options | - correct is A-E | - answer equals options[correct] | - at least two unique ...","textChars":196,"textLines":6,"bbox":[704,306,500,230]}
+{"kind":"notes","id":"nt/tmpfrv","slide":7,"text":""}
+{"kind":"slide","id":"sl/42rmsn","slide":8,"title":"REVIEWER GATE","textShapes":12}
+{"kind":"textbox","id":"sh/kf6dcbul","slide":8,"text":"REVIEWER GATE","textPreview":"REVIEWER GATE","textChars":13,"textLines":1,"bbox":[42,36,400,30]}
+{"kind":"textbox","id":"sh/vu9knih4","slide":8,"text":"The reviewer is a VLM check, but the gate is deterministic","textPreview":"The reviewer is a VLM check, but the gate is deterministic","textChars":58,"textLines":1,"bbox":[42,74,1060,66]}
+{"kind":"shape","id":"sh/29gr2p8n","slide":8,"bbox":[42,650,1196,0]}
+{"kind":"textbox","id":"sh/d8bat47y","slide":8,"text":"EgoLife two-user QA pipeline","textPreview":"EgoLife two-user QA pipeline","textChars":28,"textLines":1,"bbox":[42,661,720,24]}
+{"kind":"textbox","id":"sh/knih4byh","slide":8,"text":"08","textPreview":"08","textChars":2,"textLines":1,"bbox":[1180,661,58,24]}
+{"kind":"textbox","id":"sh/v6psfil0","slide":8,"text":"Function: build_judger_prompt(...) asks for nine structured checks. judge_gate(...) then requires every blocking check to be PASS.","textPreview":"Function: build_judger_prompt(...) asks for nine structured checks. judge_gate(...) then requires every blocking check to be PASS.","textChars":130,"textLines":1,"bbox":[42,150,1080,50]}
+{"kind":"shape","id":"sh/2lszqtcj","slide":8,"bbox":[70,250,340,260]}
+{"kind":"textbox","id":"sh/dcbulwva","slide":8,"text":"Core semantics","textPreview":"Core semantics","textChars":14,"textLines":1,"bbox":[92,280,292,34]}
+{"kind":"textbox","id":"sh/kre1w7mp","slide":8,"text":"- multi_video_necessity\n- visual_grounding\n- question_type_semantics","textPreview":"- multi_video_necessity | - visual_grounding | - question_type_semantics","textChars":68,"textLines":3,"bbox":[92,342,292,118]}
+{"kind":"shape","id":"sh/6psfil0r","slide":8,"bbox":[460,250,340,260]}
+{"kind":"textbox","id":"sh/val87ed8","slide":8,"text":"Wording and source","textPreview":"Wording and source","textChars":18,"textLines":1,"bbox":[482,280,292,34]}
+{"kind":"textbox","id":"sh/kre1w7mp","slide":8,"text":"- first_person_naturalness\n- agent_perspective\n- source_scope","textPreview":"- first_person_naturalness | - agent_perspective | - source_scope","textChars":61,"textLines":3,"bbox":[482,342,292,118]}
+{"kind":"shape","id":"sh/dcbulwva","slide":8,"bbox":[850,250,340,260]}
+{"kind":"textbox","id":"sh/2x4nap4r","slide":8,"text":"Format and safety","textPreview":"Format and safety","textChars":17,"textLines":1,"bbox":[872,280,292,34]}
+{"kind":"textbox","id":"sh/vixczed8","slide":8,"text":"- mcq_option_quality\n- gaze_safety\n- human_auditability","textPreview":"- mcq_option_quality | - gaze_safety | - human_auditability","textChars":55,"textLines":3,"bbox":[872,342,292,118]}
+{"kind":"shape","id":"sh/k3q5o7qp","slide":8,"bbox":[150,548,980,50]}
+{"kind":"textbox","id":"sh/donyd0z6","slide":8,"text":"Important: if structured checks exist, they override the top-level review_passed flag. All nine must exist and PASS; blocking_failures must be empty.","textPreview":"Important: if structured checks exist, they override the top-level review_passed flag. All nine must exist and PASS; blocking_failures mu...","textChars":149,"textLines":1,"bbox":[176,560,930,24]}
+{"kind":"notes","id":"nt/42rmsn","slide":8,"text":""}
+{"kind":"slide","id":"sl/jbwmf4","slide":9,"title":"BEHAVIORAL GATE","textShapes":16}
+{"kind":"textbox","id":"sh/w3m94fu1","slide":9,"text":"BEHAVIORAL GATE","textPreview":"BEHAVIORAL GATE","textChars":15,"textLines":1,"bbox":[42,36,400,30]}
+{"kind":"textbox","id":"sh/3itgfmlk","slide":9,"text":"Answerability tests whether the MCQ truly needs multiple users","textPreview":"Answerability tests whether the MCQ truly needs multiple users","textChars":62,"textLines":1,"bbox":[42,74,1060,66]}
+{"kind":"shape","id":"sh/ex0nuxc3","slide":9,"bbox":[42,650,1196,0]}
+{"kind":"textbox","id":"sh/lwval87e","slide":9,"text":"EgoLife two-user QA pipeline","textPreview":"EgoLife two-user QA pipeline","textChars":28,"textLines":1,"bbox":[42,661,720,24]}
+{"kind":"textbox","id":"sh/wb2hwfyx","slide":9,"text":"09","textPreview":"09","textChars":2,"textLines":1,"bbox":[1180,661,58,24]}
+{"kind":"textbox","id":"sh/3q5o7qpg","slide":9,"text":"The same QA is answered under restricted media conditions. A valid two-user QA should be answerable only when all required users' videos are available.","textPreview":"The same QA is answered under restricted media conditions. A valid two-user QA should be answerable only when all required users' videos ...","textChars":151,"textLines":1,"bbox":[42,150,1080,52]}
+{"kind":"shape","id":"sh/e9cvixcz","slide":9,"bbox":[76,270,280,170]}
+{"kind":"shape","id":"sh/l87ed8ba","slide":9,"bbox":[90,284,32,32]}
+{"kind":"textbox","id":"sh/sneloj2t","slide":9,"text":"A","textPreview":"A","textChars":1,"textLines":1,"bbox":[90,288,32,26]}
+{"kind":"textbox","id":"sh/qd4vmtwr","slide":9,"text":"single_user","textPreview":"single_user","textChars":11,"textLines":1,"bbox":[132,284,210,34]}
+{"kind":"textbox","id":"sh/fyxobm58","slide":9,"text":"Condition ID: single_user::<user>. If any one user selects the correct answer, the QA leaks.","textPreview":"Condition ID: single_user::<user>. If any one user selects the correct answer, the QA leaks.","textChars":92,"textLines":1,"bbox":[92,328,248,98]}
+{"kind":"shape","id":"sh/8jqh0fep","slide":9,"bbox":[500,270,280,170]}
+{"kind":"shape","id":"sh/x4nap4r6","slide":9,"bbox":[514,284,32,32]}
+{"kind":"textbox","id":"sh/qpg3ex0n","slide":9,"text":"B","textPreview":"B","textChars":1,"textLines":1,"bbox":[514,288,32,26]}
+{"kind":"textbox","id":"sh/fa9w3m94","slide":9,"text":"proper_subset","textPreview":"proper_subset","textChars":13,"textLines":1,"bbox":[556,284,210,34]}
+{"kind":"textbox","id":"sh/8v6psfil","slide":9,"text":"Only for 3+ required users. Any subset that answers correctly also fails the gate.","textPreview":"Only for 3+ required users. Any subset that answers correctly also fails the gate.","textChars":82,"textLines":1,"bbox":[516,328,248,98]}
+{"kind":"shape","id":"sh/xczed8v6","slide":9,"bbox":[924,270,280,170]}
+{"kind":"shape","id":"sh/qtcj6tov","slide":9,"bbox":[938,284,32,32]}
+{"kind":"textbox","id":"sh/je9cvixc","slide":9,"text":"C","textPreview":"C","textChars":1,"textLines":1,"bbox":[938,288,32,26]}
+{"kind":"textbox","id":"sh/rqd4vmtw","slide":9,"text":"combined_all_users","textPreview":"combined_all_users","textChars":18,"textLines":1,"bbox":[980,284,210,34]}
+{"kind":"textbox","id":"sh/25kb6xkf","slide":9,"text":"The combined condition must select the correct answer. Otherwise the QA is not actually answerable.","textPreview":"The combined condition must select the correct answer. Otherwise the QA is not actually answerable.","textChars":99,"textLines":1,"bbox":[940,328,248,98]}
+{"kind":"shape","id":"sh/9w3m94fu","slide":9,"bbox":[390,342,52,20]}
+{"kind":"shape","id":"sh/kb6xkf6d","slide":9,"bbox":[814,342,52,20]}
+{"kind":"textbox","id":"sh/re1w7mp0","slide":9,"text":"Pass condition","textPreview":"Pass condition","textChars":14,"textLines":1,"bbox":[80,512,220,32]}
+{"kind":"textbox","id":"sh/2t83itgf","slide":9,"text":"combined_all_users selects correct AND every single/proper-subset condition is insufficient or incorrect.","textPreview":"combined_all_users selects correct AND every single/proper-subset condition is insufficient or incorrect.","textChars":105,"textLines":1,"bbox":[310,512,830,32]}
+{"kind":"notes","id":"nt/jbwmf4","slide":9,"text":""}
+{"kind":"slide","id":"sl/f4wba5","slide":10,"title":"ATTEMPTS AND OUTPUTS","textShapes":11}
+{"kind":"textbox","id":"sh/1gvy90je","slide":10,"text":"ATTEMPTS AND OUTPUTS","textPreview":"ATTEMPTS AND OUTPUTS","textChars":20,"textLines":1,"bbox":[42,36,400,30]}
+{"kind":"textbox","id":"sh/qtcj6tov","slide":10,"text":"Retries are feedback-driven and fully traced","textPreview":"Retries are feedback-driven and fully traced","textChars":44,"textLines":1,"bbox":[42,74,1060,66]}
+{"kind":"shape","id":"sh/je9cvixc","slide":10,"bbox":[42,650,1196,0]}
+{"kind":"textbox","id":"sh/87ed8bat","slide":10,"text":"EgoLife two-user QA pipeline","textPreview":"EgoLife two-user QA pipeline","textChars":28,"textLines":1,"bbox":[42,661,720,24]}
+{"kind":"textbox","id":"sh/xs72x4na","slide":10,"text":"10","textPreview":"10","textChars":2,"textLines":1,"bbox":[1180,661,58,24]}
+{"kind":"textbox","id":"sh/q1orytsv","slide":10,"text":"Each packet can retry up to max_attempts. Every stage writes prompt rows and attempt traces for later inspection.","textPreview":"Each packet can retry up to max_attempts. Every stage writes prompt rows and attempt traces for later inspection.","textChars":113,"textLines":1,"bbox":[42,150,1080,50]}
+{"kind":"shape","id":"sh/fmlkjm1c","slide":10,"bbox":[60,250,340,300]}
+{"kind":"textbox","id":"sh/8jqh0fep","slide":10,"text":"Failure sources","textPreview":"Failure sources","textChars":15,"textLines":1,"bbox":[82,280,290,34]}
+{"kind":"textbox","id":"sh/x4nap4r6","slide":10,"text":"- discovery JSON parse\n- generator JSON parse\n- schema validation\n- reviewer gate\n- answerability gate\n- strict validation","textPreview":"- discovery JSON parse | - generator JSON parse | - schema validation | - reviewer gate | - answerability gate | - strict validation","textChars":122,"textLines":6,"bbox":[82,340,290,150]}
+{"kind":"shape","id":"sh/1w7mp0bi","slide":10,"bbox":[450,250,340,300]}
+{"kind":"textbox","id":"sh/8bat47y1","slide":10,"text":"Feedback injection","textPreview":"Feedback injection","textChars":18,"textLines":1,"bbox":[472,280,290,34]}
+{"kind":"textbox","id":"sh/jqh0fepk","slide":10,"text":"- baseline: next direct generator prompt\n- discovery: next relation planner and MCQ prompt\n- prevents repeating the rejected issue","textPreview":"- baseline: next direct generator prompt | - discovery: next relation planner and MCQ prompt | - prevents repeating the rejected issue","textChars":130,"textLines":3,"bbox":[472,340,290,150]}
+{"kind":"shape","id":"sh/q5o7qpg3","slide":10,"bbox":[840,250,340,300]}
+{"kind":"textbox","id":"sh/18jqh0fe","slide":10,"text":"Output rows","textPreview":"Output rows","textChars":11,"textLines":1,"bbox":[862,280,290,34]}
+{"kind":"textbox","id":"sh/8nqxs72x","slide":10,"text":"- accepted QA JSONL\n- rejected attempts JSONL\n- prompts JSONL\n- intermediate trace JSONL","textPreview":"- accepted QA JSONL | - rejected attempts JSONL | - prompts JSONL | - intermediate trace JSONL","textChars":88,"textLines":4,"bbox":[862,340,290,150]}
+{"kind":"notes","id":"nt/f4wba5","slide":10,"text":""}
+{"kind":"slide","id":"sl/p1uzds","slide":11,"title":"COMPARISON","textShapes":25}
+{"kind":"textbox","id":"sh/twra5gbq","slide":11,"text":"COMPARISON","textPreview":"COMPARISON","textChars":10,"textLines":1,"bbox":[42,36,400,30]}
+{"kind":"textbox","id":"sh/m58z25kb","slide":11,"text":"Baseline vs discovery: same gates, different generation strategy","textPreview":"Baseline vs discovery: same gates, different generation strategy","textChars":64,"textLines":1,"bbox":[42,74,1060,66]}
+{"kind":"shape","id":"sh/bq1oryts","slide":11,"bbox":[42,650,1196,0]}
+{"kind":"textbox","id":"sh/4nap4r65","slide":11,"text":"EgoLife two-user QA pipeline","textPreview":"EgoLife two-user QA pipeline","textChars":28,"textLines":1,"bbox":[42,661,720,24]}
+{"kind":"textbox","id":"sh/t83itgfm","slide":11,"text":"11","textPreview":"11","textChars":2,"textLines":1,"bbox":[1180,661,58,24]}
+{"kind":"shape","id":"sh/mhk3q5o7","slide":11,"bbox":[42,192,1150,58]}
+{"kind":"textbox","id":"sh/b2hwfyxo","slide":11,"text":"Dimension","textPreview":"Dimension","textChars":9,"textLines":1,"bbox":[58,208,226,40]}
+{"kind":"shape","id":"sh/4vmtwra5","slide":11,"bbox":[292,192,0,58]}
+{"kind":"textbox","id":"sh/tgfmlkjm","slide":11,"text":"Baseline","textPreview":"Baseline","textChars":8,"textLines":1,"bbox":[308,208,366,40]}
+{"kind":"shape","id":"sh/xc3ylc7u","slide":11,"bbox":[682,192,0,58]}
+{"kind":"textbox","id":"sh/4r65wjud","slide":11,"text":"Discovery","textPreview":"Discovery","textChars":9,"textLines":1,"bbox":[698,208,486,40]}
+{"kind":"shape","id":"sh/f6dcbulw","slide":11,"bbox":[42,250,1150,58]}
+{"kind":"textbox","id":"sh/mlkjm1cf","slide":11,"text":"Generator calls","textPreview":"Generator calls","textChars":15,"textLines":1,"bbox":[58,266,226,40]}
+{"kind":"shape","id":"sh/xkf6dcbu","slide":11,"bbox":[292,250,0,58]}
+{"kind":"textbox","id":"sh/4zidonyd","slide":11,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[308,266,366,40]}
+{"kind":"shape","id":"sh/fepkzupw","slide":11,"bbox":[682,250,0,58]}
+{"kind":"textbox","id":"sh/mtwra5gb","slide":11,"text":"2: planner, then MCQ writer","textPreview":"2: planner, then MCQ writer","textChars":27,"textLines":1,"bbox":[698,266,486,40]}
+{"kind":"shape","id":"sh/xobm58z2","slide":11,"bbox":[42,308,1150,58]}
+{"kind":"textbox","id":"sh/83itgfml","slide":11,"text":"Relation search","textPreview":"Relation search","textChars":15,"textLines":1,"bbox":[58,324,226,40]}
+{"kind":"shape","id":"sh/4byhgn29","slide":11,"bbox":[292,308,0,58]}
+{"kind":"textbox","id":"sh/twra5gbq","slide":11,"text":"Implicit inside generator","textPreview":"Implicit inside generator","textChars":25,"textLines":1,"bbox":[308,324,366,40]}
+{"kind":"shape","id":"sh/m58z25kb","slide":11,"bbox":[682,308,0,58]}
+{"kind":"textbox","id":"sh/bq1oryts","slide":11,"text":"Explicit selected_relation JSON","textPreview":"Explicit selected_relation JSON","textChars":31,"textLines":1,"bbox":[698,324,486,40]}
+{"kind":"shape","id":"sh/4nap4r65","slide":11,"bbox":[42,366,1150,58]}
+{"kind":"textbox","id":"sh/t83itgfm","slide":11,"text":"Trace visibility","textPreview":"Trace visibility","textChars":16,"textLines":1,"bbox":[58,382,226,40]}
+{"kind":"shape","id":"sh/mhk3q5o7","slide":11,"bbox":[292,366,0,58]}
+{"kind":"textbox","id":"sh/b2hwfyxo","slide":11,"text":"Prompt and generated QA","textPreview":"Prompt and generated QA","textChars":23,"textLines":1,"bbox":[308,382,366,40]}
+{"kind":"shape","id":"sh/4vmtwra5","slide":11,"bbox":[682,366,0,58]}
+{"kind":"textbox","id":"sh/tgfmlkjm","slide":11,"text":"Planning output plus generated QA","textPreview":"Planning output plus generated QA","textChars":33,"textLines":1,"bbox":[698,382,486,40]}
+{"kind":"shape","id":"sh/ji5snelo","slide":11,"bbox":[42,424,1150,58]}
+{"kind":"textbox","id":"sh/uxc3ylc7","slide":11,"text":"Retry behavior","textPreview":"Retry behavior","textChars":14,"textLines":1,"bbox":[58,440,226,40]}
+{"kind":"shape","id":"sh/1kre1w7m","slide":11,"bbox":[292,424,0,58]}
+{"kind":"textbox","id":"sh/c3ylc7u5","slide":11,"text":"Rephrase or repair direct QA","textPreview":"Rephrase or repair direct QA","textChars":28,"textLines":1,"bbox":[308,440,366,40]}
+{"kind":"shape","id":"sh/j6tovaho","slide":11,"bbox":[682,424,0,58]}
+{"kind":"textbox","id":"sh/ulwval87","slide":11,"text":"Can choose a new relation first","textPreview":"Can choose a new relation first","textChars":31,"textLines":1,"bbox":[698,440,486,40]}
+{"kind":"shape","id":"sh/1cfa9w3m","slide":11,"bbox":[42,482,1150,58]}
+{"kind":"textbox","id":"sh/crmhk3q5","slide":11,"text":"Cost and latency","textPreview":"Cost and latency","textChars":16,"textLines":1,"bbox":[58,498,226,40]}
+{"kind":"shape","id":"sh/j2t83itg","slide":11,"bbox":[292,482,0,58]}
+{"kind":"textbox","id":"sh/qh0fepkz","slide":11,"text":"Lower","textPreview":"Lower","textChars":5,"textLines":1,"bbox":[308,498,366,40]}
+{"kind":"shape","id":"sh/adsji5sn","slide":11,"bbox":[682,482,0,58]}
+{"kind":"textbox","id":"sh/3ylc7u54","slide":11,"text":"Higher","textPreview":"Higher","textChars":6,"textLines":1,"bbox":[698,498,486,40]}
+{"kind":"shape","id":"sh/sji5snel","slide":11,"bbox":[42,540,1150,58]}
+{"kind":"textbox","id":"sh/h4byhgn2","slide":11,"text":"Best use","textPreview":"Best use","textChars":8,"textLines":1,"bbox":[58,556,226,40]}
+{"kind":"shape","id":"sh/a5gbq1or","slide":11,"bbox":[292,540,0,58]}
+{"kind":"textbox","id":"sh/3m94fu18","slide":11,"text":"Fast baseline measurement","textPreview":"Fast baseline measurement","textChars":25,"textLines":1,"bbox":[308,556,366,40]}
+{"kind":"shape","id":"sh/s72x4nap","slide":11,"bbox":[682,540,0,58]}
+{"kind":"textbox","id":"sh/lszqtcj6","slide":11,"text":"Debugging, prompt iteration, stronger relation search","textPreview":"Debugging, prompt iteration, stronger relation search","textChars":53,"textLines":1,"bbox":[698,556,486,40]}
+{"kind":"notes","id":"nt/p1uzds","slide":11,"text":""}
+{"kind":"slide","id":"sl/zx34ri","slide":12,"title":"FINAL CONTRACT","textShapes":18}
+{"kind":"textbox","id":"sh/at47y1kr","slide":12,"text":"FINAL CONTRACT","textPreview":"FINAL CONTRACT","textChars":14,"textLines":1,"bbox":[42,36,400,30]}
+{"kind":"textbox","id":"sh/lkjm1cfa","slide":12,"text":"An accepted QA means four contracts passed","textPreview":"An accepted QA means four contracts passed","textChars":42,"textLines":1,"bbox":[42,74,1060,66]}
+{"kind":"shape","id":"sh/szqtcj6t","slide":12,"bbox":[42,650,1196,0]}
+{"kind":"textbox","id":"sh/32lszqtc","slide":12,"text":"EgoLife two-user QA pipeline","textPreview":"EgoLife two-user QA pipeline","textChars":28,"textLines":1,"bbox":[42,661,720,24]}
+{"kind":"textbox","id":"sh/ahoza1gv","slide":12,"text":"12","textPreview":"12","textChars":2,"textLines":1,"bbox":[1180,661,58,24]}
+{"kind":"shape","id":"sh/l87ed8ba","slide":12,"bbox":[70,230,500,120]}
+{"kind":"shape","id":"sh/sneloj2t","slide":12,"bbox":[90,252,42,42]}
+{"kind":"textbox","id":"sh/3q5o7qpg","slide":12,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[90,259,42,28]}
+{"kind":"textbox","id":"sh/e9cvixcz","slide":12,"text":"Structure","textPreview":"Structure","textChars":9,"textLines":1,"bbox":[152,250,360,30]}
+{"kind":"textbox","id":"sh/87ed8bat","slide":12,"text":"valid schema, five options, answer matches correct","textPreview":"valid schema, five options, answer matches correct","textChars":50,"textLines":1,"bbox":[152,288,370,40]}
+{"kind":"shape","id":"sh/xs72x4na","slide":12,"bbox":[630,230,500,120]}
+{"kind":"shape","id":"sh/q1orytsv","slide":12,"bbox":[650,252,42,42]}
+{"kind":"textbox","id":"sh/fmlkjm1c","slide":12,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[650,259,42,28]}
+{"kind":"textbox","id":"sh/8z25kb6x","slide":12,"text":"Semantics","textPreview":"Semantics","textChars":9,"textLines":1,"bbox":[712,250,360,30]}
+{"kind":"textbox","id":"sh/1gvy90je","slide":12,"text":"reviewer checks all PASS, especially multi_video_necessity","textPreview":"reviewer checks all PASS, especially multi_video_necessity","textChars":58,"textLines":1,"bbox":[712,288,370,40]}
+{"kind":"shape","id":"sh/qtcj6tov","slide":12,"bbox":[70,400,500,120]}
+{"kind":"shape","id":"sh/je9cvixc","slide":12,"bbox":[90,422,42,42]}
+{"kind":"textbox","id":"sh/8v6psfil","slide":12,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[90,429,42,28]}
+{"kind":"textbox","id":"sh/xczed8v6","slide":12,"text":"Behavior","textPreview":"Behavior","textChars":8,"textLines":1,"bbox":[152,420,360,30]}
+{"kind":"textbox","id":"sh/hoza1gvy","slide":12,"text":"combined users answer correctly; singles/subsets cannot","textPreview":"combined users answer correctly; singles/subsets cannot","textChars":55,"textLines":1,"bbox":[152,458,370,40]}
+{"kind":"shape","id":"sh/s36hcrmh","slide":12,"bbox":[630,400,500,120]}
+{"kind":"shape","id":"sh/zidonyd0","slide":12,"bbox":[650,422,42,42]}
+{"kind":"textbox","id":"sh/a1gvy90j","slide":12,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[650,429,42,28]}
+{"kind":"textbox","id":"sh/hgn29gr2","slide":12,"text":"Audit trail","textPreview":"Audit trail","textChars":11,"textLines":1,"bbox":[712,420,360,30]}
+{"kind":"textbox","id":"sh/svu9knih","slide":12,"text":"generation_trace, human_audit, review object, source/video evidence present","textPreview":"generation_trace, human_audit, review object, source/video evidence present","textChars":75,"textLines":1,"bbox":[712,458,370,40]}
+{"kind":"textbox","id":"sh/za1gvy90","slide":12,"text":"Source anchors","textPreview":"Source anchors","textChars":14,"textLines":1,"bbox":[70,580,180,28]}
+{"kind":"textbox","id":"sh/ap4r65wj","slide":12,"text":"prompts.py - prompt builders and schemas; video_qa_loop.py - loop, gates, retries; schema.py - validation; cli.py - command wiring","textPreview":"prompts.py - prompt builders and schemas; video_qa_loop.py - loop, gates, retries; schema.py - validation; cli.py - command wiring","textChars":130,"textLines":1,"bbox":[250,580,900,28]}
+{"kind":"notes","id":"nt/zx34ri","slide":12,"text":""}

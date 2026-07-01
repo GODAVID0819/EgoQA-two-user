@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import random
 import shutil
 import unittest
 import json
@@ -9,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from egolife_two_user_qa.candidate_mining import mine_candidates
+from egolife_two_user_qa.cli import preflight_cached_evidence
 from egolife_two_user_qa.clip_gap_demo import (
     TransformersClipEncoder,
     cluster_embedding_medoids,
@@ -21,9 +23,15 @@ from egolife_two_user_qa.clip_exclusive_mining import (
     mine_clip_exclusive_candidates,
     summarize_exclusiveness,
 )
+from egolife_two_user_qa.group_relative_clip_sampling import (
+    mine_group_relative_clip_candidates,
+    relative_frame_pruning,
+    temporal_similarity_pruning,
+)
 from egolife_two_user_qa.evidence import (
     choose_required_clips,
     group_manifest_clips,
+    local_cache_path,
     select_evidence_groups,
     summarize_gaze_csv,
 )
@@ -40,6 +48,7 @@ from egolife_two_user_qa.video_qa_loop import (
     dry_run_qa,
     generate_video_qa_loop,
     judge_gate,
+    media_for_clips,
     qa_for_judger_prompt,
 )
 
@@ -108,6 +117,17 @@ class EvidenceTests(unittest.TestCase):
         selected = choose_required_clips(group, 2, rng=__import__("random").Random(7))
         self.assertEqual(len(selected), 2)
         self.assertNotEqual([clip["agent_dir"] for clip in selected], ["A1_JAKE", "A2_ALICE"])
+
+    def test_local_cache_path_uses_user_day_folder_layout(self) -> None:
+        path = local_cache_path(
+            "/cache",
+            "A1_JAKE/DAY1/DAY1_A1_JAKE_11100000.mp4",
+        )
+
+        self.assertEqual(
+            path,
+            Path("/cache") / "A1_JAKE" / "DAY_1" / "DAY1_A1_JAKE_11100000.mp4",
+        )
 
     def test_summarize_gaze_csv(self) -> None:
         with workspace_temp_dir() as tmp:
@@ -532,6 +552,183 @@ class ClipGapDemoTests(unittest.TestCase):
         self.assertEqual([row["clip_exclusiveness"]["rank"] for row in preserved_rows], [2, 1])
 
 
+class GroupRelativeClipSamplingTests(unittest.TestCase):
+    def test_mine_group_relative_randomizes_groups_before_max_groups(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            manifest_path = root / "manifest.json"
+            clips = []
+            time_tokens = [f"110{i}0000" for i in range(5)]
+            for time_token in time_tokens:
+                for agent_index in range(2):
+                    clips.append(
+                        {
+                            "day": "DAY1",
+                            "time_token": time_token,
+                            "clip_clock": time_token,
+                            "agent_dir": f"A{agent_index}_{time_token}",
+                            "agent_name": f"User {agent_index}",
+                            "agent_id": f"user_{agent_index}",
+                            "video_path": f"A{agent_index}/DAY1/{time_token}.mp4",
+                        }
+                    )
+            manifest_path.write_text(json.dumps({"clips": clips}), encoding="utf-8")
+            seen_tokens = []
+
+            def fake_analyze(group, **kwargs):
+                seen_tokens.append(group["time_token"])
+                return {
+                    "day": group["day"],
+                    "time_token": group["time_token"],
+                    "clip_clock": group.get("clip_clock"),
+                    "model_id": "fake-clip",
+                    "window": {},
+                    "group_size": len(group["clips"]),
+                    "selection": {},
+                    "clip_scores": [],
+                    "ranked_by_group_similarity": [],
+                    "similarity_matrix": [],
+                    "pair_filter": {},
+                    "pair_scores": [],
+                    "surviving_pairs": [],
+                    "sampled_pairs": [],
+                    "group_clips": group["clips"],
+                    "selected_clips": [],
+                }
+
+            with (
+                patch("egolife_two_user_qa.group_relative_clip_sampling.analyze_group_relative_similarity", side_effect=fake_analyze),
+                patch("egolife_two_user_qa.group_relative_clip_sampling.write_review_bundle", return_value=root / "review"),
+            ):
+                rows = mine_group_relative_clip_candidates(
+                    manifest_path=manifest_path,
+                    output_path=root / "candidates.jsonl",
+                    output_dir=root / "out",
+                    cache_dir=root / "cache",
+                    target_count=1,
+                    max_groups=2,
+                    min_group_size=2,
+                    random_seed=42,
+                    encoder=type("FakeEncoder", (), {"model_id": "fake-clip"})(),
+                )
+
+            expected_tokens = list(time_tokens)
+            random.Random(42).shuffle(expected_tokens)
+
+        self.assertEqual(rows, [])
+        self.assertEqual(seen_tokens, expected_tokens[:2])
+        self.assertNotEqual(seen_tokens, time_tokens[:2])
+
+    def test_temporal_similarity_pruning_removes_high_similarity_intervals(self) -> None:
+        left_frames = [
+            {"path": "left_0.jpg", "timestamp_seconds": 0.0},
+            {"path": "left_1.jpg", "timestamp_seconds": 1.5},
+            {"path": "left_2.jpg", "timestamp_seconds": 3.0},
+            {"path": "left_3.jpg", "timestamp_seconds": 4.5},
+        ]
+        right_frames = [
+            {"path": "right_0.jpg", "timestamp_seconds": 0.0},
+            {"path": "right_1.jpg", "timestamp_seconds": 1.5},
+            {"path": "right_2.jpg", "timestamp_seconds": 3.0},
+            {"path": "right_3.jpg", "timestamp_seconds": 4.5},
+        ]
+
+        pruning = temporal_similarity_pruning(
+            [
+                [0.20, 0.10, 0.10, 0.10],
+                [0.10, 0.91, 0.30, 0.10],
+                [0.10, 0.30, 0.93, 0.10],
+                [0.10, 0.10, 0.10, 0.40],
+            ],
+            left_frames,
+            right_frames,
+            start_seconds=0.0,
+            duration_seconds=6.0,
+            sample_interval_seconds=1.5,
+            high_similarity_threshold=0.82,
+            preserve_shared_anchor_seconds=0.0,
+            min_pruned_video_seconds=1.0,
+        )
+
+        self.assertTrue(pruning["passed"])
+        self.assertEqual(pruning["remove_intervals"], [[0.75, 3.75]])
+        self.assertEqual(pruning["keep_intervals"], [[0.0, 0.75], [3.75, 6.0]])
+        self.assertEqual(pruning["high_similarity_checkpoint_count"], 2)
+
+    def test_temporal_similarity_pruning_can_preserve_strong_shared_anchor(self) -> None:
+        frames = [
+            {"path": "frame_0.jpg", "timestamp_seconds": 0.0},
+            {"path": "frame_1.jpg", "timestamp_seconds": 1.5},
+            {"path": "frame_2.jpg", "timestamp_seconds": 3.0},
+        ]
+
+        pruning = temporal_similarity_pruning(
+            [
+                [0.95, 0.10, 0.10],
+                [0.10, 0.92, 0.10],
+                [0.10, 0.10, 0.30],
+            ],
+            frames,
+            frames,
+            start_seconds=0.0,
+            duration_seconds=4.5,
+            sample_interval_seconds=1.5,
+            high_similarity_threshold=0.82,
+            preserve_shared_anchor_seconds=1.5,
+            min_pruned_video_seconds=1.0,
+        )
+
+        self.assertTrue(pruning["passed"])
+        self.assertEqual(pruning["preserved_shared_intervals"], [[0.0, 0.75]])
+        self.assertEqual(pruning["remove_intervals"], [[0.75, 2.25]])
+
+    def test_relative_frame_pruning_keeps_mid_band_and_drops_near_duplicates(self) -> None:
+        left_frames = [
+            {"path": "left_close.jpg", "timestamp_seconds": 0.0},
+            {"path": "left_mid.jpg", "timestamp_seconds": 1.5},
+            {"path": "left_far.jpg", "timestamp_seconds": 3.0},
+        ]
+        right_frames = [
+            {"path": "right_close.jpg", "timestamp_seconds": 0.2},
+            {"path": "right_mid.jpg", "timestamp_seconds": 1.7},
+            {"path": "right_far.jpg", "timestamp_seconds": 3.2},
+        ]
+        pruning = relative_frame_pruning(
+            [
+                [0.97, 0.20, 0.10],
+                [0.30, 0.72, 0.40],
+                [0.20, 0.30, 0.42],
+            ],
+            left_frames,
+            right_frames,
+            min_frame_sim=0.55,
+            max_frame_sim=0.82,
+            min_frames_per_clip=1,
+        )
+
+        self.assertTrue(pruning["passed"])
+        self.assertEqual(pruning["left_kept_indices"], [1])
+        self.assertEqual(pruning["right_kept_indices"], [1])
+        self.assertEqual(pruning["dropped_too_close_frame_count"], 2)
+        self.assertEqual(pruning["left_frame_decisions"][0]["status"], "dropped_too_close")
+        self.assertEqual(pruning["left_frame_decisions"][2]["status"], "dropped_too_dissimilar")
+
+    def test_relative_frame_pruning_rejects_pairs_with_only_near_duplicate_frames(self) -> None:
+        frames = [{"path": "frame.jpg", "timestamp_seconds": 0.0}]
+        pruning = relative_frame_pruning(
+            [[0.96]],
+            frames,
+            frames,
+            min_frame_sim=0.55,
+            max_frame_sim=0.82,
+            min_frames_per_clip=1,
+        )
+
+        self.assertFalse(pruning["passed"])
+        self.assertEqual(pruning["left_kept_count"], 0)
+        self.assertEqual(pruning["right_kept_count"], 0)
+
+
 class SchemaTests(unittest.TestCase):
     def passed_judge_checks(self):
         return {
@@ -704,6 +901,56 @@ class VideoFirstTests(unittest.TestCase):
         self.assertEqual(parsed["image_count"], 1)
         self.assertEqual(parsed["video_count"], 2)
 
+    def test_frames_only_clips_send_images_instead_of_existing_videos(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            image_path = root / "kept_frame.jpg"
+            video_path = root / "source.mp4"
+            image_path.write_bytes(b"fake image")
+            video_path.write_bytes(b"fake video")
+            clips = [
+                {
+                    "agent_name": "Jake",
+                    "local_video": str(video_path),
+                    "generator_media_mode": "frames_only",
+                    "frames": [{"path": str(image_path), "timestamp_seconds": 1.5}],
+                }
+            ]
+
+            image_paths, video_paths = media_for_clips(
+                clips,
+                backend="transformers-local",
+                allow_openai_video_input=True,
+            )
+
+        self.assertEqual(image_paths, [str(image_path)])
+        self.assertEqual(video_paths, [])
+
+    def test_pruned_video_clips_send_pruned_video_path(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            image_path = root / "sampled_frame.jpg"
+            video_path = root / "source_pruned.mp4"
+            image_path.write_bytes(b"fake image")
+            video_path.write_bytes(b"fake video")
+            clips = [
+                {
+                    "agent_name": "Jake",
+                    "local_video": str(video_path),
+                    "generator_media_mode": "pruned_video",
+                    "frames": [{"path": str(image_path), "timestamp_seconds": 1.5}],
+                }
+            ]
+
+            image_paths, video_paths = media_for_clips(
+                clips,
+                backend="transformers-local",
+                allow_openai_video_input=True,
+            )
+
+        self.assertEqual(image_paths, [])
+        self.assertEqual(video_paths, [str(video_path)])
+
     def test_normalize_video_kwargs_collapses_fps_list(self) -> None:
         self.assertEqual(normalize_video_kwargs({"fps": [1.0, 1.0]})["fps"], 1.0)
         self.assertEqual(normalize_video_kwargs({"fps": []})["fps"], 1.0)
@@ -751,6 +998,24 @@ class VideoFirstTests(unittest.TestCase):
         self.assertIn("single_user_answerability", prompt)
         self.assertIn("combined_answerability", prompt)
         self.assertIn("why_two_users_needed", prompt)
+
+    def test_video_generation_prompt_discourages_fixed_question_templates(self) -> None:
+        packet = {
+            "evidence_id": "E1",
+            "required_users": ["Jake", "Alice"],
+            "clips": [
+                {"agent_name": "Jake", "day": "DAY1", "clip_clock": "11:10:00.00", "local_video": "jake.mp4"},
+                {"agent_name": "Alice", "day": "DAY1", "clip_clock": "11:10:00.00", "local_video": "alice.mp4"},
+            ],
+        }
+
+        prompt = build_video_generation_prompt(packet, "commonality")
+
+        self.assertNotIn("Good example", prompt)
+        self.assertNotIn("must start from one user's speaker-side anchor event", prompt)
+        self.assertNotIn("checked the setup", prompt)
+        self.assertIn("Do not use a fixed question template", prompt)
+        self.assertIn("avoid opening with a temporal setup clause", prompt)
 
     def test_clip_guided_prompt_includes_retrieval_hints(self) -> None:
         packet = {
@@ -840,6 +1105,154 @@ class VideoFirstTests(unittest.TestCase):
         self.assertEqual(rows[0]["generation_mode"], "discovery")
         self.assertEqual(prompt_rows[0]["stage"], "discovery")
         self.assertEqual(prompt_rows[1]["stage"], "generation")
+
+    def test_discovery_control_uses_direct_baseline_prompt_without_discovery_stage(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            evidence_path = root / "evidence.jsonl"
+            prompts_path = root / "prompts.jsonl"
+            packet = {
+                "evidence_id": "E1",
+                "required_users": ["Jake", "Alice"],
+                "source_urls": {"videos": []},
+                "clips": [
+                    {"agent_name": "Jake", "agent_dir": "A1_JAKE", "frames": []},
+                    {"agent_name": "Alice", "agent_dir": "A2_ALICE", "frames": []},
+                ],
+            }
+            evidence_path.write_text(json.dumps(packet) + "\n", encoding="utf-8")
+
+            rows = generate_video_qa_loop(
+                evidence_path=evidence_path,
+                output_path=root / "qa.jsonl",
+                prompts_path=prompts_path,
+                rejected_path=root / "rejected.jsonl",
+                intermediate_path=root / "intermediate.jsonl",
+                backend="transformers-local",
+                target_count=1,
+                dry_run=True,
+                generation_mode="discovery_control",
+            )
+
+            prompt_rows = [json.loads(line) for line in prompts_path.read_text(encoding="utf-8").splitlines()]
+
+        stages = [row["stage"] for row in prompt_rows]
+        self.assertEqual(rows[0]["generation_mode"], "discovery_control")
+        self.assertNotIn("discovery", stages)
+        self.assertEqual(prompt_rows[0]["stage"], "generation")
+        self.assertEqual(
+            prompt_rows[0]["prompt"],
+            build_video_generation_prompt(packet, "commonality", generation_mode="baseline"),
+        )
+
+    def test_cached_evidence_preflight_checks_local_video_paths(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            cache_dir = root / "cache"
+            video_path = cache_dir / "A1_JAKE" / "DAY_1" / "DAY1_A1_JAKE_11100000.mp4"
+            video_path.parent.mkdir(parents=True)
+            video_path.write_bytes(b"fake video")
+            evidence_path = root / "evidence.jsonl"
+            resolved_path = root / "resolved.jsonl"
+            evidence_path.write_text(
+                json.dumps(
+                    {
+                        "evidence_id": "E1",
+                        "clips": [
+                            {
+                                "agent_name": "Jake",
+                                "agent_dir": "A1_JAKE",
+                                "day": "DAY1",
+                                "time_token": "11100000",
+                                "video_url": "https://example.invalid/DAY1_A1_JAKE_11100000.mp4",
+                            },
+                            {
+                                "agent_name": "Alice",
+                                "agent_dir": "A2_ALICE",
+                                "day": "DAY1",
+                                "time_token": "11100000",
+                                "video_url": "https://example.invalid/DAY1_A2_ALICE_11100000.mp4",
+                            },
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            failed = preflight_cached_evidence(evidence_path, target_count=1, cache_dir=cache_dir)
+
+            evidence_path.write_text(
+                json.dumps(
+                    {
+                        "evidence_id": "E1",
+                        "clips": [
+                            {
+                                "agent_name": "Jake",
+                                "agent_dir": "A1_JAKE",
+                                "day": "DAY1",
+                                "time_token": "11100000",
+                                "video_url": "https://example.invalid/DAY1_A1_JAKE_11100000.mp4",
+                            }
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            passed = preflight_cached_evidence(
+                evidence_path,
+                target_count=1,
+                cache_dir=cache_dir,
+                resolved_output=resolved_path,
+            )
+            resolved_packet = json.loads(resolved_path.read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(failed, 1)
+        self.assertEqual(passed, 0)
+        self.assertEqual(resolved_packet["clips"][0]["local_video"], str(video_path))
+
+    def test_cached_evidence_preflight_accepts_day_without_underscore(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            cache_dir = root / "cache"
+            video_path = cache_dir / "A1_JAKE" / "DAY2" / "DAY2_A1_JAKE_11350000.mp4"
+            video_path.parent.mkdir(parents=True)
+            video_path.write_bytes(b"fake video")
+            evidence_path = root / "evidence.jsonl"
+            resolved_path = root / "resolved.jsonl"
+            evidence_path.write_text(
+                json.dumps(
+                    {
+                        "evidence_id": "E1",
+                        "clips": [
+                            {
+                                "agent_name": "Jake",
+                                "agent_dir": "A1_JAKE",
+                                "day": "DAY2",
+                                "time_token": "11350000",
+                                "local_video": str(
+                                    cache_dir / "A1_JAKE" / "DAY_2" / "DAY2_A1_JAKE_11350000.mp4"
+                                ),
+                                "video_url": "https://example.invalid/DAY2_A1_JAKE_11350000.mp4",
+                            }
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            passed = preflight_cached_evidence(
+                evidence_path,
+                target_count=1,
+                cache_dir=cache_dir,
+                resolved_output=resolved_path,
+            )
+            resolved_packet = json.loads(resolved_path.read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(passed, 0)
+        self.assertEqual(resolved_packet["clips"][0]["local_video"], str(video_path))
 
     def test_fixed_question_type_schedule_is_packet_order_based(self) -> None:
         with workspace_temp_dir() as tmp:

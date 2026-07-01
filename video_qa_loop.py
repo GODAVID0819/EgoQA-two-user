@@ -80,6 +80,13 @@ def clip_image_paths(clip: dict[str, Any]) -> list[str]:
     return paths
 
 
+def clips_require_frame_inputs(clips: list[dict[str, Any]]) -> bool:
+    return any(
+        clip.get("generator_media_mode") == "frames_only" or clip.get("force_frame_inputs")
+        for clip in clips
+    )
+
+
 def media_for_clips(
     clips: list[dict[str, Any]],
     *,
@@ -88,6 +95,8 @@ def media_for_clips(
 ) -> tuple[list[str], list[str]]:
     videos = [path for clip in clips if (path := clip_video_path(clip))]
     images = [path for clip in clips for path in clip_image_paths(clip)]
+    if clips_require_frame_inputs(clips):
+        return images, []
     if backend == "openai-compatible-local" and not allow_openai_video_input:
         return images, []
     return images if not videos else [], videos
@@ -111,6 +120,9 @@ def video_evidence_for_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
                 "video_url": clip.get("video_url"),
                 "local_video": local_video,
                 "local_video_exists": bool(existing_path(local_video)),
+                "source_local_video": clip.get("source_local_video"),
+                "generator_media_mode": clip.get("generator_media_mode"),
+                "temporal_pruning": clip.get("temporal_pruning"),
                 "gaze_url": clip.get("gaze_url"),
                 "gaze_summary": clip.get("gaze_summary"),
                 "sampled_frames": [
@@ -489,6 +501,19 @@ def dry_run_discovered_relation(packet: dict[str, Any], question_type: str) -> d
 
 def dry_run_qa(packet: dict[str, Any], question_type: str, generation_mode: str = "baseline") -> dict[str, Any]:
     users = packet.get("required_users", [])[:2]
+    clips = packet.get("clips", [])
+    if clips_require_frame_inputs(clips):
+        dry_run_media = {
+            "image_paths": [path for clip in clips for path in clip_image_paths(clip)],
+            "video_paths": [],
+        }
+    else:
+        dry_run_media = {
+            "image_paths": [],
+            "video_paths": [
+                path for clip in clips if (path := clip_video_path(clip))
+            ],
+        }
     return {
         "qa_id": f"DRYRUN_{packet.get('evidence_id')}_{question_type}",
         "question_type": question_type,
@@ -529,12 +554,7 @@ def dry_run_qa(packet: dict[str, Any], question_type: str, generation_mode: str 
                 "stage": "dry_run",
                 "question_type": question_type,
                 "note": "No model was called; prompts and media paths were generated for plumbing validation.",
-                "media": {
-                    "image_paths": [],
-                    "video_paths": [
-                        path for clip in packet.get("clips", []) if (path := clip_video_path(clip))
-                    ],
-                },
+                "media": dry_run_media,
             }
         ],
     }

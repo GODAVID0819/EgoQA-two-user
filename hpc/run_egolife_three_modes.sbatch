@@ -19,7 +19,7 @@ PROJECT_ROOT="${QWEN3VL_PROJECT_ROOT:-/scratch/${USER}/Long-video-understanding-
 OUTDIR="${EGOLIFE2U_OUTPUT_ROOT:-egolife_two_user_qa/outputs/three_mode_ablation_30}"
 CACHE_DIR="${EGOLIFE2U_CACHE_DIR:-/scratch/${USER}/egolife_two_user_qa_cache}"
 
-# Prepare and attempt the same evidence packets for all three generation modes.
+# Prepare and attempt the same evidence packets for all generation modes.
 EVAL_PACKET_COUNT="${EGOLIFE2U_EVAL_PACKET_COUNT:-${EGOLIFE2U_TARGET_COUNT:-30}}"
 EVIDENCE_TARGET_COUNT="${EGOLIFE2U_EVIDENCE_TARGET_COUNT:-${EVAL_PACKET_COUNT}}"
 MAX_ATTEMPTS="${EGOLIFE2U_MAX_ATTEMPTS:-3}"
@@ -146,23 +146,29 @@ case "${START_MODE}" in
     run_mode baseline
     run_mode clip_guided
     run_mode discovery
+    run_mode discovery_control
     ;;
   clip_guided)
     run_mode clip_guided
     run_mode discovery
+    run_mode discovery_control
     ;;
   discovery)
     run_mode discovery
+    run_mode discovery_control
+    ;;
+  discovery_control)
+    run_mode discovery_control
     ;;
   *)
-    echo "Unknown EGOLIFE2U_START_MODE=${START_MODE}; expected baseline, clip_guided, or discovery" >&2
+    echo "Unknown EGOLIFE2U_START_MODE=${START_MODE}; expected baseline, clip_guided, discovery, or discovery_control" >&2
     exit 2
     ;;
 esac
 
 SUMMARY_PATH="${OUTDIR}/three_mode_acceptance_summary.tsv"
 printf "mode\teval_packets\taccepted\trejected_or_failed\n" > "${SUMMARY_PATH}"
-for mode in baseline clip_guided discovery; do
+for mode in baseline clip_guided discovery discovery_control; do
   mode_dir="${OUTDIR}/${mode}"
   if [[ -s "${mode_dir}/qa_mcq.jsonl" ]]; then
     accepted_count="$(wc -l < "${mode_dir}/qa_mcq.jsonl")"

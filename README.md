@@ -111,6 +111,31 @@ python -m egolife_two_user_qa generate_video_qa_loop \
 
 如果不传 `--allow-openai-video-input`，OpenAI-compatible backend 会退回 sampled frame images，因为不是每个本地 server 都支持 video data URL。
 
+## Discovery Control
+
+`discovery_control` is a control mode for the discovery ablation. It records a
+separate generation mode but skips the discovery/planning call and uses the same
+direct generation prompt as `baseline`. This tests whether the discovery
+thinking phase itself changes outcomes.
+
+To reuse an existing five-row evidence manifest and run only this control, set
+`EGOLIFE2U_EVIDENCE_JSONL` to the existing JSONL and `EGOLIFE2U_CACHE_DIR` to
+the cache root. The cache is expected to be organized as
+`CACHE_DIR/<agent_dir>/<DAY_N>/<video_file>` or
+`CACHE_DIR/<agent_dir>/<DAYN>/<video_file>`, for example
+`egolife_two_user_qa_cache/A1_JAKE/DAY_1/DAY1_A1_JAKE_11100000.mp4`
+or `egolife_two_user_qa_cache/A1_JAKE/DAY1/DAY1_A1_JAKE_11100000.mp4`.
+The sbatch writes a resolved copy of the evidence JSONL with `local_video`
+filled from that cache layout.
+
+```bash
+EGOLIFE2U_EVIDENCE_JSONL=egolife_two_user_qa/outputs/<existing_run>/evidence_manifest.jsonl \
+EGOLIFE2U_CACHE_DIR=/scratch/${USER}/egolife_two_user_qa_cache \
+EGOLIFE2U_OUTPUT_ROOT=egolife_two_user_qa/outputs/discovery_control_5 \
+EGOLIFE2U_EVAL_PACKET_COUNT=5 \
+sbatch hpc/run_egolife_discovery_control_only.sbatch
+```
+
 ## 输出 Schema
 
 `qa_mcq.jsonl` 每一行是一条 QA，包含：
