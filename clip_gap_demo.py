@@ -286,11 +286,13 @@ def sample_short_video(
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    count = max(2, int(math.floor(duration_seconds / sample_interval_seconds)) + 1)
+    # Sample inside the requested window, not exactly at the right endpoint.
+    # Many EgoLife clips are exactly 30s, and ffmpeg may write no frame at t=30.0.
+    count = max(2, int(math.ceil(duration_seconds / sample_interval_seconds)))
     frames = []
     for index in range(count):
         timestamp = start_seconds + index * sample_interval_seconds
-        if timestamp > start_seconds + duration_seconds + 1e-9:
+        if timestamp >= start_seconds + duration_seconds - 1e-9:
             break
         path = output_dir / f"frame_{index:03d}_{timestamp:.2f}s.png"
         if not path.exists() or path.stat().st_size == 0:

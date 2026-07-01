@@ -17,6 +17,7 @@ from egolife_two_user_qa.clip_gap_demo import (
     mine_anchors_and_gaps,
     random_window_starts,
     run_clip_gap_demo,
+    sample_short_video,
     summarize_trial,
 )
 from egolife_two_user_qa.clip_exclusive_mining import (
@@ -384,6 +385,33 @@ class ClipGapDemoTests(unittest.TestCase):
             [row["left_frame"]["path"] for row in result["left_evidence_gaps"]],
         )
         self.assertTrue(result["left_novelty_ranked"][1]["is_anchor"])
+
+    def test_sample_short_video_does_not_sample_exact_window_endpoint(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            video_path = root / "source.mp4"
+            video_path.write_bytes(b"fake video")
+            output_dir = root / "frames"
+
+            def fake_run(args, check):
+                Path(args[-1]).write_bytes(b"fake png")
+
+            with (
+                patch("egolife_two_user_qa.clip_gap_demo.shutil.which", return_value="ffmpeg"),
+                patch("egolife_two_user_qa.clip_gap_demo.subprocess.run", side_effect=fake_run),
+            ):
+                frames = sample_short_video(
+                    video_path,
+                    output_dir,
+                    duration_seconds=30.0,
+                    sample_interval_seconds=1.0,
+                    start_seconds=0.0,
+                )
+
+        self.assertEqual(len(frames), 30)
+        self.assertEqual(frames[0]["timestamp_seconds"], 0.0)
+        self.assertEqual(frames[-1]["timestamp_seconds"], 29.0)
+        self.assertNotIn("30.00s", frames[-1]["path"])
 
     def test_run_demo_with_existing_frames_and_fake_encoder(self) -> None:
         class FakeEncoder:
