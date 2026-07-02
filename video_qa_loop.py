@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import itertools
 import time
 from pathlib import Path
@@ -12,7 +13,8 @@ from .io_utils import append_jsonl, iter_jsonl, write_jsonl
 from .prompts import (
     GENERATION_MODES,
     build_answerability_prompt,
-    build_judger_prompt,
+    build_evidence_groundedness_judge_prompt,
+    build_qa_formality_judge_prompt,
     build_relation_discovery_prompt,
     build_relation_mcq_prompt,
     build_video_generation_prompt,
@@ -46,15 +48,8 @@ class StreamingJsonlRows(list[dict[str, Any]]):
 
 QUESTION_TYPES = ("commonality", "difference")
 BLOCKING_JUDGE_CHECKS = (
-    "first_person_naturalness",
-    "agent_perspective",
-    "source_scope",
-    "question_type_semantics",
-    "multi_video_necessity",
-    "visual_grounding",
-    "mcq_option_quality",
-    "gaze_safety",
-    "human_auditability",
+    "qa_formality",
+    "evidence_groundedness",
 )
 
 
@@ -508,6 +503,169 @@ def judge_gate(judge: dict[str, Any]) -> dict[str, Any]:
     return gate
 
 
+def schema_formality_branch(schema_errors: list[str]) -> dict[str, Any]:
+    """Return the deterministic schema/formality branch for qa_formality."""
+
+    schema_errors = list(schema_errors)
+    return {
+        "status": "PASS" if not schema_errors else "FAIL",
+        "errors": schema_errors,
+        "reason": (
+            "deterministic schema/formality checks passed"
+            if not schema_errors
+            else "deterministic schema/formality checks failed: " + "; ".join(schema_errors)
+        ),
+    }
+
+
+def failed_single_judge(check_name: str, reason: str, *, raw_output: str | None = None) -> dict[str, Any]:
+    judge = {
+        "review_passed": False,
+        "checks": {
+            check_name: {
+                "status": "FAIL",
+                "reason": reason,
+                "fix": f"Repair the QA so the {check_name} judge can pass.",
+            }
+        },
+        "blocking_failures": [check_name],
+        "why_generator_asked_this": "",
+        "feedback_to_generator": reason,
+    }
+    if raw_output is not None:
+        judge["raw_output"] = raw_output
+    return judge
+
+
+def run_model_judge_branch(
+    *,
+    check_name: str,
+    prompt: str,
+    runner: Any,
+    image_paths: list[str],
+    video_paths: list[str],
+    evidence_id: Any,
+    qa_id: Any,
+    attempt: int,
+) -> dict[str, Any]:
+    stage = f"{check_name}_judge"
+    stage_start = time.time()
+    print(
+        "qa_stage_start "
+        f"stage={stage} evidence_id={evidence_id} "
+        f"qa_id={qa_id} attempt={attempt} "
+        f"images={len(image_paths)} videos={len(video_paths)}",
+        flush=True,
+    )
+    raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
+    print(
+        "qa_stage_done "
+        f"stage={stage} evidence_id={evidence_id} "
+        f"qa_id={qa_id} attempt={attempt} "
+        f"seconds={time.time() - stage_start:.1f}",
+        flush=True,
+    )
+    try:
+        judge = extract_json_object(raw)
+    except Exception as exc:
+        judge = failed_single_judge(check_name, f"{check_name} judge output was not valid JSON: {exc}")
+    judge["raw_output"] = raw
+    return judge
+
+
+def check_from_single_judge(judge: dict[str, Any], check_name: str) -> dict[str, Any]:
+    checks = judge.get("checks")
+    if isinstance(checks, dict) and isinstance(checks.get(check_name), dict):
+        return dict(checks[check_name])
+    return {
+        "status": "FAIL",
+        "reason": f"{check_name} judge did not return checks.{check_name}",
+        "fix": f"Return a valid {check_name} check object.",
+    }
+
+
+def merge_parallel_judges(
+    *,
+    qa_formality_judge: dict[str, Any],
+    evidence_groundedness_judge: dict[str, Any],
+    schema_errors: list[str],
+) -> dict[str, Any]:
+    schema_branch = schema_formality_branch(schema_errors)
+    qa_formality_check = check_from_single_judge(qa_formality_judge, "qa_formality")
+    model_qa_formality_check = dict(qa_formality_check)
+    if schema_branch["status"] != "PASS":
+        qa_formality_check["status"] = "FAIL"
+        qa_formality_check["reason"] = (
+            schema_branch["reason"]
+            + "; model qa_formality branch: "
+            + str(model_qa_formality_check.get("reason", ""))
+        )
+        qa_formality_check["fix"] = (
+            "Repair the generated JSON shape, MCQ options, correct letter, answer text, required users, and required QA metadata."
+        )
+    qa_formality_check["schema_branch"] = schema_branch
+    qa_formality_check["model_branch"] = model_qa_formality_check
+
+    evidence_check = check_from_single_judge(evidence_groundedness_judge, "evidence_groundedness")
+
+    combined = {
+        "review_passed": True,
+        "checks": {
+            "qa_formality": qa_formality_check,
+            "evidence_groundedness": evidence_check,
+        },
+        "blocking_failures": [],
+        "why_generator_asked_this": (
+            qa_formality_judge.get("why_generator_asked_this")
+            or evidence_groundedness_judge.get("why_generator_asked_this")
+            or ""
+        ),
+        "feedback_to_generator": "",
+        "branches": {
+            "qa_formality": qa_formality_judge,
+            "evidence_groundedness": evidence_groundedness_judge,
+        },
+    }
+
+    feedback = []
+    for check_name, check in combined["checks"].items():
+        if str(check.get("status", "")).upper() != "PASS":
+            combined["blocking_failures"].append(check_name)
+            reason = str(check.get("reason") or "")
+            fix = str(check.get("fix") or "")
+            feedback.append(f"{check_name}: {reason} {fix}".strip())
+    combined["review_passed"] = not combined["blocking_failures"]
+    combined["feedback_to_generator"] = " | ".join(feedback)
+    combined["gate"] = judge_gate(combined)
+    return combined
+
+
+def qa_formality_judge_from_schema_errors(schema_errors: list[str]) -> dict[str, Any]:
+    """Compatibility helper for tests and old callers."""
+
+    failed_model_branch = failed_single_judge(
+        "qa_formality",
+        "qa_formality model branch was not run",
+    )
+    passed_evidence_branch = {
+        "review_passed": True,
+        "checks": {
+            "evidence_groundedness": {
+                "status": "PASS",
+                "reason": "compatibility helper did not evaluate evidence groundedness",
+                "fix": "",
+            }
+        },
+        "blocking_failures": [],
+        "feedback_to_generator": "",
+    }
+    return merge_parallel_judges(
+        qa_formality_judge=failed_model_branch,
+        evidence_groundedness_judge=passed_evidence_branch,
+        schema_errors=schema_errors,
+    )
+
+
 def build_review_from_gates(
     *,
     judge: dict[str, Any] | None,
@@ -686,7 +844,6 @@ def run_answerability_eval(
             answer = {
                 "choice": "insufficient",
                 "answer_text": "",
-                "confidence": 0.0,
                 "evidence_used": "",
                 "insufficient_reason": f"parse_failed: {exc}",
             }
@@ -706,6 +863,140 @@ def run_answerability_eval(
         )
     gate = answerability_gate(qa_item, evaluations)
     return {"evaluations": evaluations, "gate": gate}
+
+
+def run_parallel_review_judges(
+    *,
+    qa_item: dict[str, Any],
+    packet: dict[str, Any],
+    schema_errors: list[str],
+    runner: Any,
+    backend: str,
+    allow_openai_video_input: bool,
+    prompt_rows: list[dict[str, Any]],
+    full_image_paths: list[str],
+    full_video_paths: list[str],
+    attempt: int,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Run qa_formality, evidence_groundedness, and answerability in parallel."""
+
+    qa_for_prompt = qa_for_judger_prompt(qa_item)
+    qa_formality_prompt = build_qa_formality_judge_prompt(
+        qa_for_prompt,
+        packet,
+        schema_errors=schema_errors,
+    )
+    evidence_groundedness_prompt = build_evidence_groundedness_judge_prompt(qa_for_prompt, packet)
+    prompt_rows.append(
+        {
+            "stage": "qa_formality_judge",
+            "evidence_id": packet.get("evidence_id"),
+            "qa_id": qa_item.get("qa_id"),
+            "question_type": qa_item.get("question_type"),
+            "generation_mode": qa_item.get("generation_mode"),
+            "attempt": attempt,
+            "prompt": qa_formality_prompt,
+            "image_paths": full_image_paths,
+            "video_paths": full_video_paths,
+            "media_role": "full",
+            "schema_branch": schema_formality_branch(schema_errors),
+        }
+    )
+    prompt_rows.append(
+        {
+            "stage": "evidence_groundedness_judge",
+            "evidence_id": packet.get("evidence_id"),
+            "qa_id": qa_item.get("qa_id"),
+            "question_type": qa_item.get("question_type"),
+            "generation_mode": qa_item.get("generation_mode"),
+            "attempt": attempt,
+            "prompt": evidence_groundedness_prompt,
+            "image_paths": full_image_paths,
+            "video_paths": full_video_paths,
+            "media_role": "full",
+        }
+    )
+
+    answerability_prompt_rows: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        qa_formality_future = executor.submit(
+            run_model_judge_branch,
+            check_name="qa_formality",
+            prompt=qa_formality_prompt,
+            runner=runner,
+            image_paths=full_image_paths,
+            video_paths=full_video_paths,
+            evidence_id=packet.get("evidence_id"),
+            qa_id=qa_item.get("qa_id"),
+            attempt=attempt,
+        )
+        evidence_groundedness_future = executor.submit(
+            run_model_judge_branch,
+            check_name="evidence_groundedness",
+            prompt=evidence_groundedness_prompt,
+            runner=runner,
+            image_paths=full_image_paths,
+            video_paths=full_video_paths,
+            evidence_id=packet.get("evidence_id"),
+            qa_id=qa_item.get("qa_id"),
+            attempt=attempt,
+        )
+        answerability_future = executor.submit(
+            run_answerability_eval,
+            qa_item=qa_item,
+            packet=packet,
+            runner=runner,
+            backend=backend,
+            allow_openai_video_input=allow_openai_video_input,
+            prompt_rows=answerability_prompt_rows,
+        )
+
+        try:
+            qa_formality_judge = qa_formality_future.result()
+        except Exception as exc:
+            qa_formality_judge = failed_single_judge("qa_formality", f"qa_formality judge crashed: {exc}")
+        try:
+            evidence_groundedness_judge = evidence_groundedness_future.result()
+        except Exception as exc:
+            evidence_groundedness_judge = failed_single_judge(
+                "evidence_groundedness",
+                f"evidence_groundedness judge crashed: {exc}",
+            )
+        try:
+            answerability = answerability_future.result()
+        except Exception as exc:
+            answerability = {
+                "evaluations": [],
+                "gate": {
+                    "passed": False,
+                    "reason": f"answerability judge crashed: {exc}",
+                },
+            }
+
+    for row in answerability_prompt_rows:
+        prompt_rows.append(row)
+
+    judge = merge_parallel_judges(
+        qa_formality_judge=qa_formality_judge,
+        evidence_groundedness_judge=evidence_groundedness_judge,
+        schema_errors=schema_errors,
+    )
+    trace = {
+        "parallel": True,
+        "schema_branch": schema_formality_branch(schema_errors),
+        "qa_formality": {
+            "prompt": qa_formality_prompt,
+            "raw_output": qa_formality_judge.get("raw_output"),
+            "parsed": qa_formality_judge,
+        },
+        "evidence_groundedness": {
+            "prompt": evidence_groundedness_prompt,
+            "raw_output": evidence_groundedness_judge.get("raw_output"),
+            "parsed": evidence_groundedness_judge,
+        },
+        "merged": judge,
+    }
+    return judge, answerability, trace
 
 
 def generate_video_qa_loop(
@@ -807,7 +1098,16 @@ def generate_video_qa_loop(
                     question_type,
                     generation_mode=generation_mode,
                 )
-            judge_prompt = build_judger_prompt(qa_for_judger_prompt(qa), packet)
+            schema_errors = validate_qa_item(qa)
+            qa_formality_prompt = build_qa_formality_judge_prompt(
+                qa_for_judger_prompt(qa),
+                packet,
+                schema_errors=schema_errors,
+            )
+            evidence_groundedness_prompt = build_evidence_groundedness_judge_prompt(
+                qa_for_judger_prompt(qa),
+                packet,
+            )
             dry_trace = {
                 "evidence_id": packet.get("evidence_id"),
                 "qa_id": qa.get("qa_id"),
@@ -833,7 +1133,12 @@ def generate_video_qa_loop(
                     else {}
                 ),
                 "generation": {"prompt": gen_prompt, "raw_output": None},
-                "judge": {"prompt": judge_prompt, "raw_output": None},
+                "judge": {
+                    "parallel": True,
+                    "schema_branch": schema_formality_branch(schema_errors),
+                    "qa_formality": {"prompt": qa_formality_prompt, "raw_output": None},
+                    "evidence_groundedness": {"prompt": evidence_groundedness_prompt, "raw_output": None},
+                },
                 "answerability": {"conditions": []},
                 "result": {"accepted": False, "dry_run": True},
             }
@@ -864,17 +1169,33 @@ def generate_video_qa_loop(
             )
             prompts.append(
                 {
-                    "stage": "judge",
+                    "stage": "qa_formality_judge",
                     "evidence_id": packet.get("evidence_id"),
+                    "qa_id": qa.get("qa_id"),
                     "question_type": question_type,
                     "generation_mode": generation_mode,
                     "attempt": 1,
-                        "prompt": judge_prompt,
-                        "image_paths": full_image_paths,
-                        "video_paths": full_video_paths,
-                        "media_role": "full",
-                    }
-                )
+                    "prompt": qa_formality_prompt,
+                    "image_paths": full_image_paths,
+                    "video_paths": full_video_paths,
+                    "media_role": "full",
+                    "schema_branch": schema_formality_branch(schema_errors),
+                }
+            )
+            prompts.append(
+                {
+                    "stage": "evidence_groundedness_judge",
+                    "evidence_id": packet.get("evidence_id"),
+                    "qa_id": qa.get("qa_id"),
+                    "question_type": question_type,
+                    "generation_mode": generation_mode,
+                    "attempt": 1,
+                    "prompt": evidence_groundedness_prompt,
+                    "image_paths": full_image_paths,
+                    "video_paths": full_video_paths,
+                    "media_role": "full",
+                }
+            )
             for condition in build_answerability_conditions(packet.get("required_users", [])):
                 condition_clips = clips_for_users(packet, condition["users"])
                 cond_images, cond_videos = media_for_clips(
@@ -1080,73 +1401,39 @@ def generate_video_qa_loop(
 
             schema_errors = validate_qa_item(qa)
             if schema_errors:
-                feedback = "Schema errors to fix: " + "; ".join(schema_errors)
-                qa["review"] = build_review_from_gates(
-                    judge=None,
-                    answerability=None,
-                    schema_errors=schema_errors,
-                    accepted=False,
-                    rejection_stage="schema",
-                    final_reason=feedback,
-                )
-                last_review = qa["review"]
                 attempt_trace["schema_errors"] = schema_errors
-                attempt_trace["result"] = {"accepted": False, "reason": feedback}
-                packet_rejections.append({"attempt": attempt, "reason": feedback, "qa": qa})
-                continue
 
-            judge_prompt = build_judger_prompt(qa_for_judger_prompt(qa), packet)
-            attempt_trace["judge"]["prompt"] = judge_prompt
-            prompts.append(
-                {
-                    "stage": "judge",
-                    "evidence_id": packet.get("evidence_id"),
-                    "question_type": question_type,
-                    "generation_mode": generation_mode,
-                    "attempt": attempt,
-                    "prompt": judge_prompt,
-                    "image_paths": full_image_paths,
-                    "video_paths": full_video_paths,
-                    "media_role": "full",
-                }
+            judge, answerability, judge_trace = run_parallel_review_judges(
+                qa_item=qa,
+                packet=packet,
+                schema_errors=schema_errors,
+                runner=runner,
+                backend=backend,
+                allow_openai_video_input=allow_openai_video_input,
+                prompt_rows=prompts,
+                full_image_paths=full_image_paths,
+                full_video_paths=full_video_paths,
+                attempt=attempt,
             )
-            stage_start = time.time()
-            print(
-                "qa_stage_start "
-                f"stage=judge evidence_id={packet.get('evidence_id')} "
-                f"qa_id={qa.get('qa_id')} attempt={attempt} "
-                f"images={len(full_image_paths)} videos={len(full_video_paths)}",
-                flush=True,
-            )
-            raw_judge = runner.generate(judge_prompt, image_paths=full_image_paths, video_paths=full_video_paths)
-            print(
-                "qa_stage_done "
-                f"stage=judge evidence_id={packet.get('evidence_id')} "
-                f"qa_id={qa.get('qa_id')} attempt={attempt} "
-                f"seconds={time.time() - stage_start:.1f}",
-                flush=True,
-            )
-            attempt_trace["judge"]["raw_output"] = raw_judge
-            try:
-                judge = extract_json_object(raw_judge)
-            except Exception as exc:
-                judge = {
-                    "review_passed": False,
-                    "feedback_to_generator": f"Judger output was not valid JSON: {exc}",
-                }
-            judge["raw_output"] = raw_judge
-            judge["gate"] = judge_gate(judge)
-            attempt_trace["judge"]["parsed"] = judge
-            if judge["gate"].get("passed") is not True:
+            attempt_trace["judge"] = judge_trace
+            attempt_trace["answerability"] = answerability
+
+            judge_failed = judge.get("gate", {}).get("passed") is not True
+            answerability_failed = answerability.get("gate", {}).get("passed") is not True
+            if judge_failed:
                 feedback = str(
                     judge.get("feedback_to_generator")
                     or judge["gate"].get("reason")
                     or "Judger rejected the question."
                 )
+                if answerability_failed:
+                    feedback += " | Answerability gate failed: " + str(
+                        answerability.get("gate", {}).get("reason", "")
+                    )
                 qa["review"] = build_review_from_gates(
                     judge=judge,
-                    answerability=None,
-                    schema_errors=[],
+                    answerability=answerability,
+                    schema_errors=schema_errors,
                     accepted=False,
                     rejection_stage="judger",
                     final_reason=feedback,
@@ -1156,16 +1443,7 @@ def generate_video_qa_loop(
                 packet_rejections.append({"attempt": attempt, "reason": feedback, "qa": qa})
                 continue
 
-            answerability = run_answerability_eval(
-                qa_item=qa,
-                packet=packet,
-                runner=runner,
-                backend=backend,
-                allow_openai_video_input=allow_openai_video_input,
-                prompt_rows=prompts,
-            )
-            attempt_trace["answerability"] = answerability
-            if answerability.get("gate", {}).get("passed") is not True:
+            if answerability_failed:
                 feedback = "Answerability gate failed: " + str(answerability.get("gate", {}).get("reason", ""))
                 qa["review"] = build_review_from_gates(
                     judge=judge,

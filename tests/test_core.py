@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 import random
 import shutil
+import threading
+import time
 import unittest
 import json
 import uuid
@@ -54,7 +56,9 @@ from egolife_two_user_qa.video_qa_loop import (
     generate_video_qa_loop,
     judge_gate,
     media_for_clips,
+    qa_formality_judge_from_schema_errors,
     qa_for_judger_prompt,
+    run_parallel_review_judges,
 )
 
 
@@ -967,15 +971,8 @@ class SchemaTests(unittest.TestCase):
         return {
             name: {"status": "PASS", "reason": "ok", "fix": ""}
             for name in [
-                "first_person_naturalness",
-                "agent_perspective",
-                "source_scope",
-                "question_type_semantics",
-                "multi_video_necessity",
-                "visual_grounding",
-                "mcq_option_quality",
-                "gaze_safety",
-                "human_auditability",
+                "qa_formality",
+                "evidence_groundedness",
             ]
         }
 
@@ -1666,19 +1663,109 @@ class VideoFirstTests(unittest.TestCase):
         self.assertEqual(gate["evidence_provider_user"], "Alice")
         self.assertEqual(gate["evidence_provider_answerable"][0]["condition_id"], "single_user::Alice")
 
+    def test_parallel_review_judges_overlap_and_merge_results(self) -> None:
+        class FakeRunner:
+            model_id = "fake"
+
+            def __init__(self):
+                self.active = 0
+                self.max_active = 0
+                self.lock = threading.Lock()
+
+            def generate(self, prompt, image_paths=None, video_paths=None):
+                with self.lock:
+                    self.active += 1
+                    self.max_active = max(self.max_active, self.active)
+                try:
+                    time.sleep(0.05)
+                    if "qa_formality judge" in prompt:
+                        return json.dumps(
+                            {
+                                "review_passed": True,
+                                "checks": {"qa_formality": {"status": "PASS", "reason": "ok", "fix": ""}},
+                                "blocking_failures": [],
+                                "feedback_to_generator": "",
+                            }
+                        )
+                    if "evidence_groundedness judge" in prompt:
+                        return json.dumps(
+                            {
+                                "review_passed": True,
+                                "checks": {"evidence_groundedness": {"status": "PASS", "reason": "ok", "fix": ""}},
+                                "blocking_failures": [],
+                                "feedback_to_generator": "",
+                            }
+                        )
+                    if "single_user::Jake" in prompt:
+                        return json.dumps(
+                            {
+                                "choice": "insufficient",
+                                "answer_text": "",
+                                "evidence_used": "",
+                                "insufficient_reason": "Jake cannot see it",
+                            }
+                        )
+                    return json.dumps(
+                        {
+                            "choice": "A",
+                            "answer_text": "a mug",
+                            "evidence_used": "Alice or the combined videos show the mug",
+                            "insufficient_reason": "",
+                        }
+                    )
+                finally:
+                    with self.lock:
+                        self.active -= 1
+
+        qa = {
+            "qa_id": "Q1",
+            "question": "What was still on the counter?",
+            "options": ["a mug", "a book", "a phone", "a bag", "a key"],
+            "correct": "A",
+            "answer": "a mug",
+            "required_users": ["Jake", "Alice"],
+            "question_type": "commonality",
+        }
+        packet = {
+            "evidence_id": "E1",
+            "required_users": ["Jake", "Alice"],
+            "clips": [
+                {"agent_name": "Jake", "frames": []},
+                {"agent_name": "Alice", "frames": []},
+            ],
+        }
+        prompt_rows = []
+        runner = FakeRunner()
+
+        judge, answerability, trace = run_parallel_review_judges(
+            qa_item=qa,
+            packet=packet,
+            schema_errors=[],
+            runner=runner,
+            backend="transformers-local",
+            allow_openai_video_input=False,
+            prompt_rows=prompt_rows,
+            full_image_paths=[],
+            full_video_paths=[],
+            attempt=1,
+        )
+
+        self.assertGreaterEqual(runner.max_active, 2)
+        self.assertTrue(judge["gate"]["passed"])
+        self.assertTrue(answerability["gate"]["passed"])
+        self.assertTrue(trace["parallel"])
+        self.assertIn("qa_formality", judge["checks"])
+        self.assertIn("evidence_groundedness", judge["checks"])
+        self.assertIn("qa_formality_judge", [row["stage"] for row in prompt_rows])
+        self.assertIn("evidence_groundedness_judge", [row["stage"] for row in prompt_rows])
+        self.assertIn("answerability", [row["stage"] for row in prompt_rows])
+
     def test_judge_gate_requires_each_structured_check_to_pass(self) -> None:
         checks = {
             name: {"status": "PASS", "reason": "ok", "fix": ""}
             for name in [
-                "first_person_naturalness",
-                "agent_perspective",
-                "source_scope",
-                "question_type_semantics",
-                "multi_video_necessity",
-                "visual_grounding",
-                "mcq_option_quality",
-                "gaze_safety",
-                "human_auditability",
+                "qa_formality",
+                "evidence_groundedness",
             ]
         }
         self.assertTrue(judge_gate({"review_passed": True, "checks": checks})["passed"])
@@ -1686,38 +1773,40 @@ class VideoFirstTests(unittest.TestCase):
         self.assertTrue(inconsistent["passed"])
         self.assertEqual(inconsistent["model_review_passed"], False)
         self.assertIn("warning", inconsistent)
-        checks["multi_video_necessity"] = {
+        checks["evidence_groundedness"] = {
             "status": "FAIL",
             "reason": "one video already answers",
             "fix": "ask for a complementary clue from the second user",
         }
         failed = judge_gate({"review_passed": True, "checks": checks})
         self.assertFalse(failed["passed"])
-        self.assertIn("multi_video_necessity", failed["failed_checks"])
+        self.assertIn("evidence_groundedness", failed["failed_checks"])
 
     def test_judge_gate_blocks_unnatural_non_first_person_question(self) -> None:
         checks = {
             name: {"status": "PASS", "reason": "ok", "fix": ""}
             for name in [
-                "first_person_naturalness",
-                "agent_perspective",
-                "source_scope",
-                "question_type_semantics",
-                "multi_video_necessity",
-                "visual_grounding",
-                "mcq_option_quality",
-                "gaze_safety",
-                "human_auditability",
+                "qa_formality",
+                "evidence_groundedness",
             ]
         }
-        checks["first_person_naturalness"] = {
+        checks["qa_formality"] = {
             "status": "FAIL",
             "reason": "question names Jake and Alice instead of asking from first person",
             "fix": "rewrite as a natural everyday first-person question using I or we",
         }
         failed = judge_gate({"review_passed": True, "checks": checks})
         self.assertFalse(failed["passed"])
-        self.assertIn("first_person_naturalness", failed["failed_checks"])
+        self.assertIn("qa_formality", failed["failed_checks"])
+
+    def test_schema_errors_are_represented_as_qa_formality_judge_failure(self) -> None:
+        judge = qa_formality_judge_from_schema_errors(["answer must equal options[correct]"])
+
+        self.assertFalse(judge["review_passed"])
+        self.assertEqual(judge["checks"]["qa_formality"]["status"], "FAIL")
+        self.assertIn("answer must equal options[correct]", judge["feedback_to_generator"])
+        self.assertFalse(judge["gate"]["passed"])
+        self.assertIn("qa_formality", judge["gate"]["failed_checks"])
 
     def test_build_review_from_gates_for_accepted_row(self) -> None:
         review = build_review_from_gates(

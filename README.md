@@ -165,15 +165,8 @@ sbatch hpc/run_egolife_discovery_control_only.sbatch
 
 最终 `review` 由 `generate_video_qa_loop` 根据 judger、answerability evaluation 和 deterministic schema validation 生成。strict validation 要求 `review.status == "passed"`、`review.review_passed == true`，并且下面这些 judger blocking checks 全部为 `PASS`：
 
-- `first_person_naturalness`
-- `agent_perspective`
-- `source_scope`
-- `question_type_semantics`
-- `multi_video_necessity`
-- `visual_grounding`
-- `mcq_option_quality`
-- `gaze_safety`
-- `human_auditability`
+- `qa_formality`
+- `evidence_groundedness`
 
 `generation_trace` 保存人眼核查需要的 intermediate data，包括 generation prompt/raw output、judger prompt/raw output、retry 时传回 generator 的 feedback、answerability conditions，以及每个 condition 实际使用的视频路径。只要传入 `--intermediate-output`，同样的 trace 也会单独写成 JSONL，方便后续人工检查。
 

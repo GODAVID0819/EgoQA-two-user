@@ -81,7 +81,6 @@ DISCOVERED_RELATION_SCHEMA = {
 ANSWERABILITY_SCHEMA = {
     "choice": "A/B/C/D/E or insufficient",
     "answer_text": "selected option text, or empty string if insufficient",
-    "confidence": 0.0,
     "evidence_used": "short explanation grounded only in the provided videos",
     "insufficient_reason": "explain what is missing if choice is insufficient",
 }
@@ -100,20 +99,25 @@ JUDGE_CHECK_SCHEMA = {
 JUDGE_SCHEMA = {
     "review_passed": True,
     "checks": {
-        "first_person_naturalness": JUDGE_CHECK_SCHEMA,
-        "agent_perspective": JUDGE_CHECK_SCHEMA,
-        "source_scope": JUDGE_CHECK_SCHEMA,
-        "question_type_semantics": JUDGE_CHECK_SCHEMA,
-        "multi_video_necessity": JUDGE_CHECK_SCHEMA,
-        "visual_grounding": JUDGE_CHECK_SCHEMA,
-        "mcq_option_quality": JUDGE_CHECK_SCHEMA,
-        "gaze_safety": JUDGE_CHECK_SCHEMA,
-        "human_auditability": JUDGE_CHECK_SCHEMA,
+        "qa_formality": JUDGE_CHECK_SCHEMA,
+        "evidence_groundedness": JUDGE_CHECK_SCHEMA,
     },
     "blocking_failures": ["names of failed checks that should block acceptance"],
     "why_generator_asked_this": "brief explanation of why the generator may have asked this",
     "feedback_to_generator": "specific revision instructions if review_passed is false; use an empty string if it passed",
 }
+
+
+def judge_schema_for_check(check_name: str) -> dict[str, Any]:
+    return {
+        "review_passed": True,
+        "checks": {
+            check_name: JUDGE_CHECK_SCHEMA,
+        },
+        "blocking_failures": ["names of failed checks that should block acceptance"],
+        "why_generator_asked_this": "brief explanation of why the generator may have asked this",
+        "feedback_to_generator": "specific revision instructions if review_passed is false; use an empty string if it passed",
+    }
 
 
 def video_packet_brief(packet: dict[str, Any]) -> str:
@@ -427,43 +431,27 @@ Return one valid JSON object only, with this exact shape:
 """
 
 
-def build_judger_prompt(qa_item: dict[str, Any], packet: dict[str, Any]) -> str:
-    return f"""You are a strict reviewer for EgoLife video-first two-user MCQ generation.
+def build_qa_formality_judge_prompt(
+    qa_item: dict[str, Any],
+    packet: dict[str, Any],
+    *,
+    schema_errors: list[str] | None = None,
+) -> str:
+    schema_errors = list(schema_errors or [])
+    schema_status = "PASS" if not schema_errors else "FAIL"
+    return f"""You are the qa_formality judge for EgoLife video-first two-user MCQ generation.
 
-You will see the same raw egocentric videos used by the generator. Judge whether the generated question is acceptable.
+You will see a generated QA plus deterministic schema/formality branch results. Judge only qa_formality.
 
-Return every check in the JSON schema. Judge all checks, but focus most carefully on multi_video_necessity.
+qa_formality asks whether the generated QA is natural and well-formed:
+- The question should sound like a natural first-person or shared-memory question from someone using AR glasses.
+- The question and options must not use dataset-observer wording such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, or timestamp.
+- The QA must be a valid five-option MCQ: exactly five non-empty, plausible, parallel options; correct is A-E; answer exactly matches options[correct]; and exactly one option is correct.
+- The question_type field, if used, must be either commonality or difference and must match the wording of the question.
+- PASS only if the deterministic schema branch passes and the question wording and MCQ structure are acceptable.
 
-Brief checks:
-1. first_person_naturalness: natural first-person memory/AR-assistant wording.
-2. agent_perspective: no dataset-observer wording, and no video/footage/recording/frame/camera/clip/timestamp language in the question or options.
-3. source_scope: answerable from provided raw videos and metadata only.
-4. question_type_semantics: commonality means shared or jointly verified; difference means meaningful contrast, asymmetry, or complementary detail.
-6. visual_grounding: correct option and evidence claims are visually grounded in concrete moments.
-7. mcq_option_quality: exactly five plausible options and exactly one correct answer.
-8. gaze_safety: do not invent exact gaze-to-object claims when 2D gaze is unavailable.
-9. human_auditability: enough user/video/time evidence exists for a human to inspect later.
-
-Main check, 5. multi_video_necessity:
-- Judge whether the QA has a situated cross-video dependency, not just two synchronized clips.
-- Treat required_users[0] as the asker/speaker and required_users[1] as the evidence provider.
-- PASS only if required_users[0]'s video provides a speaker-side anchor event and required_users[1]'s video provides a missing visual detail that is simultaneous, follow-up, or otherwise naturally related.
-- PASS only if required_users[0]'s video alone is insufficient. Do not fail solely because required_users[1]'s video alone can answer; that should be logged by answerability.
-- PASS only if the connection would be a plausible memory or AR-assistant question from someone involved in the situation.
-- FAIL if the question merely stitches together two clips because they happen during the same time interval.
-- FAIL if the activities are unrelated, such as one person discussing/checking a device while another person is washing dishes, unless the question identifies a concrete shared task or natural dependency.
-- FAIL if the question asks what both users saw, both noticed, or both looked at; do not ask what both users saw or noticed because one user may not know the other user's perception.
-- FAIL if the question is a generic comparison of two views, rooms, or camera angles rather than a speaker anchor plus missing visual detail.
-- FAIL if the question generically asks what "the other person", "everyone else", or "others" were doing nearby, in the room, or at the same time, unless it names a concrete missing visual detail naturally tied to the speaker-side anchor.
-- FAIL if required_users[0]'s video alone already reveals the correct answer.
-- UNCERTAIN if the videos do not clearly show the anchor, the missing visual detail, or the relation between them.
-- In the reason, explicitly name the speaker-side anchor, the missing visual detail, and why the second video is or is not needed.
-
-Contrastive example for multi_video_necessity:
-- PASS: One video shows the speaker checking a setup and leaving toward a stairwell; another video still shows the front of that room, where a tutorial continues. A good question asks what was still happening after the speaker left. The first video gives the anchor; the second supplies the missing follow-up detail.
-- FAIL: One video shows someone discussing/checking a device setup while another shows dishwashing. If no shared task or natural dependency is visible, this is only timestamp alignment and should fail.
-
-Use FAIL for a clear violation, UNCERTAIN when the videos do not provide enough evidence to verify the check, and PASS only when the check is satisfied.
+Deterministic schema branch:
+{json.dumps({"status": schema_status, "errors": schema_errors}, ensure_ascii=False, indent=2)}
 
 Video set metadata:
 {video_packet_brief(packet)}
@@ -472,7 +460,32 @@ Generated QA:
 {json.dumps(qa_item, ensure_ascii=False, indent=2)}
 
 Return one valid JSON object only, with this exact shape:
-{json.dumps(JUDGE_SCHEMA, ensure_ascii=False, indent=2)}
+{json.dumps(judge_schema_for_check("qa_formality"), ensure_ascii=False, indent=2)}
+"""
+
+
+def build_evidence_groundedness_judge_prompt(qa_item: dict[str, Any], packet: dict[str, Any]) -> str:
+    return f"""You are the evidence_groundedness judge for EgoLife video-first two-user MCQ generation.
+
+You will see the same raw egocentric videos used by the generator. Judge only evidence_groundedness.
+
+evidence_groundedness asks whether the QA is supported only by the provided videos and metadata:
+- The correct answer, evidence claims, referred timestamps, and per-user claims must be grounded in concrete visible moments or supplied metadata.
+- Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
+- Treat required_users[0] as the asker/speaker and required_users[1] as the evidence provider. It is acceptable if required_users[1]'s video alone can answer; answerability logs that separately.
+- FAIL if required_users[0]'s video alone already reveals the correct answer, because the asker/speaker is supposed to need the evidence provider's missing visual detail.
+- FAIL if the question merely stitches unrelated clips by timestamp, asks what everyone saw/noticed, or makes a generic comparison of views rather than a situated speaker-side memory gap plus supported missing detail.
+- If 2D gaze projection is unavailable, FAIL invented exact gaze-to-object claims; visible object/action claims are still allowed when grounded in the video itself.
+- UNCERTAIN if the videos do not clearly support the anchor, the missing detail, the correct option, or the claimed relation.
+
+Video set metadata:
+{video_packet_brief(packet)}
+
+Generated QA:
+{json.dumps(qa_item, ensure_ascii=False, indent=2)}
+
+Return one valid JSON object only, with this exact shape:
+{json.dumps(judge_schema_for_check("evidence_groundedness"), ensure_ascii=False, indent=2)}
 """
 
 
@@ -497,6 +510,7 @@ Rules:
 - If the condition does not contain enough evidence, set choice to "insufficient".
 - Do not guess from common sense or from the answer options.
 - Do not use information from users or videos outside this condition.
+- It is acceptable for the evidence-provider-only condition to answer correctly when the evidence provider's video alone contains the missing visual detail; report that choice normally.
 
 Return one valid JSON object only with this exact shape:
 {json.dumps(ANSWERABILITY_SCHEMA, ensure_ascii=False, indent=2)}
