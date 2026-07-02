@@ -14,7 +14,7 @@ VIDEO_GENERATION_SCHEMA = {
     "correct": "A/B/C/D/E",
     "answer": "exact text of the correct option",
     "category": "one of: social_interaction, task_coordination, theory_of_mind, temporal_reasoning, environmental_interaction",
-    "required_users": ["at least two user names"],
+    "required_users": ["asker/speaker user first", "evidence-provider user second"],
     "evidence": [
         {
             "user": "name",
@@ -31,8 +31,8 @@ VIDEO_GENERATION_SCHEMA = {
         }
     ],
     "single_user_answerability": {
-        "Jake": "insufficient because Jake alone only provides ...",
-        "Alice": "insufficient because Alice alone only provides ...",
+        "Jake": "insufficient because the asker/speaker alone only provides ...",
+        "Alice": "sufficient/insufficient because the evidence provider alone ...",
     },
     "combined_answerability": "sufficient because the required users' videos together support exactly one option",
     "generator_rationale": "why this is a natural question and why the missing detail depends on multiple users",
@@ -117,6 +117,9 @@ JUDGE_SCHEMA = {
 
 
 def video_packet_brief(packet: dict[str, Any]) -> str:
+    required_users = list(packet.get("required_users") or [])
+    speaker_user = required_users[0] if required_users else None
+    evidence_provider_user = required_users[1] if len(required_users) > 1 else None
     clips = []
     for clip in packet.get("clips", []):
         clips.append(
@@ -136,7 +139,16 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
     return json.dumps(
         {
             "evidence_id": packet.get("evidence_id"),
-            "required_users": packet.get("required_users"),
+            "required_users": required_users,
+            "role_contract": {
+                "speaker_user": speaker_user,
+                "evidence_provider_user": evidence_provider_user,
+                "required_users_order": (
+                    "required_users[0] is the asker/speaker. That user alone must not be able "
+                    "to answer. required_users[1] is the evidence provider; it is acceptable "
+                    "if that user's video alone can answer, and that case is logged."
+                ),
+            },
             "requirement": packet.get("requirement"),
             "clips": clips,
             "source_urls": packet.get("source_urls"),
@@ -269,12 +281,15 @@ def build_video_generation_prompt(
     feedback_block = _feedback_block(feedback)
     retrieval_block = clip_guidance_block(packet) if generation_mode == "clip_guided" else ""
     design_block = """Design rules:
-- The question must combine a contextual clue from one required user's own view with complementary information from another required user's view.
+- Treat required_users[0] as the asker/speaker. The question must be answerable from that user's first-person perspective.
+- required_users[0]'s own video alone must not reveal the correct answer.
+- Treat required_users[1] as the evidence provider. It is acceptable if required_users[1]'s video alone can answer the question, because that user supplies the missing visual evidence.
+- The question must combine a contextual clue from required_users[0]'s own view with complementary information from required_users[1]'s view.
 - The question does not need to begin with the contextual clue. Choose the most natural wording for the situation.
 - Do not use a fixed question template or repeat a stock opening. In particular, avoid opening with a temporal setup clause such as "After I ...", "When I ...", or "Once I ...".
 - Prefer varied everyday forms: checking where something ended up, identifying which object/person/action mattered, clarifying what changed, asking what was still true, or resolving a small uncertainty from the speaker's perspective.
-- The speaker's video must not already reveal the correct answer; another user's video must add the missing visual detail.
-- If either single user's video can select the correct option, discard the question and create a different one.
+- The speaker/asker video must not already reveal the correct answer; another user's video must add the missing visual detail.
+- If required_users[0] alone can select the correct option, discard the question and create a different one.
 - Do not make a question just because clips share a timestamp.
 - Do not ask what both users saw, noticed, or looked at.
 - Do not ask what both users did, handled, had, shared, or were doing together.
@@ -290,7 +305,7 @@ Your task:
 2. The question_type must be "{question_type}": {type_instruction}
 3. The question must use visual evidence from one required user's contextual clue and another required user's complementary detail, but it should not follow a fixed wording pattern.
 4. The question must require visual evidence from at least two required users. Timestamp overlap is not enough.
-5. Any single required user's video alone must be insufficient; the combined required users' videos must make exactly one option correct.
+5. required_users[0] is the asker/speaker, and that user's video alone must be insufficient. required_users[1] is the evidence provider; it is acceptable if that user's video alone suffices because they provide the missing visual evidence.
 6. Fill the evidence field with each needed user's visual fact and a specific timeframe.
 7. Return every field in the JSON shape exactly. Do not omit category, single_user_answerability, combined_answerability, generator_rationale, why_two_users_needed, per_user_evidence_claims, referred_timestamps, or review.
 8. The answer field must exactly equal the text of options[correct], and correct must be one letter: A, B, C, D, or E.
@@ -305,9 +320,9 @@ For example, if the question is asked from Jake's perspective, Jake's name shoul
 6) Options must be multi-word, plausible, parallel in length/style, and have exactly one correct answer.
 7) False options may use names such as Jake, Alice, Tasha, Lucia, Katrina, or Shure when helpful, but follow guideline 3.
 8) When 2D gaze coordinates are available, they are provided as <gaze_coordinate> values indicating the user's attended image area. You may ask about visible objects, regions, or actions near that area.
-9) single_user_answerability must be an object with one entry for each required user, and each entry must explicitly say "insufficient because ...".
+9) single_user_answerability must be an object with one entry for each required user. The required_users[0] entry must explicitly say "insufficient because ..."; the required_users[1] entry may say "sufficient because ..." if the evidence provider alone can answer.
 10) combined_answerability must explicitly say "sufficient because ..." and explain why the combined videos support the correct option.
-11) Before returning, mentally run the single-user test. If Jake alone, Alice alone, or any other single required user can answer the question, rewrite it.
+11) Before returning, mentally run the asker-alone test. If required_users[0] alone can answer the question, rewrite it. Do not reject merely because required_users[1] alone can answer.
 12) Avoid these rejected patterns: "What did we both...", "What did we all...", "What did everyone...", "What did I and Alice both...", "What were we doing together...", and "What was the other person doing nearby?".
 13) For commonality questions, the commonality should be the relationship between one user's contextual clue and another user's complementary detail, not merely a shared object or shared action visible in both views.
 
@@ -347,13 +362,13 @@ Target question_type: "{question_type}". {type_hint}
 
 List 3-5 possible cross-user information needs.
 For each, identify:
-- what the speaker user knows or sees
-- what each other required user knows or sees
+- what required_users[0], the asker/speaker, knows or sees
+- what required_users[1], the evidence provider, knows or sees
 - what is only clear when combining them
 - why someone in the situation would naturally ask this
-- whether it is likely answerable by one video alone
+- whether required_users[0] alone could answer it
 
-Then select exactly one relation that is natural, visually grounded, and least likely to be answerable from one user's video alone.
+Then select exactly one relation that is natural, visually grounded, and not answerable from required_users[0]'s video alone. It is acceptable if required_users[1]'s video alone can answer.
 Avoid examples, stock phrasing, and fixed templates. Think in terms of the situation, not in terms of question patterns.
 
 {_feedback_block(feedback)}
@@ -391,9 +406,9 @@ Input: raw videos from multiple people during the same time interval. Look direc
 Requirements:
 1. Generate exactly one five-option multiple-choice question.
 2. The question_type must be "{question_type}". {type_instruction}
-3. The question must feel like something an AR-glasses user or someone in the situation would naturally ask.
-4. The answer must require visual evidence from at least two required users.
-5. Any single required user's video alone must be insufficient; the combined required users' videos must make exactly one option correct.
+3. required_users[0] is the asker/speaker; write the question from that user's perspective.
+4. required_users[0]'s video alone must be insufficient.
+5. required_users[1] is the evidence provider; it is acceptable if that user's video alone can answer because they supply the missing visual detail. The combined required users' videos must make exactly one option correct.
 6. Do not use words such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, timestamp, CLIP, embedding, similarity, or novelty in the question or options.
 7. Options must be multi-word, plausible, parallel in length/style, and have exactly one correct answer.
 8. Fill the evidence fields with each needed user's visual fact and a specific timeframe.
@@ -431,15 +446,16 @@ Brief checks:
 
 Main check, 5. multi_video_necessity:
 - Judge whether the QA has a situated cross-video dependency, not just two synchronized clips.
-- PASS only if one required user's video provides a speaker-side anchor event and another required user's video provides a missing visual detail that is simultaneous, follow-up, or otherwise naturally related.
-- PASS only if both videos are necessary: removing either user's video would make the question unanswerable or leave more than one plausible option.
+- Treat required_users[0] as the asker/speaker and required_users[1] as the evidence provider.
+- PASS only if required_users[0]'s video provides a speaker-side anchor event and required_users[1]'s video provides a missing visual detail that is simultaneous, follow-up, or otherwise naturally related.
+- PASS only if required_users[0]'s video alone is insufficient. Do not fail solely because required_users[1]'s video alone can answer; that should be logged by answerability.
 - PASS only if the connection would be a plausible memory or AR-assistant question from someone involved in the situation.
 - FAIL if the question merely stitches together two clips because they happen during the same time interval.
 - FAIL if the activities are unrelated, such as one person discussing/checking a device while another person is washing dishes, unless the question identifies a concrete shared task or natural dependency.
 - FAIL if the question asks what both users saw, both noticed, or both looked at; do not ask what both users saw or noticed because one user may not know the other user's perception.
 - FAIL if the question is a generic comparison of two views, rooms, or camera angles rather than a speaker anchor plus missing visual detail.
 - FAIL if the question generically asks what "the other person", "everyone else", or "others" were doing nearby, in the room, or at the same time, unless it names a concrete missing visual detail naturally tied to the speaker-side anchor.
-- FAIL if a single user's video already reveals the correct answer.
+- FAIL if required_users[0]'s video alone already reveals the correct answer.
 - UNCERTAIN if the videos do not clearly show the anchor, the missing visual detail, or the relation between them.
 - In the reason, explicitly name the speaker-side anchor, the missing visual detail, and why the second video is or is not needed.
 

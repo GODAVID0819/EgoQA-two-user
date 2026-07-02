@@ -2,10 +2,11 @@
 
 This is intentionally separate from the main evidence pipeline. It starts from
 the full manifest, evaluates every synchronized timestamp group as a group, and
-emits two-user candidate packets by filtering video pairs with frame-to-frame
-CLIP similarity traces, then randomly sampling from the surviving pairs. Clip-
-level group typicality is still recorded as diagnostics, but retrieval is based
-on pair-level shared-anchor and global-overlap signals.
+emits two-user candidate packets by filtering video pairs with clustered
+representative-frame CLIP similarity traces, then randomly sampling from the
+surviving pairs. Clip-level group typicality is still recorded as diagnostics,
+but pruning and pair retrieval now use clustered representative-frame
+shared-anchor and overlap signals.
 """
 
 from __future__ import annotations
@@ -21,13 +22,24 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .clip_gap_demo import DEFAULT_CLIP_MODEL, ImageEncoder, TransformersClipEncoder, cosine_similarity
+    from .clip_gap_demo import (
+        DEFAULT_CLIP_MODEL,
+        ImageEncoder,
+        TransformersClipEncoder,
+        cluster_embedding_medoids,
+        cosine_similarity,
+    )
     from .clip_gap_demo import sample_short_video
     from .evidence import group_manifest_clips, local_cache_path
     from .io_utils import download_file, read_json, stable_id, write_json, write_jsonl
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from egolife_two_user_qa.clip_gap_demo import DEFAULT_CLIP_MODEL, ImageEncoder, TransformersClipEncoder
+    from egolife_two_user_qa.clip_gap_demo import (
+        DEFAULT_CLIP_MODEL,
+        ImageEncoder,
+        TransformersClipEncoder,
+        cluster_embedding_medoids,
+    )
     from egolife_two_user_qa.clip_gap_demo import cosine_similarity, sample_short_video
     from egolife_two_user_qa.evidence import group_manifest_clips, local_cache_path
     from egolife_two_user_qa.io_utils import download_file, read_json, stable_id, write_json, write_jsonl
@@ -129,7 +141,7 @@ def frame_similarity_matrix(
     left_embeddings: list[list[float]],
     right_embeddings: list[list[float]],
 ) -> list[list[float]]:
-    """Return frame-to-frame CLIP cosine similarities for a video pair."""
+    """Return pairwise CLIP cosine similarities for two embedding lists."""
 
     if not left_embeddings or not right_embeddings:
         raise ValueError("both videos need at least one frame embedding")
@@ -302,6 +314,289 @@ def _subtract_intervals(
     return [(round(left, 3), round(right, 3)) for left, right in keep if right - left >= min_interval_seconds]
 
 
+def _sampled_frame_interval(
+    frame: dict[str, Any],
+    *,
+    window_start: float,
+    window_end: float,
+    sample_interval_seconds: float,
+) -> tuple[float, float] | None:
+    timestamp = float(frame.get("timestamp_seconds", window_start))
+    half_width = float(sample_interval_seconds) / 2.0
+    start = max(float(window_start), timestamp - half_width)
+    end = min(float(window_end), timestamp + half_width)
+    if end <= start:
+        return None
+    return (start, end)
+
+
+def _intervals_for_frame_indices(
+    frames: list[dict[str, Any]],
+    frame_indices: set[int],
+    *,
+    window_start: float,
+    window_end: float,
+    sample_interval_seconds: float,
+) -> list[tuple[float, float]]:
+    intervals = []
+    for frame_index in sorted(frame_indices):
+        if frame_index < 0 or frame_index >= len(frames):
+            continue
+        interval = _sampled_frame_interval(
+            frames[frame_index],
+            window_start=window_start,
+            window_end=window_end,
+            sample_interval_seconds=sample_interval_seconds,
+        )
+        if interval is not None:
+            intervals.append(interval)
+    return _merge_intervals(intervals)
+
+
+def clustered_frame_representatives(
+    frames: list[dict[str, Any]],
+    embeddings: list[list[float]],
+    *,
+    cluster_count: int,
+) -> dict[str, Any]:
+    """Cluster one video's sampled frame embeddings and expose medoid frames."""
+
+    if len(frames) != len(embeddings):
+        raise ValueError("frame and embedding counts must match")
+    if not frames:
+        raise ValueError("cannot cluster an empty frame list")
+    if cluster_count <= 0:
+        raise ValueError("cluster_count must be positive")
+
+    labels, medoids = cluster_embedding_medoids(embeddings, cluster_count)
+    representatives = []
+    representative_embeddings = []
+    for cluster_index, frame_index in enumerate(medoids):
+        member_indices = [
+            index
+            for index, label in enumerate(labels)
+            if int(label) == int(cluster_index)
+        ]
+        frame = frames[frame_index]
+        representatives.append(
+            {
+                "cluster_index": int(cluster_index),
+                "frame_index": int(frame_index),
+                "timestamp_seconds": frame.get("timestamp_seconds"),
+                "path": frame.get("path"),
+                "member_indices": member_indices,
+                "member_timestamps": [
+                    frames[index].get("timestamp_seconds")
+                    for index in member_indices
+                ],
+                "member_count": len(member_indices),
+            }
+        )
+        representative_embeddings.append(embeddings[frame_index])
+
+    return {
+        "cluster_count_requested": cluster_count,
+        "cluster_count": len(representatives),
+        "labels": [int(label) for label in labels],
+        "representatives": representatives,
+        "representative_embeddings": representative_embeddings,
+    }
+
+
+def clustered_temporal_similarity_pruning(
+    left_frames: list[dict[str, Any]],
+    right_frames: list[dict[str, Any]],
+    left_embeddings: list[list[float]],
+    right_embeddings: list[list[float]],
+    *,
+    start_seconds: float,
+    duration_seconds: float,
+    sample_interval_seconds: float,
+    cluster_count: int = 10,
+    high_similarity_threshold: float = 0.82,
+    preserve_shared_anchor_seconds: float = 0.0,
+    min_pruned_video_seconds: float = 8.0,
+) -> dict[str, Any]:
+    """Prune high-similarity clusters using representative sampled frames.
+
+    Each video is sampled independently, clustered, and represented by medoid
+    frames. High-similarity medoid pairs mark both source clusters for pruning;
+    every sampled frame assigned to a marked cluster removes an equal-width
+    interval centered on that frame.
+    """
+
+    if duration_seconds <= 0:
+        raise ValueError("duration_seconds must be positive")
+    if sample_interval_seconds <= 0:
+        raise ValueError("sample_interval_seconds must be positive")
+
+    window_start = float(start_seconds)
+    window_end = round(window_start + float(duration_seconds), 3)
+    left_clusters = clustered_frame_representatives(
+        left_frames,
+        left_embeddings,
+        cluster_count=cluster_count,
+    )
+    right_clusters = clustered_frame_representatives(
+        right_frames,
+        right_embeddings,
+        cluster_count=cluster_count,
+    )
+    matrix = frame_similarity_matrix(
+        left_clusters["representative_embeddings"],
+        right_clusters["representative_embeddings"],
+    )
+
+    high_pairs = []
+    left_marked_clusters: set[int] = set()
+    right_marked_clusters: set[int] = set()
+    for left_cluster_index, row in enumerate(matrix):
+        for right_cluster_index, similarity in enumerate(row):
+            if float(similarity) < high_similarity_threshold:
+                continue
+            left_marked_clusters.add(left_cluster_index)
+            right_marked_clusters.add(right_cluster_index)
+            left_rep = left_clusters["representatives"][left_cluster_index]
+            right_rep = right_clusters["representatives"][right_cluster_index]
+            high_pairs.append(
+                {
+                    "left_cluster_index": int(left_cluster_index),
+                    "right_cluster_index": int(right_cluster_index),
+                    "similarity": round(float(similarity), 6),
+                    "left_representative_frame_index": left_rep["frame_index"],
+                    "right_representative_frame_index": right_rep["frame_index"],
+                    "left_representative_timestamp_seconds": left_rep.get("timestamp_seconds"),
+                    "right_representative_timestamp_seconds": right_rep.get("timestamp_seconds"),
+                }
+            )
+
+    high_pairs.sort(key=lambda row: float(row["similarity"]), reverse=True)
+    preserved_intervals: list[tuple[float, float]] = []
+    if high_pairs and preserve_shared_anchor_seconds > 0:
+        strongest = high_pairs[0]
+        left_center = float(strongest["left_representative_timestamp_seconds"])
+        right_center = float(strongest["right_representative_timestamp_seconds"])
+        center = (left_center + right_center) / 2.0
+        half_preserve = min(float(preserve_shared_anchor_seconds), float(duration_seconds)) / 2.0
+        preserved_intervals = [
+            (
+                max(window_start, center - half_preserve),
+                min(window_end, center + half_preserve),
+            )
+        ]
+
+    def marked_frame_indices(clusters: dict[str, Any], marked_clusters: set[int]) -> set[int]:
+        indices: set[int] = set()
+        for cluster_index in marked_clusters:
+            representative = clusters["representatives"][cluster_index]
+            indices.update(int(index) for index in representative.get("member_indices", []))
+        return indices
+
+    left_marked_indices = marked_frame_indices(left_clusters, left_marked_clusters)
+    right_marked_indices = marked_frame_indices(right_clusters, right_marked_clusters)
+    left_remove_intervals = _intervals_for_frame_indices(
+        left_frames,
+        left_marked_indices,
+        window_start=window_start,
+        window_end=window_end,
+        sample_interval_seconds=sample_interval_seconds,
+    )
+    right_remove_intervals = _intervals_for_frame_indices(
+        right_frames,
+        right_marked_indices,
+        window_start=window_start,
+        window_end=window_end,
+        sample_interval_seconds=sample_interval_seconds,
+    )
+
+    if preserved_intervals:
+        left_remove_intervals = [
+            interval
+            for interval in left_remove_intervals
+            if not any(interval[0] < preserved[1] and interval[1] > preserved[0] for preserved in preserved_intervals)
+        ]
+        right_remove_intervals = [
+            interval
+            for interval in right_remove_intervals
+            if not any(interval[0] < preserved[1] and interval[1] > preserved[0] for preserved in preserved_intervals)
+        ]
+
+    left_remove_intervals = _merge_intervals(left_remove_intervals)
+    right_remove_intervals = _merge_intervals(right_remove_intervals)
+    left_keep_intervals = _subtract_intervals((window_start, window_end), left_remove_intervals)
+    right_keep_intervals = _subtract_intervals((window_start, window_end), right_remove_intervals)
+    left_kept_duration = round(sum(end - start for start, end in left_keep_intervals), 3)
+    right_kept_duration = round(sum(end - start for start, end in right_keep_intervals), 3)
+    left_removed_duration = round(sum(end - start for start, end in left_remove_intervals), 3)
+    right_removed_duration = round(sum(end - start for start, end in right_remove_intervals), 3)
+    removed_duration = round(left_removed_duration + right_removed_duration, 3)
+    kept_duration = round(min(left_kept_duration, right_kept_duration), 3)
+    passed = (
+        left_kept_duration >= min_pruned_video_seconds
+        and right_kept_duration >= min_pruned_video_seconds
+        and removed_duration > 0.0
+    )
+
+    def cluster_decisions(clusters: dict[str, Any], marked_clusters: set[int]) -> list[dict[str, Any]]:
+        rows = []
+        for representative in clusters["representatives"]:
+            cluster_index = int(representative["cluster_index"])
+            rows.append(
+                {
+                    **representative,
+                    "status": "marked_for_pruning" if cluster_index in marked_clusters else "kept",
+                }
+            )
+        return rows
+
+    return {
+        "method": "cluster_representative_high_similarity_interval_pruning",
+        "high_similarity_threshold": high_similarity_threshold,
+        "cluster_count": cluster_count,
+        "left_cluster_count": left_clusters["cluster_count"],
+        "right_cluster_count": right_clusters["cluster_count"],
+        "preserve_shared_anchor_seconds": preserve_shared_anchor_seconds,
+        "min_pruned_video_seconds": min_pruned_video_seconds,
+        "window": {
+            "start_seconds": round(window_start, 3),
+            "end_seconds": window_end,
+            "duration_seconds": duration_seconds,
+            "sample_interval_seconds": sample_interval_seconds,
+        },
+        "representative_similarity_matrix": matrix,
+        "high_similarity_representative_pairs": high_pairs,
+        "high_similarity_representative_pair_count": len(high_pairs),
+        "left_marked_cluster_count": len(left_marked_clusters),
+        "right_marked_cluster_count": len(right_marked_clusters),
+        "left_marked_frame_indices": sorted(left_marked_indices),
+        "right_marked_frame_indices": sorted(right_marked_indices),
+        "left_remove_intervals": [[round(start, 3), round(end, 3)] for start, end in left_remove_intervals],
+        "right_remove_intervals": [[round(start, 3), round(end, 3)] for start, end in right_remove_intervals],
+        "left_keep_intervals": [[round(start, 3), round(end, 3)] for start, end in left_keep_intervals],
+        "right_keep_intervals": [[round(start, 3), round(end, 3)] for start, end in right_keep_intervals],
+        "remove_intervals": {
+            "left": [[round(start, 3), round(end, 3)] for start, end in left_remove_intervals],
+            "right": [[round(start, 3), round(end, 3)] for start, end in right_remove_intervals],
+        },
+        "keep_intervals": {
+            "left": [[round(start, 3), round(end, 3)] for start, end in left_keep_intervals],
+            "right": [[round(start, 3), round(end, 3)] for start, end in right_keep_intervals],
+        },
+        "preserved_shared_intervals": [
+            [round(start, 3), round(end, 3)] for start, end in _merge_intervals(preserved_intervals)
+        ],
+        "left_removed_duration_seconds": left_removed_duration,
+        "right_removed_duration_seconds": right_removed_duration,
+        "removed_duration_seconds": removed_duration,
+        "left_kept_duration_seconds": left_kept_duration,
+        "right_kept_duration_seconds": right_kept_duration,
+        "kept_duration_seconds": kept_duration,
+        "passed": passed,
+        "left_cluster_decisions": cluster_decisions(left_clusters, left_marked_clusters),
+        "right_cluster_decisions": cluster_decisions(right_clusters, right_marked_clusters),
+    }
+
+
 def temporal_similarity_pruning(
     matrix: list[list[float]],
     left_frames: list[dict[str, Any]],
@@ -397,6 +692,7 @@ def temporal_similarity_pruning(
     keep_intervals = _subtract_intervals((window_start, window_end), remove_intervals)
     kept_duration = round(sum(end - start for start, end in keep_intervals), 3)
     removed_duration = round(sum(end - start for start, end in remove_intervals), 3)
+    passed = kept_duration >= min_pruned_video_seconds and removed_duration > 0.0
     return {
         "method": "remove_nearby_high_similarity_time_intervals",
         "high_similarity_threshold": high_similarity_threshold,
@@ -419,7 +715,7 @@ def temporal_similarity_pruning(
         ],
         "removed_duration_seconds": removed_duration,
         "kept_duration_seconds": kept_duration,
-        "passed": kept_duration >= min_pruned_video_seconds,
+        "passed": passed,
         "checkpoint_decisions": checkpoint_rows,
     }
 
@@ -451,8 +747,6 @@ def materialize_pruned_video(
         raise FileNotFoundError(f"source video does not exist: {source}")
     output = Path(output_video)
     output.parent.mkdir(parents=True, exist_ok=True)
-    if output.exists():
-        return output
 
     ffmpeg = _resolve_ffmpeg_binary(ffmpeg_binary)
     trim_parts = []
@@ -477,6 +771,7 @@ def materialize_pruned_video(
             "-hide_banner",
             "-loglevel",
             "error",
+            "-y",
             "-i",
             str(source),
             "-filter_complex",
@@ -511,12 +806,13 @@ def score_video_pairs(
     start_seconds: float = 0.0,
     duration_seconds: float = 30.0,
     sample_interval_seconds: float = 1.0,
+    pruning_clusters_per_video: int = 10,
     high_similarity_interval_threshold: float = 0.82,
     temporal_neighborhood_seconds: float | None = None,
-    preserve_shared_anchor_seconds: float = 4.0,
+    preserve_shared_anchor_seconds: float = 0.0,
     min_pruned_video_seconds: float = 8.0,
 ) -> dict[str, Any]:
-    """Filter video pairs using frame-to-frame shared-anchor and overlap metrics."""
+    """Filter video pairs using clustered-frame representatives and overlap metrics."""
 
     clip_scores = scoring.get("clip_scores", [])
     if len(clip_rows) != len(frame_embeddings_by_clip) or len(clip_rows) != len(clip_scores):
@@ -529,22 +825,20 @@ def score_video_pairs(
         for right_index in range(left_index + 1, len(clip_rows)):
             left = clip_scores[left_index]
             right = clip_scores[right_index]
-            matrix = frame_similarity_matrix(
-                frame_embeddings_by_clip[left_index],
-                frame_embeddings_by_clip[right_index],
-            )
-            temporal_pruning = temporal_similarity_pruning(
-                matrix,
+            temporal_pruning = clustered_temporal_similarity_pruning(
                 clip_rows[left_index].get("frames", []),
                 clip_rows[right_index].get("frames", []),
+                frame_embeddings_by_clip[left_index],
+                frame_embeddings_by_clip[right_index],
                 start_seconds=start_seconds,
                 duration_seconds=duration_seconds,
                 sample_interval_seconds=sample_interval_seconds,
+                cluster_count=pruning_clusters_per_video,
                 high_similarity_threshold=high_similarity_interval_threshold,
-                temporal_neighborhood_seconds=temporal_neighborhood_seconds,
                 preserve_shared_anchor_seconds=preserve_shared_anchor_seconds,
                 min_pruned_video_seconds=min_pruned_video_seconds,
             )
+            matrix = temporal_pruning["representative_similarity_matrix"]
             values = _flatten_matrix(matrix)
             mean_sim = sum(values) / len(values)
             topk_sim = _topk_mean(values, topk)
@@ -570,7 +864,7 @@ def score_video_pairs(
                     "mean_sim": round(mean_sim, 6),
                     "topk_sim": round(topk_sim, 6),
                     "topk": max(1, min(topk, len(values))),
-                    "frame_similarity_matrix": matrix,
+                    "representative_similarity_matrix": matrix,
                     "temporal_pruning": temporal_pruning,
                     "left_frame_count": len(frame_embeddings_by_clip[left_index]),
                     "right_frame_count": len(frame_embeddings_by_clip[right_index]),
@@ -604,13 +898,14 @@ def score_video_pairs(
         pair["trace_rank"] = rank
     return {
         "pair_filter": {
-            "method": "frame_matrix_shared_anchor_and_overlap_thresholds",
+            "method": "cluster_representative_shared_anchor_and_overlap_thresholds",
             "topk": topk,
             "min_topk_sim": min_topk_sim,
             "min_mean_sim": min_mean_sim,
             "max_mean_sim": max_mean_sim,
             "duration_seconds": duration_seconds,
             "sample_interval_seconds": sample_interval_seconds,
+            "pruning_clusters_per_video": pruning_clusters_per_video,
             "high_similarity_interval_threshold": high_similarity_interval_threshold,
             "temporal_neighborhood_seconds": temporal_neighborhood_seconds,
             "preserve_shared_anchor_seconds": preserve_shared_anchor_seconds,
@@ -618,12 +913,15 @@ def score_video_pairs(
             "pair_count": len(pair_scores),
             "kept_pair_count": len(kept_pairs),
             "interpretation": (
-                "Each pair is evaluated with a full frame-to-frame CLIP similarity matrix. "
-                "topk_sim captures strongest shared anchors; mean_sim captures global overlap. "
+                "Each video is sampled once per second, clustered, and represented by medoid "
+                "frames. Pair scores are computed from representative CLIP similarities; high "
+                "representative matches mark their source clusters for uniform interval pruning. "
+                "topk_sim captures strongest shared anchors; mean_sim captures representative overlap. "
                 "Pairs are rejected when shared anchors are too weak, global overlap is too low, "
                 "global overlap is too high, or high-similarity interval removal would leave too "
                 "little video. Surviving pairs are sampled randomly; their selected videos are "
-                "materialized as pruned MP4s for QA generation and judge validation."
+                "materialized as paired original/pruned MP4s. QA generation uses pruned MP4s; "
+                "judges and answerability gates use the original 30-second MP4s."
             ),
         },
         "pair_scores": pair_scores,
@@ -689,6 +987,20 @@ def group_clip_frames(
     return rows
 
 
+def _sample_group_clips_for_pair(
+    group: dict[str, Any],
+    *,
+    selected_count: int,
+    rng: random.Random,
+) -> list[dict[str, Any]]:
+    clips = sorted(group.get("clips", []), key=lambda item: str(item.get("agent_dir")))
+    if len(clips) < selected_count:
+        raise ValueError(f"group needs at least {selected_count} clips")
+    if len(clips) == selected_count:
+        return clips
+    return rng.sample(clips, selected_count)
+
+
 def _clip_with_pruned_video(
     clip: dict[str, Any],
     *,
@@ -702,10 +1014,26 @@ def _clip_with_pruned_video(
     if not source_video:
         raise FileNotFoundError(f"selected clip is missing local_video: {pruned.get('clip_id')}")
     pruning = pair.get("temporal_pruning", {})
-    keep_intervals = pruning.get("keep_intervals", [])
+    side_keep_key = f"{side}_keep_intervals"
+    side_remove_key = f"{side}_remove_intervals"
+    keep_intervals = pruning.get(side_keep_key)
+    if keep_intervals is None:
+        keep_intervals = pruning.get("keep_intervals", [])
+        if isinstance(keep_intervals, dict):
+            keep_intervals = keep_intervals.get(side, [])
+    remove_intervals = pruning.get(side_remove_key)
+    if remove_intervals is None:
+        remove_intervals = pruning.get("remove_intervals", [])
+        if isinstance(remove_intervals, dict):
+            remove_intervals = remove_intervals.get(side, [])
     pair_key = _safe_filename_part(pair.get("pair_key"))
     agent = _safe_filename_part(pruned.get("agent_dir") or pruned.get("agent_name") or side)
-    output_video = Path(output_dir) / "pruned_videos" / pair_key / f"{side}_{agent}_pruned.mp4"
+    pair_dir = Path(output_dir) / "benchmark_video_pairs" / pair_key
+    pair_dir.mkdir(parents=True, exist_ok=True)
+    source_suffix = Path(source_video).suffix or ".mp4"
+    original_video = pair_dir / f"{side}_{agent}_original{source_suffix}"
+    shutil.copy2(source_video, original_video)
+    output_video = pair_dir / f"{side}_{agent}_pruned.mp4"
     materialize_pruned_video(
         source_video,
         output_video,
@@ -713,20 +1041,33 @@ def _clip_with_pruned_video(
         ffmpeg_binary=ffmpeg_binary,
     )
     pruned["source_local_video"] = source_video
+    pruned["original_local_video"] = str(original_video)
+    pruned["full_local_video"] = str(original_video)
     pruned["local_video"] = str(output_video)
     pruned["generator_media_mode"] = "pruned_video"
+    pruned["generator_local_video"] = str(output_video)
     pruned["temporal_pruning"] = {
         "side": side,
         "pair_key": pair.get("pair_key"),
         "source_local_video": source_video,
+        "original_local_video": str(original_video),
         "pruned_local_video": str(output_video),
         "method": pruning.get("method"),
         "high_similarity_threshold": pruning.get("high_similarity_threshold"),
         "keep_intervals": keep_intervals,
-        "remove_intervals": pruning.get("remove_intervals", []),
+        "remove_intervals": remove_intervals,
         "preserved_shared_intervals": pruning.get("preserved_shared_intervals", []),
-        "kept_duration_seconds": pruning.get("kept_duration_seconds"),
-        "removed_duration_seconds": pruning.get("removed_duration_seconds"),
+        "kept_duration_seconds": pruning.get(f"{side}_kept_duration_seconds", pruning.get("kept_duration_seconds")),
+        "removed_duration_seconds": pruning.get(
+            f"{side}_removed_duration_seconds",
+            pruning.get("removed_duration_seconds"),
+        ),
+    }
+    pruned["benchmark_media"] = {
+        "generator_video": str(output_video),
+        "judge_video": str(original_video),
+        "answerability_video": str(original_video),
+        "source_cache_video": source_video,
     }
     return pruned
 
@@ -806,22 +1147,34 @@ def analyze_group_relative_similarity(
     min_mean_sim: float = 0.25,
     max_mean_sim: float = 0.90,
     high_similarity_interval_threshold: float = 0.82,
+    pruning_clusters_per_video: int = 10,
     temporal_neighborhood_seconds: float | None = None,
-    preserve_shared_anchor_seconds: float = 4.0,
+    preserve_shared_anchor_seconds: float = 0.0,
     min_pruned_video_seconds: float = 8.0,
+    random_pair_first: bool = True,
     rng: random.Random | None = None,
     ffmpeg_binary: str = "ffmpeg",
     download_media: bool = False,
 ) -> dict[str, Any]:
-    """Analyze one synchronized group and sample from surviving frame-matrix pairs."""
+    """Analyze one synchronized group after optionally sampling a two-video pair first."""
 
     if selected_count != 2:
         raise ValueError("pair-ranking mode currently selects exactly two clips")
     if pairs_per_group < 1:
         raise ValueError("pairs_per_group must be positive")
+    rng = rng or random.Random()
+    original_group_size = len(group.get("clips", []))
+    sampled_source_clips = (
+        _sample_group_clips_for_pair(group, selected_count=selected_count, rng=rng)
+        if random_pair_first
+        else sorted(group.get("clips", []), key=lambda item: str(item.get("agent_dir")))
+    )
+    if len(sampled_source_clips) < selected_count:
+        raise ValueError(f"group needs at least {selected_count} clips")
+    sampled_group = {**group, "clips": sampled_source_clips}
 
     rows = group_clip_frames(
-        group,
+        sampled_group,
         output_dir,
         cache_dir=cache_dir,
         duration_seconds=duration_seconds,
@@ -849,6 +1202,7 @@ def analyze_group_relative_similarity(
         start_seconds=start_seconds,
         duration_seconds=duration_seconds,
         sample_interval_seconds=sample_interval_seconds,
+        pruning_clusters_per_video=pruning_clusters_per_video,
         high_similarity_interval_threshold=high_similarity_interval_threshold,
         temporal_neighborhood_seconds=temporal_neighborhood_seconds,
         preserve_shared_anchor_seconds=preserve_shared_anchor_seconds,
@@ -857,7 +1211,6 @@ def analyze_group_relative_similarity(
     surviving_pairs = pair_analysis["surviving_pairs"]
     if not surviving_pairs:
         raise ValueError("no video pairs survived the frame-matrix pair filters")
-    rng = rng or random.Random()
     sampled_pairs = rng.sample(surviving_pairs, min(pairs_per_group, len(surviving_pairs)))
     for sample_rank, pair in enumerate(sampled_pairs, 1):
         pair["sample_rank"] = sample_rank
@@ -881,15 +1234,22 @@ def analyze_group_relative_similarity(
             "duration_seconds": duration_seconds,
             "sample_interval_seconds": sample_interval_seconds,
         },
-        "group_size": len(rows),
+        "group_size": original_group_size,
+        "embedded_clip_count": len(rows),
         "selection": {
-            "method": "random_sample_from_frame_matrix_filtered_pairs",
+            "method": "random_sample_from_cluster_representative_filtered_pairs",
             "selected_count": selected_count,
             "pairs_per_group": pairs_per_group,
+            "random_pair_first": random_pair_first,
+            "original_group_size": original_group_size,
+            "embedded_clip_count": len(rows),
+            "sampled_source_agents": [row["clip"].get("agent_dir") for row in rows],
+            "sampled_source_users": [row["clip"].get("agent_name") for row in rows],
             "topk": topk,
             "min_topk_sim": min_topk_sim,
             "min_mean_sim": min_mean_sim,
             "max_mean_sim": max_mean_sim,
+            "pruning_clusters_per_video": pruning_clusters_per_video,
             "high_similarity_interval_threshold": high_similarity_interval_threshold,
             "temporal_neighborhood_seconds": temporal_neighborhood_seconds,
             "preserve_shared_anchor_seconds": preserve_shared_anchor_seconds,
@@ -901,11 +1261,12 @@ def analyze_group_relative_similarity(
             "selected_pair_mean_sim": selected_pair["mean_sim"],
             "selected_pair_topk_sim": selected_pair["topk_sim"],
             "rationale": (
-                "The sampler computes a frame-to-frame CLIP similarity matrix for every video "
-                "pair, filters pairs without strong anchors or with too little/too much global "
-                "overlap, removes high-similarity temporal intervals from each selected pair, "
-                "materializes pruned videos, and randomly samples from the surviving set for QA "
-                "generation."
+                "The sampler first randomly selects two videos from the synchronized group, then "
+                "takes one frame per second only from those videos, clusters each selected video "
+                "with CLIP embeddings, compares representative frames, removes uniform intervals "
+                "around frames assigned to high-similarity clusters, and materializes paired "
+                "original/pruned videos. Generators consume pruned videos; judges and "
+                "answerability gates consume the original 30-second videos."
             ),
         },
         **scoring,
@@ -1101,6 +1462,7 @@ def result_for_sampled_pair(
 
 def build_candidate_packet(group_result: dict[str, Any]) -> dict[str, Any]:
     selected_clips = group_result["selected_clips"]
+    required_users = [clip.get("agent_name") for clip in selected_clips]
     packet_id = stable_id(
         "EGOLIFE2U_GROUP_REL_CLIP",
         group_result.get("day"),
@@ -1110,18 +1472,23 @@ def build_candidate_packet(group_result: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "evidence_id": packet_id,
-        "candidate_type": "frame_matrix_filtered_random_pair_pruned_video",
+        "candidate_type": "cluster_representative_filtered_random_pair_pruned_video",
         "day": group_result.get("day"),
         "time_token": group_result.get("time_token"),
         "clip_clock": group_result.get("clip_clock"),
-        "required_users": [clip.get("agent_name") for clip in selected_clips],
+        "required_users": required_users,
+        "speaker_user": required_users[0] if required_users else None,
+        "evidence_provider_user": required_users[1] if len(required_users) > 1 else None,
         "requirement": (
-            "Sidecar candidate: all synchronized video pairs were filtered with frame-to-frame "
-            "CLIP matrices. This pair survived shared-anchor, unrelatedness, and redundancy "
-            "filters, then high-similarity temporal intervals were removed from both selected "
-            "videos while preserving a small shared anchor when configured. Generation and judges "
-            "should use the pruned videos, verify shared context, asymmetric evidence, two-video "
-            "necessity, and answerability."
+            "Sidecar candidate: each synchronized video was sampled once per second, clustered "
+            "with CLIP embeddings, and compared through representative frames. This pair survived "
+            "shared-anchor, unrelatedness, and redundancy filters, then frames assigned to "
+            "high-similarity representative clusters were removed as uniform temporal intervals "
+            "from both selected videos. Generation should use the pruned videos; judgers and "
+            "answerability gates should use the original 30-second videos. Treat "
+            "required_users[0] as the asker/speaker and required_users[1] as the evidence "
+            "provider, then verify shared context, asymmetric evidence, asker-side "
+            "insufficiency, and answerability."
         ),
         "generator_media_mode": "pruned_video",
         "clips": selected_clips,
@@ -1171,9 +1538,11 @@ def mine_group_relative_clip_candidates(
     min_mean_sim: float = 0.25,
     max_mean_sim: float = 0.90,
     high_similarity_interval_threshold: float = 0.82,
+    pruning_clusters_per_video: int = 10,
     temporal_neighborhood_seconds: float | None = None,
-    preserve_shared_anchor_seconds: float = 4.0,
+    preserve_shared_anchor_seconds: float = 0.0,
     min_pruned_video_seconds: float = 8.0,
+    random_pair_first: bool = True,
     random_seed: int | None = 42,
     ffmpeg_binary: str = "ffmpeg",
     download_media: bool = False,
@@ -1219,9 +1588,11 @@ def mine_group_relative_clip_candidates(
                 min_mean_sim=min_mean_sim,
                 max_mean_sim=max_mean_sim,
                 high_similarity_interval_threshold=high_similarity_interval_threshold,
+                pruning_clusters_per_video=pruning_clusters_per_video,
                 temporal_neighborhood_seconds=temporal_neighborhood_seconds,
                 preserve_shared_anchor_seconds=preserve_shared_anchor_seconds,
                 min_pruned_video_seconds=min_pruned_video_seconds,
+                random_pair_first=random_pair_first,
                 rng=rng,
                 ffmpeg_binary=ffmpeg_binary,
                 download_media=download_media,
@@ -1280,9 +1651,11 @@ def mine_group_relative_clip_candidates(
                 "min_mean_sim": min_mean_sim,
                 "max_mean_sim": max_mean_sim,
                 "high_similarity_interval_threshold": high_similarity_interval_threshold,
+                "pruning_clusters_per_video": pruning_clusters_per_video,
                 "temporal_neighborhood_seconds": temporal_neighborhood_seconds,
                 "preserve_shared_anchor_seconds": preserve_shared_anchor_seconds,
                 "min_pruned_video_seconds": min_pruned_video_seconds,
+                "random_pair_first": random_pair_first,
                 "random_seed": random_seed,
                 "download_media": download_media,
                 "review_dir": str(review_root),
@@ -1294,7 +1667,7 @@ def mine_group_relative_clip_candidates(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Sidecar sampler that filters frame-matrix video pairs from synchronized CLIP groups"
+        description="Sidecar sampler that filters clustered representative video pairs from synchronized CLIP groups"
     )
     parser.add_argument("--manifest", required=True, help="Input EgoLife manifest JSON")
     parser.add_argument("--output", required=True, help="Output candidate JSONL")
@@ -1324,36 +1697,47 @@ def main(argv: list[str] | None = None) -> int:
         "--min-mean-sim",
         type=float,
         default=0.25,
-        help="Reject pairs whose global frame-matrix mean is below this value",
+        help="Reject pairs whose representative-similarity mean is below this value",
     )
     parser.add_argument(
         "--max-mean-sim",
         type=float,
         default=0.90,
-        help="Reject pairs whose global frame-matrix mean is above this value",
+        help="Reject pairs whose representative-similarity mean is above this value",
     )
     parser.add_argument(
         "--high-similarity-interval-threshold",
         type=float,
         default=0.82,
-        help="Remove temporal intervals whose nearby synchronized checkpoints reach this similarity",
+        help="Remove clusters whose representative frame similarities reach this value",
+    )
+    parser.add_argument(
+        "--pruning-clusters-per-video",
+        type=int,
+        default=10,
+        help="Cluster each video's sampled frames into this many CLIP medoid groups before pruning",
     )
     parser.add_argument(
         "--temporal-neighborhood-seconds",
         type=float,
-        help="Compare each checkpoint only to checkpoints this many seconds away; omitted uses half the sample interval",
+        help="Deprecated for cluster pruning; retained for compatibility with older runs",
     )
     parser.add_argument(
         "--preserve-shared-anchor-seconds",
         type=float,
-        default=4.0,
-        help="Keep this many seconds around the strongest shared high-similarity checkpoint for shared-evidence questions",
+        default=0.0,
+        help="Optionally keep this many seconds around the strongest high-similarity representative pair",
     )
     parser.add_argument(
         "--min-pruned-video-seconds",
         type=float,
         default=8.0,
         help="Reject a pair if interval pruning leaves less than this much video",
+    )
+    parser.add_argument(
+        "--compare-all-pairs",
+        action="store_true",
+        help="Embed every video in each synchronized group and compare all pairs; slower than the default random-pair-first path",
     )
     parser.add_argument("--random-seed", type=int, default=42)
     parser.add_argument("--ffmpeg-binary", default="ffmpeg")
@@ -1379,9 +1763,11 @@ def main(argv: list[str] | None = None) -> int:
         min_mean_sim=args.min_mean_sim,
         max_mean_sim=args.max_mean_sim,
         high_similarity_interval_threshold=args.high_similarity_interval_threshold,
+        pruning_clusters_per_video=args.pruning_clusters_per_video,
         temporal_neighborhood_seconds=args.temporal_neighborhood_seconds,
         preserve_shared_anchor_seconds=args.preserve_shared_anchor_seconds,
         min_pruned_video_seconds=args.min_pruned_video_seconds,
+        random_pair_first=not args.compare_all_pairs,
         random_seed=args.random_seed,
         ffmpeg_binary=args.ffmpeg_binary,
         download_media=args.download_media,

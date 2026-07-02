@@ -118,10 +118,10 @@ def validate_qa_item(item: dict[str, Any], *, strict_review: bool = False) -> li
         missing_single = [user for user in required_users if user not in single]
         if missing_single:
             errors.append(f"single_user_answerability missing required users: {missing_single}")
-        for user in required_users:
-            text = str(single.get(user, "")).lower()
-            if "insufficient" not in text and "cannot" not in text and "not enough" not in text:
-                errors.append(f"single user {user} must be marked insufficient")
+        asker_user = required_users[0]
+        asker_text = str(single.get(asker_user, "")).lower()
+        if "insufficient" not in asker_text and "cannot" not in asker_text and "not enough" not in asker_text:
+            errors.append(f"asker/speaker user {asker_user} must be marked insufficient")
 
     combined = str(item.get("combined_answerability", "")).lower()
     if "sufficient" not in combined and "support" not in combined:
@@ -288,6 +288,7 @@ def write_human_review_sheet(jsonl_path: str | Path, sheet_path: str | Path) -> 
                 f"- Review passed: {_markdown_value(review.get('review_passed'))}",
                 f"- Judger gate passed: {_markdown_value((judger.get('gate') or {}).get('passed') if isinstance(judger.get('gate'), dict) else '')}",
                 f"- Answerability gate passed: {_markdown_value((answerability.get('gate') or {}).get('passed') if isinstance(answerability.get('gate'), dict) else '')}",
+                f"- Answerability warning: {_markdown_value((answerability.get('gate') or {}).get('warning') if isinstance(answerability.get('gate'), dict) else '')}",
                 f"- Final reason: {_markdown_value(final.get('reason'))}",
                 "",
                 "### Question",

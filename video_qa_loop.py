@@ -67,7 +67,12 @@ def existing_path(value: str | None) -> str | None:
     return None
 
 
-def clip_video_path(clip: dict[str, Any]) -> str | None:
+def clip_video_path(clip: dict[str, Any], *, media_role: str = "generator") -> str | None:
+    if media_role == "full":
+        for key in ("full_local_video", "original_local_video", "source_local_video", "local_video"):
+            if path := existing_path(clip.get(key)):
+                return path
+        return None
     return existing_path(clip.get("local_video"))
 
 
@@ -92,8 +97,9 @@ def media_for_clips(
     *,
     backend: str,
     allow_openai_video_input: bool,
+    media_role: str = "generator",
 ) -> tuple[list[str], list[str]]:
-    videos = [path for clip in clips if (path := clip_video_path(clip))]
+    videos = [path for clip in clips if (path := clip_video_path(clip, media_role=media_role))]
     images = [path for clip in clips for path in clip_image_paths(clip)]
     if clips_require_frame_inputs(clips):
         return images, []
@@ -121,6 +127,11 @@ def video_evidence_for_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
                 "local_video": local_video,
                 "local_video_exists": bool(existing_path(local_video)),
                 "source_local_video": clip.get("source_local_video"),
+                "original_local_video": clip.get("original_local_video"),
+                "original_local_video_exists": bool(existing_path(clip.get("original_local_video"))),
+                "full_local_video": clip.get("full_local_video"),
+                "full_local_video_exists": bool(existing_path(clip.get("full_local_video"))),
+                "benchmark_media": clip.get("benchmark_media"),
                 "generator_media_mode": clip.get("generator_media_mode"),
                 "temporal_pruning": clip.get("temporal_pruning"),
                 "gaze_url": clip.get("gaze_url"),
@@ -141,16 +152,22 @@ def video_evidence_for_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
 def human_audit_packet(packet: dict[str, Any]) -> dict[str, Any]:
     """Compact evidence bundle intended for manual review of one generated QA."""
 
+    required_users = list(packet.get("required_users") or [])
+    speaker_user = required_users[0] if required_users else None
+    evidence_provider_user = required_users[1] if len(required_users) > 1 else None
     return {
         "evidence_id": packet.get("evidence_id"),
-        "required_users": packet.get("required_users", []),
+        "required_users": required_users,
+        "speaker_user": speaker_user,
+        "evidence_provider_user": evidence_provider_user,
         "requirement": packet.get("requirement"),
         "source_urls": packet.get("source_urls", {}),
         "video_evidence": video_evidence_for_packet(packet),
         "review_instructions": [
             "Open each listed local_video or video_url for the required users.",
             "Check the referred_timestamps and per_user_evidence_claims against the visible content.",
-            "Verify that no single user's video alone makes the correct option obvious.",
+            "Verify that required_users[0], the asker/speaker, cannot answer from their own video alone.",
+            "If required_users[1], the evidence provider, can answer alone, confirm that this is logged in review.answerability.gate.evidence_provider_answerable.",
         ],
     }
 
@@ -183,12 +200,21 @@ def complete_generator_metadata(
     single = qa.get("single_user_answerability")
     if not isinstance(single, dict):
         single = {}
-    for user in required_users:
+    asker_user = required_users[0] if required_users else None
+    evidence_provider_user = required_users[1] if len(required_users) > 1 else None
+    for index, user in enumerate(required_users):
         text = str(single.get(user, "")).strip()
-        if not text or not any(marker in text.lower() for marker in ("insufficient", "cannot", "not enough")):
+        if index == 0 and (
+            not text or not any(marker in text.lower() for marker in ("insufficient", "cannot", "not enough"))
+        ):
             single[user] = (
-                "insufficient because this user's video alone does not provide "
-                "all visual facts needed from the other required user(s)"
+                "insufficient because the asker/speaker's video alone does not provide "
+                "the missing visual detail from the evidence provider"
+            )
+        elif index > 0 and not text:
+            single[user] = (
+                "may be sufficient because this user is the evidence provider; "
+                "answerability is logged by the evaluator"
             )
     qa["single_user_answerability"] = single
 
@@ -203,13 +229,13 @@ def complete_generator_metadata(
     if not qa.get("generator_rationale"):
         qa["generator_rationale"] = (
             "The question is framed as a natural first-person memory gap anchored "
-            "in one user's experience and answered with another user's visual evidence."
+            "in the asker/speaker's experience and answered with another user's visual evidence."
         )
     if not qa.get("why_two_users_needed"):
         qa["why_two_users_needed"] = (
-            "At least two required users are needed because one supplies the "
-            "speaker-side anchor event while another supplies a non-redundant "
-            "missing visual detail."
+            "At least two required users are needed because the first required user supplies "
+            "the speaker-side anchor event while the second required user supplies the missing "
+            "visual detail."
         )
     claims = qa.get("per_user_evidence_claims")
     if not isinstance(claims, list) or not claims:
@@ -228,8 +254,11 @@ def complete_generator_metadata(
         review = {}
     review.setdefault(
         "generator_self_check",
-        "This draft should require the combined required users' videos and should not ask what both users saw.",
+        "This draft should be unanswerable from the first required user's video alone; "
+        "the second required user's video may contain the answer as evidence-provider context.",
     )
+    review.setdefault("speaker_user", asker_user)
+    review.setdefault("evidence_provider_user", evidence_provider_user)
     review.setdefault("status", "draft")
     qa["review"] = review
     return qa
@@ -241,11 +270,13 @@ def condition_media_for_clips(
     clips: list[dict[str, Any]],
     image_paths: list[str],
     video_paths: list[str],
+    media_role: str = "generator",
 ) -> dict[str, Any]:
     return {
         "condition_id": condition.get("condition_id"),
         "condition_type": condition.get("condition_type"),
         "users": condition.get("users", []),
+        "media_role": media_role,
         "image_paths": image_paths,
         "video_paths": video_paths,
         "video_evidence": video_evidence_for_packet({"clips": clips}),
@@ -357,23 +388,60 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
             "reason": f"combined_all_users did not select correct answer {correct}",
         }
 
-    leaking = []
+    required_users = list(qa_item.get("required_users") or [])
+    asker_user = required_users[0] if required_users else None
+    evidence_provider_user = required_users[1] if len(required_users) > 1 else None
+    blocking_leaks = []
+    evidence_provider_answerable = []
     for row in evaluations:
         if row.get("condition_type") == "combined_all_users":
             continue
         choice, insufficient = parsed_choice(row.get("choice"))
         if not insufficient and choice == correct:
-            leaking.append(row.get("condition_id"))
-    if leaking:
+            condition_id = row.get("condition_id")
+            users = list(row.get("users") or [])
+            if not users and isinstance(condition_id, str) and condition_id.startswith("single_user::"):
+                users = [condition_id.split("::", 1)[1]]
+            leak = {
+                "condition_id": condition_id,
+                "users": users,
+                "choice": choice,
+                "answer_text": row.get("answer_text"),
+                "evidence_used": row.get("evidence_used"),
+            }
+            if (
+                row.get("condition_type") == "single_user"
+                and evidence_provider_user
+                and users == [evidence_provider_user]
+            ):
+                evidence_provider_answerable.append(leak)
+            else:
+                blocking_leaks.append(leak)
+    if blocking_leaks:
         return {
             "passed": False,
-            "reason": "single/subset condition answered correctly: " + ", ".join(str(item) for item in leaking),
+            "reason": "asker/subset condition answered correctly: "
+            + ", ".join(str(item.get("condition_id")) for item in blocking_leaks),
+            "blocking_single_or_subset_answerable": blocking_leaks,
+            "evidence_provider_answerable": evidence_provider_answerable,
+            "speaker_user": asker_user,
+            "evidence_provider_user": evidence_provider_user,
         }
 
-    return {
+    gate = {
         "passed": True,
         "reason": "combined videos answer correctly and all single/subset conditions are insufficient or incorrect",
+        "evidence_provider_answerable": evidence_provider_answerable,
+        "speaker_user": asker_user,
+        "evidence_provider_user": evidence_provider_user,
     }
+    if evidence_provider_answerable:
+        gate["reason"] = (
+            "combined videos answer correctly; the evidence provider alone also answered correctly "
+            "and this is logged as acceptable evidence-provider answerability"
+        )
+        gate["warning"] = "evidence_provider_alone_can_answer"
+    return gate
 
 
 def judge_gate(judge: dict[str, Any]) -> dict[str, Any]:
@@ -576,6 +644,7 @@ def run_answerability_eval(
             clips,
             backend=backend,
             allow_openai_video_input=allow_openai_video_input,
+            media_role="full",
         )
         prompt = build_answerability_prompt(qa_item, condition)
         prompt_rows.append(
@@ -592,6 +661,7 @@ def run_answerability_eval(
                     clips=clips,
                     image_paths=image_paths,
                     video_paths=video_paths,
+                    media_role="full",
                 ),
             }
         )
@@ -630,6 +700,7 @@ def run_answerability_eval(
                     clips=clips,
                     image_paths=image_paths,
                     video_paths=video_paths,
+                    media_role="full",
                 ),
             }
         )
@@ -713,6 +784,13 @@ def generate_video_qa_loop(
             clips,
             backend=backend,
             allow_openai_video_input=allow_openai_video_input,
+            media_role="generator",
+        )
+        full_image_paths, full_video_paths = media_for_clips(
+            clips,
+            backend=backend,
+            allow_openai_video_input=allow_openai_video_input,
+            media_role="full",
         )
         feedback = None
         if dry_run:
@@ -740,6 +818,9 @@ def generate_video_qa_loop(
                 "media": {
                     "image_paths": image_paths,
                     "video_paths": video_paths,
+                    "media_role": "generator",
+                    "full_image_paths": full_image_paths,
+                    "full_video_paths": full_video_paths,
                     "human_audit": human_audit_packet(packet),
                 },
                 "discovery": (
@@ -788,17 +869,19 @@ def generate_video_qa_loop(
                     "question_type": question_type,
                     "generation_mode": generation_mode,
                     "attempt": 1,
-                    "prompt": judge_prompt,
-                    "image_paths": image_paths,
-                    "video_paths": video_paths,
-                }
-            )
+                        "prompt": judge_prompt,
+                        "image_paths": full_image_paths,
+                        "video_paths": full_video_paths,
+                        "media_role": "full",
+                    }
+                )
             for condition in build_answerability_conditions(packet.get("required_users", [])):
                 condition_clips = clips_for_users(packet, condition["users"])
                 cond_images, cond_videos = media_for_clips(
                     condition_clips,
                     backend=backend,
                     allow_openai_video_input=allow_openai_video_input,
+                    media_role="full",
                 )
                 prompts.append(
                     {
@@ -810,11 +893,13 @@ def generate_video_qa_loop(
                         "prompt": build_answerability_prompt(qa, condition),
                         "image_paths": cond_images,
                         "video_paths": cond_videos,
+                        "media_role": "full",
                         "condition_media": condition_media_for_clips(
                             condition=condition,
                             clips=condition_clips,
                             image_paths=cond_images,
                             video_paths=cond_videos,
+                            media_role="full",
                         ),
                     }
                 )
@@ -824,6 +909,7 @@ def generate_video_qa_loop(
                         clips=condition_clips,
                         image_paths=cond_images,
                         video_paths=cond_videos,
+                        media_role="full",
                     )
                 )
             qa["generation_trace"] = [dry_trace]
@@ -846,6 +932,9 @@ def generate_video_qa_loop(
                 "media": {
                     "image_paths": image_paths,
                     "video_paths": video_paths,
+                    "media_role": "generator",
+                    "full_image_paths": full_image_paths,
+                    "full_video_paths": full_video_paths,
                     "human_audit": human_audit_packet(packet),
                 },
                 "discovery": {},
@@ -1016,8 +1105,9 @@ def generate_video_qa_loop(
                     "generation_mode": generation_mode,
                     "attempt": attempt,
                     "prompt": judge_prompt,
-                    "image_paths": image_paths,
-                    "video_paths": video_paths,
+                    "image_paths": full_image_paths,
+                    "video_paths": full_video_paths,
+                    "media_role": "full",
                 }
             )
             stage_start = time.time()
@@ -1025,10 +1115,10 @@ def generate_video_qa_loop(
                 "qa_stage_start "
                 f"stage=judge evidence_id={packet.get('evidence_id')} "
                 f"qa_id={qa.get('qa_id')} attempt={attempt} "
-                f"images={len(image_paths)} videos={len(video_paths)}",
+                f"images={len(full_image_paths)} videos={len(full_video_paths)}",
                 flush=True,
             )
-            raw_judge = runner.generate(judge_prompt, image_paths=image_paths, video_paths=video_paths)
+            raw_judge = runner.generate(judge_prompt, image_paths=full_image_paths, video_paths=full_video_paths)
             print(
                 "qa_stage_done "
                 f"stage=judge evidence_id={packet.get('evidence_id')} "

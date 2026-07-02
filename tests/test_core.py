@@ -25,8 +25,12 @@ from egolife_two_user_qa.clip_exclusive_mining import (
     summarize_exclusiveness,
 )
 from egolife_two_user_qa.group_relative_clip_sampling import (
+    analyze_group_relative_similarity,
+    clustered_temporal_similarity_pruning,
+    materialize_pruned_video,
     mine_group_relative_clip_candidates,
     relative_frame_pruning,
+    selected_clips_for_pair_from_rows,
     temporal_similarity_pruning,
 )
 from egolife_two_user_qa.evidence import (
@@ -647,6 +651,78 @@ class GroupRelativeClipSamplingTests(unittest.TestCase):
         self.assertEqual(seen_tokens, expected_tokens[:2])
         self.assertNotEqual(seen_tokens, time_tokens[:2])
 
+    def test_analyze_group_relative_embeds_only_random_pair_by_default(self) -> None:
+        group = {
+            "day": "DAY1",
+            "time_token": "11100000",
+            "clip_clock": "11:10:00.00",
+            "clips": [
+                {
+                    "agent_dir": f"A{index}_USER",
+                    "agent_name": f"User {index}",
+                    "agent_id": f"A{index}",
+                    "local_video": f"video_{index}.mp4",
+                }
+                for index in range(6)
+            ],
+        }
+        seen_group_sizes = []
+
+        def fake_group_clip_frames(sampled_group, *args, **kwargs):
+            seen_group_sizes.append(len(sampled_group["clips"]))
+            rows = []
+            for clip in sampled_group["clips"]:
+                rows.append(
+                    {
+                        "user": clip["agent_name"],
+                        "clip": dict(clip),
+                        "frames": [
+                            {"path": f"{clip['agent_dir']}_0.jpg", "timestamp_seconds": 0.0},
+                            {"path": f"{clip['agent_dir']}_1.jpg", "timestamp_seconds": 1.0},
+                        ],
+                    }
+                )
+            return rows
+
+        class FakeEncoder:
+            model_id = "fake-clip"
+
+            def __init__(self):
+                self.calls = []
+
+            def encode(self, image_paths):
+                self.calls.append(list(image_paths))
+                if len(self.calls) == 1:
+                    return [[1.0, 0.0], [1.0, 0.0]]
+                return [[1.0, 0.0], [1.0, 0.0]]
+
+        encoder = FakeEncoder()
+
+        with (
+            patch("egolife_two_user_qa.group_relative_clip_sampling.group_clip_frames", side_effect=fake_group_clip_frames),
+            patch(
+                "egolife_two_user_qa.group_relative_clip_sampling.selected_clips_for_pair_from_rows",
+                side_effect=lambda rows, pair, **kwargs: [rows[0]["clip"], rows[1]["clip"]],
+            ),
+        ):
+            result = analyze_group_relative_similarity(
+                group,
+                output_dir="unused",
+                cache_dir="unused",
+                encoder=encoder,
+                rng=random.Random(7),
+                min_topk_sim=0.1,
+                min_mean_sim=-1.0,
+                max_mean_sim=1.0,
+                min_pruned_video_seconds=1.0,
+            )
+
+        self.assertEqual(seen_group_sizes, [2])
+        self.assertEqual(len(encoder.calls), 2)
+        self.assertEqual(result["group_size"], 6)
+        self.assertEqual(result["embedded_clip_count"], 2)
+        self.assertTrue(result["selection"]["random_pair_first"])
+
     def test_temporal_similarity_pruning_removes_high_similarity_intervals(self) -> None:
         left_frames = [
             {"path": "left_0.jpg", "timestamp_seconds": 0.0},
@@ -709,6 +785,135 @@ class GroupRelativeClipSamplingTests(unittest.TestCase):
         self.assertTrue(pruning["passed"])
         self.assertEqual(pruning["preserved_shared_intervals"], [[0.0, 0.75]])
         self.assertEqual(pruning["remove_intervals"], [[0.75, 2.25]])
+
+    def test_temporal_similarity_pruning_rejects_when_nothing_is_removed(self) -> None:
+        frames = [
+            {"path": "frame_0.jpg", "timestamp_seconds": 0.0},
+            {"path": "frame_1.jpg", "timestamp_seconds": 1.0},
+        ]
+
+        pruning = temporal_similarity_pruning(
+            [[0.2, 0.1], [0.1, 0.3]],
+            frames,
+            frames,
+            start_seconds=0.0,
+            duration_seconds=2.0,
+            sample_interval_seconds=1.0,
+            high_similarity_threshold=0.82,
+            preserve_shared_anchor_seconds=0.0,
+            min_pruned_video_seconds=1.0,
+        )
+
+        self.assertFalse(pruning["passed"])
+        self.assertEqual(pruning["remove_intervals"], [])
+        self.assertEqual(pruning["keep_intervals"], [[0.0, 2.0]])
+
+    def test_clustered_temporal_pruning_removes_frames_assigned_to_matching_centroids(self) -> None:
+        left_frames = [
+            {"path": "left_0.jpg", "timestamp_seconds": 0.0},
+            {"path": "left_1.jpg", "timestamp_seconds": 1.0},
+            {"path": "left_2.jpg", "timestamp_seconds": 2.0},
+            {"path": "left_3.jpg", "timestamp_seconds": 3.0},
+        ]
+        right_frames = [
+            {"path": "right_0.jpg", "timestamp_seconds": 0.0},
+            {"path": "right_1.jpg", "timestamp_seconds": 1.0},
+            {"path": "right_2.jpg", "timestamp_seconds": 2.0},
+            {"path": "right_3.jpg", "timestamp_seconds": 3.0},
+        ]
+
+        pruning = clustered_temporal_similarity_pruning(
+            left_frames,
+            right_frames,
+            [[1.0, 0.0], [0.99, 0.01], [0.0, 1.0], [0.01, 0.99]],
+            [[1.0, 0.0], [0.99, 0.01], [-1.0, 0.0], [-0.99, 0.01]],
+            start_seconds=0.0,
+            duration_seconds=4.0,
+            sample_interval_seconds=1.0,
+            cluster_count=2,
+            high_similarity_threshold=0.95,
+            min_pruned_video_seconds=1.0,
+        )
+
+        self.assertTrue(pruning["passed"])
+        self.assertEqual(pruning["method"], "cluster_representative_high_similarity_interval_pruning")
+        self.assertEqual(pruning["left_marked_frame_indices"], [0, 1])
+        self.assertEqual(pruning["right_marked_frame_indices"], [0, 1])
+        self.assertEqual(pruning["left_remove_intervals"], [[0.0, 1.5]])
+        self.assertEqual(pruning["right_remove_intervals"], [[0.0, 1.5]])
+        self.assertEqual(pruning["left_keep_intervals"], [[1.5, 4.0]])
+        self.assertEqual(pruning["high_similarity_representative_pair_count"], 1)
+
+    def test_materialize_pruned_video_overwrites_existing_output(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            source = root / "source.mp4"
+            output = root / "pruned.mp4"
+            source.write_bytes(b"source")
+            output.write_bytes(b"stale full video")
+
+            def fake_run(args, check):
+                Path(args[-1]).write_bytes(b"new pruned video")
+
+            with (
+                patch("egolife_two_user_qa.group_relative_clip_sampling.shutil.which", return_value="ffmpeg"),
+                patch("egolife_two_user_qa.group_relative_clip_sampling.subprocess.run", side_effect=fake_run),
+            ):
+                materialize_pruned_video(source, output, [[0.0, 1.0]])
+
+            content = output.read_bytes()
+
+        self.assertEqual(content, b"new pruned video")
+
+    def test_selected_clips_save_original_and_pruned_videos_together(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            left_source = root / "left_full.mp4"
+            right_source = root / "right_full.mp4"
+            left_source.write_bytes(b"left original")
+            right_source.write_bytes(b"right original")
+            pair = {
+                "pair_key": "0-1",
+                "left_index": 0,
+                "right_index": 1,
+                "temporal_pruning": {
+                    "method": "cluster_representative_high_similarity_interval_pruning",
+                    "high_similarity_threshold": 0.82,
+                    "left_keep_intervals": [[0.0, 1.0]],
+                    "right_keep_intervals": [[1.0, 2.0]],
+                    "left_remove_intervals": [[1.0, 2.0]],
+                    "right_remove_intervals": [[0.0, 1.0]],
+                    "left_kept_duration_seconds": 1.0,
+                    "right_kept_duration_seconds": 1.0,
+                    "left_removed_duration_seconds": 1.0,
+                    "right_removed_duration_seconds": 1.0,
+                },
+            }
+            rows = [
+                {"clip": {"agent_dir": "A1_JAKE", "agent_name": "Jake", "local_video": str(left_source)}},
+                {"clip": {"agent_dir": "A2_ALICE", "agent_name": "Alice", "local_video": str(right_source)}},
+            ]
+
+            def fake_run(args, check):
+                Path(args[-1]).write_bytes(b"pruned")
+
+            with (
+                patch("egolife_two_user_qa.group_relative_clip_sampling.shutil.which", return_value="ffmpeg"),
+                patch("egolife_two_user_qa.group_relative_clip_sampling.subprocess.run", side_effect=fake_run),
+            ):
+                selected = selected_clips_for_pair_from_rows(
+                    rows,
+                    pair,
+                    output_dir=root / "bench",
+                    ffmpeg_binary="ffmpeg",
+                )
+
+        for clip in selected:
+            self.assertTrue(Path(clip["local_video"]).exists())
+            self.assertTrue(Path(clip["full_local_video"]).exists())
+            self.assertEqual(Path(clip["local_video"]).parent, Path(clip["full_local_video"]).parent)
+            self.assertEqual(clip["benchmark_media"]["generator_video"], clip["local_video"])
+            self.assertEqual(clip["benchmark_media"]["judge_video"], clip["full_local_video"])
 
     def test_relative_frame_pruning_keeps_mid_band_and_drops_near_duplicates(self) -> None:
         left_frames = [
@@ -855,6 +1060,20 @@ class SchemaTests(unittest.TestCase):
     def test_validate_valid_item(self) -> None:
         self.assertEqual(validate_qa_item(self.valid_item(), strict_review=True), [])
 
+    def test_validate_allows_evidence_provider_single_user_sufficient(self) -> None:
+        item = self.valid_item()
+        item["single_user_answerability"]["Alice"] = "sufficient because Alice sees the missing detail"
+
+        self.assertEqual(validate_qa_item(item, strict_review=True), [])
+
+    def test_validate_requires_asker_single_user_insufficient(self) -> None:
+        item = self.valid_item()
+        item["single_user_answerability"]["Jake"] = "sufficient because Jake can answer alone"
+
+        errors = validate_qa_item(item)
+
+        self.assertTrue(any("asker/speaker user Jake" in error for error in errors))
+
     def test_validate_requires_two_users(self) -> None:
         item = self.valid_item()
         item["required_users"] = ["Jake"]
@@ -979,6 +1198,39 @@ class VideoFirstTests(unittest.TestCase):
         self.assertEqual(image_paths, [])
         self.assertEqual(video_paths, [str(video_path)])
 
+    def test_full_media_role_uses_original_video_for_gates(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            pruned_path = root / "source_pruned.mp4"
+            full_path = root / "source_original.mp4"
+            pruned_path.write_bytes(b"pruned video")
+            full_path.write_bytes(b"full video")
+            clips = [
+                {
+                    "agent_name": "Jake",
+                    "local_video": str(pruned_path),
+                    "full_local_video": str(full_path),
+                    "generator_media_mode": "pruned_video",
+                }
+            ]
+
+            generator_images, generator_videos = media_for_clips(
+                clips,
+                backend="transformers-local",
+                allow_openai_video_input=True,
+            )
+            full_images, full_videos = media_for_clips(
+                clips,
+                backend="transformers-local",
+                allow_openai_video_input=True,
+                media_role="full",
+            )
+
+        self.assertEqual(generator_images, [])
+        self.assertEqual(generator_videos, [str(pruned_path)])
+        self.assertEqual(full_images, [])
+        self.assertEqual(full_videos, [str(full_path)])
+
     def test_normalize_video_kwargs_collapses_fps_list(self) -> None:
         self.assertEqual(normalize_video_kwargs({"fps": [1.0, 1.0]})["fps"], 1.0)
         self.assertEqual(normalize_video_kwargs({"fps": []})["fps"], 1.0)
@@ -1026,6 +1278,9 @@ class VideoFirstTests(unittest.TestCase):
         self.assertIn("single_user_answerability", prompt)
         self.assertIn("combined_answerability", prompt)
         self.assertIn("why_two_users_needed", prompt)
+        self.assertIn("required_users[0] is the asker/speaker", prompt)
+        self.assertIn("required_users[1] is the evidence provider", prompt)
+        self.assertIn("Do not reject merely because required_users[1] alone can answer", prompt)
 
     def test_video_generation_prompt_discourages_fixed_question_templates(self) -> None:
         packet = {
@@ -1343,8 +1598,32 @@ class VideoFirstTests(unittest.TestCase):
         self.assertIn("sufficient", qa["combined_answerability"])
         self.assertEqual(validate_qa_item(qa), [])
 
-    def test_answerability_gate_requires_combined_correct_and_singles_not_correct(self) -> None:
-        qa = {"correct": "A"}
+    def test_complete_generator_metadata_does_not_force_provider_insufficient(self) -> None:
+        packet = {"required_users": ["Jake", "Alice"]}
+        qa = {
+            "qa_id": "Q1",
+            "question": "What was still on the counter?",
+            "options": ["a mug", "a book", "a phone", "a bag", "a key"],
+            "correct": "A",
+            "answer": "a mug",
+            "required_users": ["Jake", "Alice"],
+            "single_user_answerability": {
+                "Jake": "insufficient because Jake cannot see the counter",
+                "Alice": "sufficient because Alice sees the mug on the counter",
+            },
+            "combined_answerability": "sufficient because Alice provides the missing detail",
+            "evidence": [],
+            "model_id": "dry-run",
+            "source_urls": {},
+        }
+
+        complete_generator_metadata(qa, packet=packet, question_type="commonality")
+
+        self.assertIn("sufficient", qa["single_user_answerability"]["Alice"])
+        self.assertEqual(validate_qa_item(qa), [])
+
+    def test_answerability_gate_requires_combined_correct_and_asker_not_correct(self) -> None:
+        qa = {"correct": "A", "required_users": ["Jake", "Alice"]}
         passed = answerability_gate(
             qa,
             [
@@ -1357,11 +1636,35 @@ class VideoFirstTests(unittest.TestCase):
         failed = answerability_gate(
             qa,
             [
-                {"condition_id": "single_user::Jake", "condition_type": "single_user", "choice": "A"},
+                {"condition_id": "single_user::Jake", "condition_type": "single_user", "users": ["Jake"], "choice": "A"},
                 {"condition_id": "combined_all_users::Jake+Alice", "condition_type": "combined_all_users", "choice": "A"},
             ],
         )
         self.assertFalse(failed["passed"])
+
+    def test_answerability_gate_accepts_evidence_provider_alone_correct_with_warning(self) -> None:
+        qa = {"correct": "A", "required_users": ["Jake", "Alice"]}
+
+        gate = answerability_gate(
+            qa,
+            [
+                {"condition_id": "single_user::Jake", "condition_type": "single_user", "users": ["Jake"], "choice": "insufficient"},
+                {
+                    "condition_id": "single_user::Alice",
+                    "condition_type": "single_user",
+                    "users": ["Alice"],
+                    "choice": "A",
+                    "answer_text": "the correct answer",
+                    "evidence_used": "Alice sees the needed detail",
+                },
+                {"condition_id": "combined_all_users::Jake+Alice", "condition_type": "combined_all_users", "users": ["Jake", "Alice"], "choice": "A"},
+            ],
+        )
+
+        self.assertTrue(gate["passed"])
+        self.assertEqual(gate["warning"], "evidence_provider_alone_can_answer")
+        self.assertEqual(gate["evidence_provider_user"], "Alice")
+        self.assertEqual(gate["evidence_provider_answerable"][0]["condition_id"], "single_user::Alice")
 
     def test_judge_gate_requires_each_structured_check_to_pass(self) -> None:
         checks = {

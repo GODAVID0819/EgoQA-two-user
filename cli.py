@@ -16,6 +16,7 @@ from .clip_gap_demo import (
     run_random_clip_gap_trials,
 )
 from .clip_exclusive_mining import mine_clip_exclusive_candidates
+from .group_relative_clip_sampling import mine_group_relative_clip_candidates
 from .observations import observe_clips
 from .qa_pipeline import add_runner_args, validate_outputs
 from .review_media import materialize_review_videos
@@ -256,6 +257,36 @@ def main(argv: list[str] | None = None) -> int:
     clip_exclusive.add_argument("--use-existing-frames", action="store_true")
     clip_exclusive.add_argument("--preserve-order", action="store_true")
 
+    benchmark = sub.add_parser(
+        "prepare_clip_pruned_benchmark",
+        help="Prepare paired original/pruned CLIP-guided video-pair evidence packets",
+    )
+    benchmark.add_argument("--manifest", required=True)
+    benchmark.add_argument("--output", required=True)
+    benchmark.add_argument("--output-dir", required=True)
+    benchmark.add_argument("--cache-dir", default=".cache/egolife_two_user_qa")
+    benchmark.add_argument("--model-id", default="openai/clip-vit-base-patch32")
+    benchmark.add_argument("--target-count", type=int, default=100)
+    benchmark.add_argument("--max-groups", type=int)
+    benchmark.add_argument("--min-group-size", type=int, default=6)
+    benchmark.add_argument("--duration-seconds", type=float, default=30.0)
+    benchmark.add_argument("--sample-interval-seconds", type=float, default=1.0)
+    benchmark.add_argument("--start-seconds", type=float, default=0.0)
+    benchmark.add_argument("--pairs-per-group", type=int, default=1)
+    benchmark.add_argument("--topk", type=int, default=3)
+    benchmark.add_argument("--min-topk-sim", type=float, default=0.65)
+    benchmark.add_argument("--min-mean-sim", type=float, default=0.25)
+    benchmark.add_argument("--max-mean-sim", type=float, default=0.90)
+    benchmark.add_argument("--high-similarity-interval-threshold", type=float, default=0.82)
+    benchmark.add_argument("--pruning-clusters-per-video", type=int, default=10)
+    benchmark.add_argument("--preserve-shared-anchor-seconds", type=float, default=0.0)
+    benchmark.add_argument("--min-pruned-video-seconds", type=float, default=8.0)
+    benchmark.add_argument("--compare-all-pairs", action="store_true")
+    benchmark.add_argument("--random-seed", type=int, default=42)
+    benchmark.add_argument("--ffmpeg-binary", default="ffmpeg")
+    benchmark.add_argument("--download-media", action="store_true")
+    benchmark.add_argument("--review-dir")
+
     video_gen = sub.add_parser("generate_video_qa_loop", help="Generate video-first QA with judge/eval retry loop")
     video_gen.add_argument("--evidence", required=True)
     video_gen.add_argument("--output", required=True)
@@ -425,6 +456,36 @@ def main(argv: list[str] | None = None) -> int:
             preserve_order=args.preserve_order,
         )
         print(f"wrote {len(rows)} CLIP-exclusive evidence packets to {args.output}")
+        return 0
+    if args.command == "prepare_clip_pruned_benchmark":
+        rows = mine_group_relative_clip_candidates(
+            manifest_path=args.manifest,
+            output_path=args.output,
+            output_dir=args.output_dir,
+            cache_dir=args.cache_dir,
+            model_id=args.model_id,
+            target_count=args.target_count,
+            max_groups=args.max_groups,
+            min_group_size=args.min_group_size,
+            duration_seconds=args.duration_seconds,
+            sample_interval_seconds=args.sample_interval_seconds,
+            start_seconds=args.start_seconds,
+            pairs_per_group=args.pairs_per_group,
+            topk=args.topk,
+            min_topk_sim=args.min_topk_sim,
+            min_mean_sim=args.min_mean_sim,
+            max_mean_sim=args.max_mean_sim,
+            high_similarity_interval_threshold=args.high_similarity_interval_threshold,
+            pruning_clusters_per_video=args.pruning_clusters_per_video,
+            preserve_shared_anchor_seconds=args.preserve_shared_anchor_seconds,
+            min_pruned_video_seconds=args.min_pruned_video_seconds,
+            random_pair_first=not args.compare_all_pairs,
+            random_seed=args.random_seed,
+            ffmpeg_binary=args.ffmpeg_binary,
+            download_media=args.download_media,
+            review_dir=args.review_dir,
+        )
+        print(f"wrote {len(rows)} CLIP-pruned benchmark evidence packets to {args.output}")
         return 0
     if args.command == "generate_video_qa_loop":
         rows = generate_video_qa_loop(
