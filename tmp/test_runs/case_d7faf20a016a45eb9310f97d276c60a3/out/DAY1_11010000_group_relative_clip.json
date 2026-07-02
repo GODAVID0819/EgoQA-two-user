@@ -1,0 +1,38 @@
+{
+  "day": "DAY1",
+  "time_token": "11010000",
+  "clip_clock": "11010000",
+  "model_id": "fake-clip",
+  "window": {},
+  "group_size": 2,
+  "selection": {},
+  "clip_scores": [],
+  "ranked_by_group_similarity": [],
+  "similarity_matrix": [],
+  "pair_filter": {},
+  "pair_scores": [],
+  "surviving_pairs": [],
+  "sampled_pairs": [],
+  "group_clips": [
+    {
+      "day": "DAY1",
+      "time_token": "11010000",
+      "clip_clock": "11010000",
+      "agent_dir": "A0_11010000",
+      "agent_name": "User 0",
+      "agent_id": "user_0",
+      "video_path": "A0/DAY1/11010000.mp4"
+    },
+    {
+      "day": "DAY1",
+      "time_token": "11010000",
+      "clip_clock": "11010000",
+      "agent_dir": "A1_11010000",
+      "agent_name": "User 1",
+      "agent_id": "user_1",
+      "video_path": "A1/DAY1/11010000.mp4"
+    }
+  ],
+  "selected_clips": [],
+  "review_bundle": "C:\\Users\\haoya\\OneDrive\\Desktop\\Long context video understanding ARVR\\Long-video-understanding\\egolife_two_user_qa\\tmp\\test_runs\\case_d7faf20a016a45eb9310f97d276c60a3\\review"
+}

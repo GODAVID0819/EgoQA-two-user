@@ -268,7 +268,8 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--model-id", default="openai/clip-vit-base-patch32")
     benchmark.add_argument("--target-count", type=int, default=100)
     benchmark.add_argument("--max-groups", type=int)
-    benchmark.add_argument("--min-group-size", type=int, default=6)
+    benchmark.add_argument("--min-group-size", type=int, default=2)
+    benchmark.add_argument("--selected-count", type=int, default=2)
     benchmark.add_argument("--duration-seconds", type=float, default=30.0)
     benchmark.add_argument("--sample-interval-seconds", type=float, default=1.0)
     benchmark.add_argument("--start-seconds", type=float, default=0.0)
@@ -278,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--min-mean-sim", type=float, default=0.25)
     benchmark.add_argument("--max-mean-sim", type=float, default=0.90)
     benchmark.add_argument("--high-similarity-interval-threshold", type=float, default=0.82)
-    benchmark.add_argument("--pruning-clusters-per-video", type=int, default=10)
+    benchmark.add_argument("--pruning-clusters-per-video", type=int, default=12)
     benchmark.add_argument("--preserve-shared-anchor-seconds", type=float, default=0.0)
     benchmark.add_argument("--min-pruned-video-seconds", type=float, default=8.0)
     benchmark.add_argument("--compare-all-pairs", action="store_true")
@@ -467,6 +468,7 @@ def main(argv: list[str] | None = None) -> int:
             target_count=args.target_count,
             max_groups=args.max_groups,
             min_group_size=args.min_group_size,
+            selected_count=args.selected_count,
             duration_seconds=args.duration_seconds,
             sample_interval_seconds=args.sample_interval_seconds,
             start_seconds=args.start_seconds,

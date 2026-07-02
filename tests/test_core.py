@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from egolife_two_user_qa.candidate_mining import mine_candidates
-from egolife_two_user_qa.cli import preflight_cached_evidence
+from egolife_two_user_qa.cli import main as cli_main, preflight_cached_evidence
 from egolife_two_user_qa.clip_gap_demo import (
     TransformersClipEncoder,
     cluster_embedding_medoids,
@@ -589,6 +589,46 @@ class ClipGapDemoTests(unittest.TestCase):
 
 
 class GroupRelativeClipSamplingTests(unittest.TestCase):
+    def test_prepare_clip_pruned_benchmark_cli_passes_selected_count(self) -> None:
+        with patch("egolife_two_user_qa.cli.mine_group_relative_clip_candidates", return_value=[]) as mine:
+            exit_code = cli_main(
+                [
+                    "prepare_clip_pruned_benchmark",
+                    "--manifest",
+                    "manifest.json",
+                    "--output",
+                    "evidence.jsonl",
+                    "--output-dir",
+                    "out",
+                    "--selected-count",
+                    "2",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(mine.call_args.kwargs["selected_count"], 2)
+
+    def test_prepare_clip_pruned_benchmark_cli_defaults_to_random_pair_and_twelve_clusters(self) -> None:
+        with patch("egolife_two_user_qa.cli.mine_group_relative_clip_candidates", return_value=[]) as mine:
+            exit_code = cli_main(
+                [
+                    "prepare_clip_pruned_benchmark",
+                    "--manifest",
+                    "manifest.json",
+                    "--output",
+                    "evidence.jsonl",
+                    "--output-dir",
+                    "out",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(mine.call_args.kwargs["target_count"], 100)
+        self.assertEqual(mine.call_args.kwargs["min_group_size"], 2)
+        self.assertEqual(mine.call_args.kwargs["selected_count"], 2)
+        self.assertEqual(mine.call_args.kwargs["pruning_clusters_per_video"], 12)
+        self.assertTrue(mine.call_args.kwargs["random_pair_first"])
+
     def test_mine_group_relative_randomizes_groups_before_max_groups(self) -> None:
         with workspace_temp_dir() as tmp:
             root = Path(tmp)
@@ -726,6 +766,8 @@ class GroupRelativeClipSamplingTests(unittest.TestCase):
         self.assertEqual(result["group_size"], 6)
         self.assertEqual(result["embedded_clip_count"], 2)
         self.assertTrue(result["selection"]["random_pair_first"])
+        self.assertEqual(result["selection"]["pruning_clusters_per_video"], 12)
+        self.assertEqual(result["pair_filter"]["pruning_clusters_per_video"], 12)
 
     def test_temporal_similarity_pruning_removes_high_similarity_intervals(self) -> None:
         left_frames = [

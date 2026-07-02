@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=a100
-#SBATCH --mem=80G
-#SBATCH --time=12:00:00
+#SBATCH --mem=64G
+#SBATCH --time=24:00:00
 #SBATCH --output=hpc/logs/%x_%j.out
 #SBATCH --error=hpc/logs/%x_%j.err
 #SBATCH --mail-type=END,FAIL
@@ -20,12 +20,19 @@ OUTDIR="${EGOLIFE2U_OUTPUT_ROOT:-egolife_two_user_qa/outputs/clip_pruned_benchma
 CACHE_DIR="${EGOLIFE2U_CACHE_DIR:-/scratch/${USER}/egolife_two_user_qa_cache}"
 
 TARGET_COUNT="${EGOLIFE2U_TARGET_COUNT:-100}"
-MAX_GROUPS="${EGOLIFE2U_MAX_GROUPS:-600}"
+EVAL_PACKET_COUNT="${EGOLIFE2U_EVAL_PACKET_COUNT:-${TARGET_COUNT}}"
+MAX_GROUPS="${EGOLIFE2U_MAX_GROUPS:-1500}"
+SELECTED_COUNT="${EGOLIFE2U_SELECTED_COUNT:-2}"
 CLIP_MODEL_ID="${CLIP_MODEL_ID:-openai/clip-vit-base-patch32}"
+QWEN_MODEL_ID="${QWEN_MODEL_ID:-Qwen/Qwen3-VL-8B-Instruct}"
+GENERATION_MODE="${GENERATION_MODE:-baseline}"
+MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
+MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-1536}"
+RESUME_GENERATION="${RESUME_GENERATION:-0}"
 
 CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-1}"
 CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/egolife_two_user_qa/hpc/cuda.py}"
-CUDA_KEEPER_THRESHOLD="${CUDA_KEEPER_THRESHOLD:-70}"
+CUDA_KEEPER_THRESHOLD="${CUDA_KEEPER_THRESHOLD:-60}"
 CUDA_KEEPER_GPUS="${CUDA_KEEPER_GPUS:-0}"
 CUDA_KEEPER_RESERVE="${CUDA_KEEPER_RESERVE:-8.0}"
 CUDA_KEEPER_AUTO_INSTALL="${CUDA_KEEPER_AUTO_INSTALL:-1}"
@@ -61,8 +68,18 @@ echo "date_start=$(date --iso-8601=seconds)"
 echo "outdir=${OUTDIR}"
 echo "cache_dir=${CACHE_DIR}"
 echo "target_count=${TARGET_COUNT}"
+echo "eval_packet_count=${EVAL_PACKET_COUNT}"
 echo "max_groups=${MAX_GROUPS}"
+echo "selected_count=${SELECTED_COUNT}"
 echo "clip_model_id=${CLIP_MODEL_ID}"
+echo "qwen_model_id=${QWEN_MODEL_ID}"
+echo "generation_mode=${GENERATION_MODE}"
+echo "max_attempts=${MAX_ATTEMPTS}"
+echo "max_new_tokens=${MAX_NEW_TOKENS}"
+echo "resume_generation=${RESUME_GENERATION}"
+echo "benchmark_contract=randomly_sample_${SELECTED_COUNT}_synchronized_videos_then_clip_prune_generator_media"
+echo "frame_sampling=one_frame_per_second_for_30_seconds_per_selected_video"
+echo "media_routing=generator_uses_pruned_videos;judges_and_answerability_use_full_30s_originals"
 echo "cuda_keeper_enable=${CUDA_KEEPER_ENABLE}"
 echo "cuda_keeper_script=${CUDA_KEEPER_SCRIPT}"
 echo "cuda_keeper_threshold=${CUDA_KEEPER_THRESHOLD}"
@@ -138,26 +155,118 @@ python -m egolife_two_user_qa prepare_clip_pruned_benchmark \
   --model-id "${CLIP_MODEL_ID}" \
   --target-count "${TARGET_COUNT}" \
   --max-groups "${MAX_GROUPS}" \
-  --min-group-size 6 \
+  --min-group-size 2 \
+  --selected-count "${SELECTED_COUNT}" \
   --duration-seconds 30 \
   --sample-interval-seconds 1.0 \
   --start-seconds 0 \
   --pairs-per-group 1 \
   --topk 3 \
-  --min-topk-sim 0.65 \
-  --min-mean-sim 0.25 \
-  --max-mean-sim 0.90 \
-  --high-similarity-interval-threshold 0.82 \
-  --pruning-clusters-per-video 10 \
+  --min-topk-sim 0.01 \
+  --min-mean-sim 0.01 \
+  --max-mean-sim 0.99 \
+  --high-similarity-interval-threshold 0.6 \
+  --pruning-clusters-per-video 12 \
   --preserve-shared-anchor-seconds 0.0 \
-  --min-pruned-video-seconds 8 \
+  --min-pruned-video-seconds 1 \
   --random-seed 42 \
   --download-media
+
+resume_args=()
+if [[ "${RESUME_GENERATION}" == "1" ]]; then
+  resume_args+=(--resume)
+fi
+
+QA_DIR="${OUTDIR}/${GENERATION_MODE}"
+mkdir -p "${QA_DIR}"
+
+echo "stage=generate_video_qa_loop"
+python -m egolife_two_user_qa generate_video_qa_loop \
+  --evidence "${OUTDIR}/evidence_pruned_pairs.jsonl" \
+  --output "${QA_DIR}/qa_mcq.jsonl" \
+  --prompts-output "${QA_DIR}/video_first_prompts.jsonl" \
+  --rejected-output "${QA_DIR}/qa_mcq.rejected.jsonl" \
+  --intermediate-output "${QA_DIR}/qa_mcq.intermediate.jsonl" \
+  --target-count "${EVAL_PACKET_COUNT}" \
+  --max-attempts "${MAX_ATTEMPTS}" \
+  --backend transformers-local \
+  --model-id "${QWEN_MODEL_ID}" \
+  --dtype bfloat16 \
+  --max-new-tokens "${MAX_NEW_TOKENS}" \
+  --generation-mode "${GENERATION_MODE}" \
+  --fixed-question-type-schedule \
+  "${resume_args[@]}"
+
+echo "stage=verify_generation_traces"
+python - <<PY
+import json
+from pathlib import Path
+
+target = int("${EVAL_PACKET_COUNT}")
+evidence_path = Path("${OUTDIR}/evidence_pruned_pairs.jsonl")
+prompts_path = Path("${QA_DIR}/video_first_prompts.jsonl")
+intermediate_path = Path("${QA_DIR}/qa_mcq.intermediate.jsonl")
+accepted_path = Path("${QA_DIR}/qa_mcq.jsonl")
+rejected_path = Path("${QA_DIR}/qa_mcq.rejected.jsonl")
+
+def count_lines(path):
+    if not path.exists():
+        return 0
+    with path.open("r", encoding="utf-8") as f:
+        return sum(1 for line in f if line.strip())
+
+def count_generation_prompts(path):
+    if not path.exists():
+        return 0
+    total = 0
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("stage") == "generation":
+                total += 1
+    return total
+
+evidence_count = count_lines(evidence_path)
+generation_prompt_count = count_generation_prompts(prompts_path)
+intermediate_count = count_lines(intermediate_path)
+accepted_count = count_lines(accepted_path)
+rejected_count = count_lines(rejected_path)
+
+print(f"trace_check evidence_count={evidence_count}")
+print(f"trace_check generation_prompt_count={generation_prompt_count}")
+print(f"trace_check intermediate_count={intermediate_count}")
+print(f"trace_check accepted_count={accepted_count}")
+print(f"trace_check rejected_count={rejected_count}")
+
+if evidence_count < target:
+    raise SystemExit(f"expected at least {target} evidence packets, found {evidence_count}")
+if generation_prompt_count < target:
+    raise SystemExit(f"expected at least {target} generation prompt traces, found {generation_prompt_count}")
+if accepted_count + rejected_count < target:
+    raise SystemExit(
+        f"expected at least {target} final accepted/rejected QA rows, found {accepted_count + rejected_count}"
+    )
+PY
+
+echo "stage=validate_outputs"
+python -m egolife_two_user_qa validate_outputs \
+  --qa "${QA_DIR}/qa_mcq.jsonl" \
+  --csv-output "${QA_DIR}/qa_mcq.csv" \
+  --human-review-output "${QA_DIR}/human_review_sheet.md" \
+  --report "${QA_DIR}/generation_report.md" \
+  --strict-review
 
 echo "outputs:"
 echo "  evidence=${OUTDIR}/evidence_pruned_pairs.jsonl"
 echo "  paired_videos=${OUTDIR}/clip_pruned_pairs/*/benchmark_video_pairs"
 echo "  summary=${OUTDIR}/clip_pruned_pairs/group_relative_clip_summary.json"
 echo "  review=${OUTDIR}/manual_review/clip_pruned_pairs"
+echo "  qa=${QA_DIR}/qa_mcq.jsonl"
+echo "  prompts=${QA_DIR}/video_first_prompts.jsonl"
+echo "  intermediate=${QA_DIR}/qa_mcq.intermediate.jsonl"
+echo "  rejected=${QA_DIR}/qa_mcq.rejected.jsonl"
+echo "  report=${QA_DIR}/generation_report.md"
 echo "  cuda_keeper_log=${OUTDIR}/cuda_keeper_${SLURM_JOB_ID:-local}.log"
 echo "date_done=$(date --iso-8601=seconds)"

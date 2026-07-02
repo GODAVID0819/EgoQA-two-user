@@ -21,6 +21,23 @@ EgoLife video + EyeGaze/EyeTracking tree
 
 `observe_clips` 和 `mine_candidates` 只保留作调试辅助，不作为 pilot 主路径。正式 QA 生成、judger、answerability evaluation 和最终 review 都在 `generate_video_qa_loop` 内完成，避免旧 prompt 和当前 judge rubric 混用。
 
+## CLIP-Pruned Benchmark Prep
+
+`hpc/run_clip_pruned_benchmark_100.sbatch` prepares a 100-packet benchmark for
+later QA pipeline experiments. For each synchronized timestamp, it randomly
+selects exactly two videos, samples one frame per second from each selected
+30-second video, embeds those sampled frames with CLIP, clusters embeddings
+within each selected video into 12 clusters by default, and compares cross-video representative frames.
+When representative frames are highly similar across the two selected videos,
+the prep step prunes the corresponding sampled-frame interval plus every frame
+assigned to that representative cluster.
+
+The emitted evidence packets route media deliberately: `local_video` points to
+the CLIP-guided pruned MP4 for generation, while `full_local_video` and
+`original_local_video` point to the un-pruned 30-second MP4 for judges and
+answerability. `generate_video_qa_loop` uses `media_role="generator"` for the
+generator and `media_role="full"` for all three verification branches.
+
 ## CLIP Anchor / Evidence-Gap Toy Demo
 
 `clip_gap_demo` 是一个独立的预处理实验，不会直接生成问题。它读取

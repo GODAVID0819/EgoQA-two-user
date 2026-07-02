@@ -1,12 +1,12 @@
-"""Sidecar group-relative CLIP sampler for synchronized EgoLife clips.
+"""Sidecar random-pair CLIP-pruned sampler for synchronized EgoLife clips.
 
 This is intentionally separate from the main evidence pipeline. It starts from
-the full manifest, evaluates every synchronized timestamp group as a group, and
-emits two-user candidate packets by filtering video pairs with clustered
-representative-frame CLIP similarity traces, then randomly sampling from the
-surviving pairs. Clip-level group typicality is still recorded as diagnostics,
-but pruning and pair retrieval now use clustered representative-frame
-shared-anchor and overlap signals.
+the full manifest, randomly selects a synchronized two-video pair by default,
+and emits candidate packets with paired original/pruned videos. The selected
+videos are sampled at one frame per second, embedded with CLIP, clustered within
+each video, compared through cluster medoids, and high-similarity clusters are
+removed as temporal intervals. Comparing all videos in a synchronized group is
+available only as an explicit slow opt-in.
 """
 
 from __future__ import annotations
@@ -412,7 +412,7 @@ def clustered_temporal_similarity_pruning(
     start_seconds: float,
     duration_seconds: float,
     sample_interval_seconds: float,
-    cluster_count: int = 10,
+    cluster_count: int = 12,
     high_similarity_threshold: float = 0.82,
     preserve_shared_anchor_seconds: float = 0.0,
     min_pruned_video_seconds: float = 8.0,
@@ -806,7 +806,7 @@ def score_video_pairs(
     start_seconds: float = 0.0,
     duration_seconds: float = 30.0,
     sample_interval_seconds: float = 1.0,
-    pruning_clusters_per_video: int = 10,
+    pruning_clusters_per_video: int = 12,
     high_similarity_interval_threshold: float = 0.82,
     temporal_neighborhood_seconds: float | None = None,
     preserve_shared_anchor_seconds: float = 0.0,
@@ -898,7 +898,7 @@ def score_video_pairs(
         pair["trace_rank"] = rank
     return {
         "pair_filter": {
-            "method": "cluster_representative_shared_anchor_and_overlap_thresholds",
+            "method": "random_pair_cluster_representative_shared_anchor_and_overlap_thresholds",
             "topk": topk,
             "min_topk_sim": min_topk_sim,
             "min_mean_sim": min_mean_sim,
@@ -913,13 +913,14 @@ def score_video_pairs(
             "pair_count": len(pair_scores),
             "kept_pair_count": len(kept_pairs),
             "interpretation": (
-                "Each video is sampled once per second, clustered, and represented by medoid "
+                "Each selected video is sampled once per second, clustered, and represented by medoid "
                 "frames. Pair scores are computed from representative CLIP similarities; high "
                 "representative matches mark their source clusters for uniform interval pruning. "
                 "topk_sim captures strongest shared anchors; mean_sim captures representative overlap. "
                 "Pairs are rejected when shared anchors are too weak, global overlap is too low, "
                 "global overlap is too high, or high-similarity interval removal would leave too "
-                "little video. Surviving pairs are sampled randomly; their selected videos are "
+                "little video. By default the synchronized pair is sampled before CLIP embedding; "
+                "all-pairs group comparison only runs when explicitly requested. Selected videos are "
                 "materialized as paired original/pruned MP4s. QA generation uses pruned MP4s; "
                 "judges and answerability gates use the original 30-second MP4s."
             ),
@@ -1147,7 +1148,7 @@ def analyze_group_relative_similarity(
     min_mean_sim: float = 0.25,
     max_mean_sim: float = 0.90,
     high_similarity_interval_threshold: float = 0.82,
-    pruning_clusters_per_video: int = 10,
+    pruning_clusters_per_video: int = 12,
     temporal_neighborhood_seconds: float | None = None,
     preserve_shared_anchor_seconds: float = 0.0,
     min_pruned_video_seconds: float = 8.0,
@@ -1237,7 +1238,7 @@ def analyze_group_relative_similarity(
         "group_size": original_group_size,
         "embedded_clip_count": len(rows),
         "selection": {
-            "method": "random_sample_from_cluster_representative_filtered_pairs",
+            "method": "random_synchronized_pair_then_cluster_prune",
             "selected_count": selected_count,
             "pairs_per_group": pairs_per_group,
             "random_pair_first": random_pair_first,
@@ -1418,7 +1419,7 @@ def write_review_bundle(group_result: dict[str, Any], review_root: str | Path) -
         f"- Selected pair: {selected_users} ({selected_agents_text})\n"
         f"- Selected mean_sim: {group_result.get('selection', {}).get('selected_pair_mean_sim')}\n"
         f"- Selected topk_sim: {group_result.get('selection', {}).get('selected_pair_topk_sim')}\n"
-        f"- Videos: `videos/` contains every synchronized POV; selected files end with `_SELECTED.mp4`.\n"
+        f"- Videos: `videos/` contains the sampled synchronized pair; selected files end with `_SELECTED.mp4`.\n"
         f"- Pair trace: `comparison_traces/pair_scores_ranked_for_qa.csv` shows kept/rejected pair decisions.\n"
         f"- Sample pool: `comparison_traces/surviving_pairs_sample_pool.csv` shows all pairs eligible for random sampling.\n"
         f"- Clip trace: `comparison_traces/clip_scores_ranked_by_group_similarity.csv` shows per-video typicality.\n"
@@ -1464,7 +1465,7 @@ def build_candidate_packet(group_result: dict[str, Any]) -> dict[str, Any]:
     selected_clips = group_result["selected_clips"]
     required_users = [clip.get("agent_name") for clip in selected_clips]
     packet_id = stable_id(
-        "EGOLIFE2U_GROUP_REL_CLIP",
+        "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED",
         group_result.get("day"),
         group_result.get("time_token"),
         *[clip.get("agent_id") for clip in selected_clips],
@@ -1472,7 +1473,7 @@ def build_candidate_packet(group_result: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "evidence_id": packet_id,
-        "candidate_type": "cluster_representative_filtered_random_pair_pruned_video",
+        "candidate_type": "random_synchronized_pair_cluster_pruned_video",
         "day": group_result.get("day"),
         "time_token": group_result.get("time_token"),
         "clip_clock": group_result.get("clip_clock"),
@@ -1480,11 +1481,12 @@ def build_candidate_packet(group_result: dict[str, Any]) -> dict[str, Any]:
         "speaker_user": required_users[0] if required_users else None,
         "evidence_provider_user": required_users[1] if len(required_users) > 1 else None,
         "requirement": (
-            "Sidecar candidate: each synchronized video was sampled once per second, clustered "
-            "with CLIP embeddings, and compared through representative frames. This pair survived "
-            "shared-anchor, unrelatedness, and redundancy filters, then frames assigned to "
-            "high-similarity representative clusters were removed as uniform temporal intervals "
-            "from both selected videos. Generation should use the pruned videos; judgers and "
+            "Sidecar candidate: a random time-synchronized pair was selected first, then each "
+            "selected 30-second video was sampled once per second, clustered with CLIP embeddings, "
+            "and compared through representative frames. This pair survived shared-anchor, "
+            "unrelatedness, and redundancy filters, then frames assigned to high-similarity "
+            "representative clusters were removed as uniform temporal intervals from both selected "
+            "videos. Generation should use the pruned videos; judgers and "
             "answerability gates should use the original 30-second videos. Treat "
             "required_users[0] as the asker/speaker and required_users[1] as the evidence "
             "provider, then verify shared context, asymmetric evidence, asker-side "
@@ -1525,9 +1527,9 @@ def mine_group_relative_clip_candidates(
     output_dir: str | Path,
     cache_dir: str | Path,
     model_id: str = DEFAULT_CLIP_MODEL,
-    target_count: int = 20,
+    target_count: int = 100,
     max_groups: int | None = None,
-    min_group_size: int = 6,
+    min_group_size: int = 2,
     duration_seconds: float = 30.0,
     sample_interval_seconds: float = 1.0,
     start_seconds: float = 0.0,
@@ -1538,7 +1540,7 @@ def mine_group_relative_clip_candidates(
     min_mean_sim: float = 0.25,
     max_mean_sim: float = 0.90,
     high_similarity_interval_threshold: float = 0.82,
-    pruning_clusters_per_video: int = 10,
+    pruning_clusters_per_video: int = 12,
     temporal_neighborhood_seconds: float | None = None,
     preserve_shared_anchor_seconds: float = 0.0,
     min_pruned_video_seconds: float = 8.0,
@@ -1549,7 +1551,7 @@ def mine_group_relative_clip_candidates(
     review_dir: str | Path | None = None,
     encoder: ImageEncoder | None = None,
 ) -> list[dict[str, Any]]:
-    """Write randomly sampled two-user candidates from filtered synchronized pairs."""
+    """Write CLIP-pruned candidates from random synchronized two-video pairs."""
 
     manifest = read_json(manifest_path)
     rng = random.Random(random_seed) if random_seed is not None else random.Random()
@@ -1667,20 +1669,20 @@ def mine_group_relative_clip_candidates(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Sidecar sampler that filters clustered representative video pairs from synchronized CLIP groups"
+        description="Sidecar sampler that CLIP-prunes random synchronized two-video pairs"
     )
     parser.add_argument("--manifest", required=True, help="Input EgoLife manifest JSON")
     parser.add_argument("--output", required=True, help="Output candidate JSONL")
     parser.add_argument("--output-dir", required=True, help="Directory for frame samples and diagnostics")
     parser.add_argument(
         "--review-dir",
-        help="Separate human-review folder for all six videos and comparison traces",
+        help="Separate human-review folder for selected pair videos and comparison traces",
     )
     parser.add_argument("--cache-dir", required=True, help="Local video cache root")
     parser.add_argument("--model-id", default=DEFAULT_CLIP_MODEL)
-    parser.add_argument("--target-count", type=int, default=20)
+    parser.add_argument("--target-count", type=int, default=100)
     parser.add_argument("--max-groups", type=int)
-    parser.add_argument("--min-group-size", type=int, default=6)
+    parser.add_argument("--min-group-size", type=int, default=2)
     parser.add_argument("--duration-seconds", type=float, default=30.0)
     parser.add_argument("--sample-interval-seconds", type=float, default=1.0)
     parser.add_argument("--start-seconds", type=float, default=0.0)
@@ -1714,7 +1716,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--pruning-clusters-per-video",
         type=int,
-        default=10,
+        default=12,
         help="Cluster each video's sampled frames into this many CLIP medoid groups before pruning",
     )
     parser.add_argument(
@@ -1773,7 +1775,7 @@ def main(argv: list[str] | None = None) -> int:
         download_media=args.download_media,
         review_dir=args.review_dir,
     )
-    print(f"wrote {len(candidates)} group-relative CLIP candidates to {args.output}")
+    print(f"wrote {len(candidates)} random-pair CLIP-pruned candidates to {args.output}")
     return 0
 
 
