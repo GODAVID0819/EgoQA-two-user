@@ -932,6 +932,33 @@ def score_video_pairs(
     }
 
 
+def compact_pair_rejection_summary(pair_analysis: dict[str, Any], *, limit: int = 3) -> list[dict[str, Any]]:
+    """Return compact diagnostics for rejected pair-filter decisions."""
+
+    rows = []
+    for pair in pair_analysis.get("pair_scores", [])[:limit]:
+        pruning = pair.get("temporal_pruning") if isinstance(pair.get("temporal_pruning"), dict) else {}
+        rows.append(
+            {
+                "pair_key": pair.get("pair_key"),
+                "status": pair.get("status"),
+                "rejection_reasons": pair.get("rejection_reasons", []),
+                "mean_sim": pair.get("mean_sim"),
+                "topk_sim": pair.get("topk_sim"),
+                "high_similarity_representative_pair_count": pruning.get(
+                    "high_similarity_representative_pair_count"
+                ),
+                "left_marked_cluster_count": pruning.get("left_marked_cluster_count"),
+                "right_marked_cluster_count": pruning.get("right_marked_cluster_count"),
+                "left_kept_duration_seconds": pruning.get("left_kept_duration_seconds"),
+                "right_kept_duration_seconds": pruning.get("right_kept_duration_seconds"),
+                "left_removed_duration_seconds": pruning.get("left_removed_duration_seconds"),
+                "right_removed_duration_seconds": pruning.get("right_removed_duration_seconds"),
+            }
+        )
+    return rows
+
+
 def _resolve_local_video(
     clip: dict[str, Any],
     *,
@@ -1211,7 +1238,8 @@ def analyze_group_relative_similarity(
     )
     surviving_pairs = pair_analysis["surviving_pairs"]
     if not surviving_pairs:
-        raise ValueError("no video pairs survived the frame-matrix pair filters")
+        diagnostics = compact_pair_rejection_summary(pair_analysis)
+        raise ValueError(f"no video pairs survived the frame-matrix pair filters: {diagnostics}")
     sampled_pairs = rng.sample(surviving_pairs, min(pairs_per_group, len(surviving_pairs)))
     for sample_rank, pair in enumerate(sampled_pairs, 1):
         pair["sample_rank"] = sample_rank

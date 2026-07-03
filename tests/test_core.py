@@ -421,6 +421,58 @@ class ClipGapDemoTests(unittest.TestCase):
         self.assertEqual(frames[-1]["timestamp_seconds"], 29.0)
         self.assertNotIn("30.00s", frames[-1]["path"])
 
+    def test_sample_short_video_tolerates_missing_tail_frame(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            video_path = root / "source.mp4"
+            video_path.write_bytes(b"fake video")
+            output_dir = root / "frames"
+
+            def fake_run(args, check):
+                output = Path(args[-1])
+                if "29.00s" not in output.name:
+                    output.write_bytes(b"fake png")
+
+            with (
+                patch("egolife_two_user_qa.clip_gap_demo.shutil.which", return_value="ffmpeg"),
+                patch("egolife_two_user_qa.clip_gap_demo.subprocess.run", side_effect=fake_run),
+            ):
+                frames = sample_short_video(
+                    video_path,
+                    output_dir,
+                    duration_seconds=30.0,
+                    sample_interval_seconds=1.0,
+                    start_seconds=0.0,
+                )
+
+        self.assertEqual(len(frames), 29)
+        self.assertEqual(frames[-1]["timestamp_seconds"], 28.0)
+
+    def test_sample_short_video_still_fails_for_missing_middle_frame(self) -> None:
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            video_path = root / "source.mp4"
+            video_path.write_bytes(b"fake video")
+            output_dir = root / "frames"
+
+            def fake_run(args, check):
+                output = Path(args[-1])
+                if "15.00s" not in output.name:
+                    output.write_bytes(b"fake png")
+
+            with (
+                patch("egolife_two_user_qa.clip_gap_demo.shutil.which", return_value="ffmpeg"),
+                patch("egolife_two_user_qa.clip_gap_demo.subprocess.run", side_effect=fake_run),
+            ):
+                with self.assertRaises(RuntimeError):
+                    sample_short_video(
+                        video_path,
+                        output_dir,
+                        duration_seconds=30.0,
+                        sample_interval_seconds=1.0,
+                        start_seconds=0.0,
+                    )
+
     def test_run_demo_with_existing_frames_and_fake_encoder(self) -> None:
         class FakeEncoder:
             model_id = "fake-clip"

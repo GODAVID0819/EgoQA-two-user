@@ -296,28 +296,35 @@ def sample_short_video(
             break
         path = output_dir / f"frame_{index:03d}_{timestamp:.2f}s.png"
         if not path.exists() or path.stat().st_size == 0:
-            subprocess.run(
-                [
-                    ffmpeg,
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-ss",
-                    f"{timestamp:.3f}",
-                    "-i",
-                    str(video_path),
-                    "-frames:v",
-                    "1",
-                    "-vf",
-                    "format=rgb24",
-                    "-f",
-                    "image2",
-                    str(path),
-                ],
-                check=True,
-            )
+            try:
+                subprocess.run(
+                    [
+                        ffmpeg,
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-y",
+                        "-ss",
+                        f"{timestamp:.3f}",
+                        "-i",
+                        str(video_path),
+                        "-frames:v",
+                        "1",
+                        "-vf",
+                        "format=rgb24",
+                        "-f",
+                        "image2",
+                        str(path),
+                    ],
+                    check=True,
+                )
+            except subprocess.CalledProcessError:
+                if len(frames) >= max(2, count - 2):
+                    break
+                raise
         if not path.exists() or path.stat().st_size == 0:
+            if len(frames) >= max(2, count - 2):
+                break
             raise RuntimeError(f"ffmpeg did not write sampled frame: {path}")
         frames.append({"timestamp_seconds": round(timestamp, 3), "path": str(path)})
     return frames

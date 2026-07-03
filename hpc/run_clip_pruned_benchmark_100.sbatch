@@ -165,7 +165,7 @@ python -m egolife_two_user_qa prepare_clip_pruned_benchmark \
   --min-topk-sim 0.01 \
   --min-mean-sim 0.01 \
   --max-mean-sim 0.99 \
-  --high-similarity-interval-threshold 0.6 \
+  --high-similarity-interval-threshold 0.82 \
   --pruning-clusters-per-video 12 \
   --preserve-shared-anchor-seconds 0.0 \
   --min-pruned-video-seconds 1 \
