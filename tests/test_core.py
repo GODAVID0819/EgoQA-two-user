@@ -44,7 +44,11 @@ from egolife_two_user_qa.evidence import (
 )
 from egolife_two_user_qa.gaze_projection import gaussian_bbox_score, load_aria_projection_calibration, project_gaze_row
 from egolife_two_user_qa.manifest import parse_egolife_path, seconds_from_time_token
-from egolife_two_user_qa.prompts import build_relation_discovery_prompt, build_video_generation_prompt
+from egolife_two_user_qa.prompts import (
+    build_qa_formality_judge_prompt,
+    build_relation_discovery_prompt,
+    build_video_generation_prompt,
+)
 from egolife_two_user_qa.qwen3vl_runner import DryRunRunner, normalize_video_kwargs, split_video_inputs_and_metadata
 from egolife_two_user_qa.review_media import materialize_review_videos
 from egolife_two_user_qa.schema import extract_json_object, validate_qa_item, write_human_review_sheet
@@ -1424,6 +1428,29 @@ class VideoFirstTests(unittest.TestCase):
         self.assertIn("CLIP retrieval hints", prompt)
         self.assertIn("jake_4.jpg", prompt)
         self.assertIn("Verify every semantic claim from the raw videos", prompt)
+
+    def test_qa_formality_prompt_has_other_person_activity_subcheck(self) -> None:
+        packet = {
+            "evidence_id": "E1",
+            "required_users": ["Jake", "Alice"],
+            "clips": [
+                {"agent_name": "Jake", "day": "DAY1", "clip_clock": "11:10:00.00", "local_video": "jake.mp4"},
+                {"agent_name": "Alice", "day": "DAY1", "clip_clock": "11:10:00.00", "local_video": "alice.mp4"},
+            ],
+        }
+        qa = {
+            "question": "While I was washing dishes, what was Alice doing?",
+            "options": ["reading a book", "opening a door", "holding a mug", "checking a phone", "moving a chair"],
+            "correct": "A",
+            "answer": "reading a book",
+            "required_users": ["Jake", "Alice"],
+        }
+
+        prompt = build_qa_formality_judge_prompt(qa, packet)
+
+        self.assertIn("semantic_subchecks.other_person_activity_query", prompt)
+        self.assertIn("shallow concurrent-activity query", prompt)
+        self.assertIn("concrete missing detail", prompt)
 
     def test_discovery_prompt_is_template_free_planning_stage(self) -> None:
         packet = {

@@ -595,6 +595,22 @@ def merge_parallel_judges(
     schema_branch = schema_formality_branch(schema_errors)
     qa_formality_check = check_from_single_judge(qa_formality_judge, "qa_formality")
     model_qa_formality_check = dict(qa_formality_check)
+    semantic_subchecks = qa_formality_check.get("semantic_subchecks")
+    if isinstance(semantic_subchecks, dict):
+        other_activity = semantic_subchecks.get("other_person_activity_query")
+        if isinstance(other_activity, dict) and str(other_activity.get("status", "")).upper() == "FAIL":
+            qa_formality_check["status"] = "FAIL"
+            reason = str(other_activity.get("reason") or "")
+            qa_formality_check["reason"] = (
+                str(qa_formality_check.get("reason") or "")
+                + ("; " if qa_formality_check.get("reason") else "")
+                + "semantic_subchecks.other_person_activity_query failed"
+                + (f": {reason}" if reason else "")
+            )
+            qa_formality_check["fix"] = (
+                "Replace the shallow concurrent-activity question with a concrete speaker-side "
+                "information need whose answer depends on the evidence provider's missing detail."
+            )
     if schema_branch["status"] != "PASS":
         qa_formality_check["status"] = "FAIL"
         qa_formality_check["reason"] = (

@@ -94,10 +94,25 @@ JUDGE_CHECK_SCHEMA = {
 }
 
 
+QA_FORMALITY_CHECK_SCHEMA = {
+    **JUDGE_CHECK_SCHEMA,
+    "semantic_subchecks": {
+        "other_person_activity_query": {
+            "status": "PASS/FAIL/UNCERTAIN",
+            "reason": (
+                "whether the question merely asks what another person was doing while the speaker "
+                "was doing something, instead of asking for a concrete missing detail tied to the "
+                "speaker's own information need"
+            ),
+        }
+    },
+}
+
+
 JUDGE_SCHEMA = {
     "review_passed": True,
     "checks": {
-        "qa_formality": JUDGE_CHECK_SCHEMA,
+        "qa_formality": QA_FORMALITY_CHECK_SCHEMA,
         "evidence_groundedness": JUDGE_CHECK_SCHEMA,
     },
     "blocking_failures": ["names of failed checks that should block acceptance"],
@@ -107,10 +122,11 @@ JUDGE_SCHEMA = {
 
 
 def judge_schema_for_check(check_name: str) -> dict[str, Any]:
+    check_schema = QA_FORMALITY_CHECK_SCHEMA if check_name == "qa_formality" else JUDGE_CHECK_SCHEMA
     return {
         "review_passed": True,
         "checks": {
-            check_name: JUDGE_CHECK_SCHEMA,
+            check_name: check_schema,
         },
         "blocking_failures": ["names of failed checks that should block acceptance"],
         "why_generator_asked_this": "brief explanation of why the generator may have asked this",
@@ -446,7 +462,10 @@ qa_formality asks whether the generated QA is natural and well-formed:
 - The question and options must not use dataset-observer wording such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, or timestamp.
 - The QA must be a valid five-option MCQ: exactly five non-empty, plausible, parallel options; correct is A-E; answer exactly matches options[correct]; and exactly one option is correct.
 - The question_type field, if used, must be either commonality or difference and must match the wording of the question.
-- PASS only if the deterministic schema branch passes and the question wording and MCQ structure are acceptable.
+- Run the semantic_subchecks.other_person_activity_query subcheck. FAIL this subcheck when the question is essentially "while I was doing X, what was the other/named person doing?" and the answer is just that person's concurrent activity, without a concrete missing object, outcome, consequence, explanation, or follow-up that the speaker naturally needs.
+- PASS the subcheck when the question asks for a specific missing detail naturally tied to the speaker's anchor, such as where an object ended up, what changed after the speaker left, which item explains the speaker's uncertainty, or what outcome the speaker could not see.
+- Do not fail merely because the wording contains "while" or mentions another person. Fail because the semantic relation is a shallow concurrent-activity query rather than a speaker-side information need.
+- PASS qa_formality only if the deterministic schema branch passes, the question wording and MCQ structure are acceptable, and semantic_subchecks.other_person_activity_query is not FAIL.
 
 Deterministic schema branch:
 {json.dumps({"status": schema_status, "errors": schema_errors}, ensure_ascii=False, indent=2)}
