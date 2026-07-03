@@ -1,5 +1,3 @@
-"""Prompts for two-user EgoLife QA generation and review."""
-
 from __future__ import annotations
 
 import json
