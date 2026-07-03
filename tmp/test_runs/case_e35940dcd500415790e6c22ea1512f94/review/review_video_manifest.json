@@ -1,0 +1,36 @@
+{
+  "output_dir": "C:\\Users\\haoya\\OneDrive\\Desktop\\Long context video understanding ARVR\\Long-video-understanding\\egolife_two_user_qa\\tmp\\test_runs\\case_e35940dcd500415790e6c22ea1512f94\\review",
+  "videos_dir": "C:\\Users\\haoya\\OneDrive\\Desktop\\Long context video understanding ARVR\\Long-video-understanding\\egolife_two_user_qa\\tmp\\test_runs\\case_e35940dcd500415790e6c22ea1512f94\\review\\videos",
+  "download_missing": false,
+  "row_count": 1,
+  "video_count_ok": 1,
+  "video_count_error": 0,
+  "video_count_missing": 0,
+  "rows": [
+    {
+      "source_type": "evidence",
+      "evidence_id": "E1",
+      "day": "DAY1",
+      "time_token": "11100000",
+      "required_users": [
+        "Jake"
+      ],
+      "videos": [
+        {
+          "user": "Jake",
+          "agent_dir": "A1_JAKE",
+          "agent_id": "A1",
+          "day": "DAY1",
+          "time_token": "11100000",
+          "clip_clock": "11:10:00.00",
+          "video_url": "https://example.invalid/source.mp4",
+          "source_local_video": "C:\\Users\\haoya\\OneDrive\\Desktop\\Long context video understanding ARVR\\Long-video-understanding\\egolife_two_user_qa\\tmp\\test_runs\\case_e35940dcd500415790e6c22ea1512f94\\source.mp4",
+          "review_video": "C:\\Users\\haoya\\OneDrive\\Desktop\\Long context video understanding ARVR\\Long-video-understanding\\egolife_two_user_qa\\tmp\\test_runs\\case_e35940dcd500415790e6c22ea1512f94\\review\\videos\\E1\\01_A1_JAKE_source.mp4",
+          "status": "ok",
+          "source": "local_video",
+          "error": ""
+        }
+      ]
+    }
+  ]
+}

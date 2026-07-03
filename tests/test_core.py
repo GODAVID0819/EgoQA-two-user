@@ -56,7 +56,6 @@ from egolife_two_user_qa.video_qa_loop import (
     generate_video_qa_loop,
     judge_gate,
     media_for_clips,
-    qa_formality_judge_from_schema_errors,
     qa_for_judger_prompt,
     run_parallel_review_judges,
 )
@@ -1714,6 +1713,162 @@ class VideoFirstTests(unittest.TestCase):
         self.assertIn("sufficient", qa["single_user_answerability"]["Alice"])
         self.assertEqual(validate_qa_item(qa), [])
 
+    def test_schema_failures_feed_back_into_retry_prompt(self) -> None:
+        class SchemaRetryRunner:
+            model_id = "fake"
+
+            def __init__(self):
+                self.generation_prompts = []
+
+            def generate(self, prompt, image_paths=None, video_paths=None):
+                if "qa_formality judge" in prompt:
+                    return json.dumps(
+                        {
+                            "review_passed": True,
+                            "checks": {"qa_formality": {"status": "PASS", "reason": "wording ok", "fix": ""}},
+                            "blocking_failures": [],
+                            "feedback_to_generator": "",
+                        }
+                    )
+                if "evidence_groundedness judge" in prompt:
+                    return json.dumps(
+                        {
+                            "review_passed": True,
+                            "checks": {"evidence_groundedness": {"status": "PASS", "reason": "grounded", "fix": ""}},
+                            "blocking_failures": [],
+                            "feedback_to_generator": "",
+                        }
+                    )
+                if "single_user::Jake" in prompt:
+                    return json.dumps(
+                        {
+                            "choice": "insufficient",
+                            "answer_text": "",
+                            "evidence_used": "",
+                            "insufficient_reason": "Jake cannot see the mug",
+                        }
+                    )
+                if "single_user::Alice" in prompt or "combined_all_users" in prompt:
+                    return json.dumps(
+                        {
+                            "choice": "A",
+                            "answer_text": "the mug stayed on the counter",
+                            "evidence_used": "Alice or the combined videos show the mug",
+                            "insufficient_reason": "",
+                        }
+                    )
+
+                self.generation_prompts.append(prompt)
+                if len(self.generation_prompts) == 1:
+                    return json.dumps(
+                        {
+                            "qa_id": "Q1",
+                            "question": "What was still on the counter?",
+                            "options": [
+                                "the mug stayed on the counter",
+                                "the book stayed on the counter",
+                                "the phone stayed on the counter",
+                                "the bag stayed on the counter",
+                            ],
+                            "correct": "A",
+                            "answer": "the mug stayed on the counter",
+                            "required_users": ["Jake", "Alice"],
+                            "evidence": [
+                                {
+                                    "user": "Jake",
+                                    "needed_fact": "Jake cannot see the counter from his view.",
+                                    "timeframe": "throughout the clip",
+                                    "frames_used": ["video-level evidence"],
+                                },
+                                {
+                                    "user": "Alice",
+                                    "needed_fact": "Alice sees the mug on the counter.",
+                                    "timeframe": "throughout the clip",
+                                    "frames_used": ["video-level evidence"],
+                                },
+                            ],
+                            "single_user_answerability": {
+                                "Jake": "insufficient because Jake cannot see the counter",
+                                "Alice": "sufficient because Alice sees the mug",
+                            },
+                            "combined_answerability": "sufficient because Alice provides the missing detail",
+                        }
+                    )
+                if "options must contain exactly five entries" not in prompt:
+                    raise AssertionError("retry prompt did not include deterministic schema feedback")
+                return json.dumps(
+                    {
+                        "qa_id": "Q1_retry",
+                        "question": "What was still on the counter?",
+                        "options": [
+                            "the mug stayed on the counter",
+                            "the book stayed on the counter",
+                            "the phone stayed on the counter",
+                            "the bag stayed on the counter",
+                            "the key stayed on the counter",
+                        ],
+                        "correct": "A",
+                        "answer": "the mug stayed on the counter",
+                        "required_users": ["Jake", "Alice"],
+                        "evidence": [
+                            {
+                                "user": "Jake",
+                                "needed_fact": "Jake cannot see the counter from his view.",
+                                "timeframe": "throughout the clip",
+                                "frames_used": ["video-level evidence"],
+                            },
+                            {
+                                "user": "Alice",
+                                "needed_fact": "Alice sees the mug on the counter.",
+                                "timeframe": "throughout the clip",
+                                "frames_used": ["video-level evidence"],
+                            },
+                        ],
+                        "single_user_answerability": {
+                            "Jake": "insufficient because Jake cannot see the counter",
+                            "Alice": "sufficient because Alice sees the mug",
+                        },
+                        "combined_answerability": "sufficient because Alice provides the missing detail",
+                    }
+                )
+
+        with workspace_temp_dir() as tmp:
+            root = Path(tmp)
+            evidence_path = root / "evidence.jsonl"
+            evidence_path.write_text(
+                json.dumps(
+                    {
+                        "evidence_id": "E1",
+                        "required_users": ["Jake", "Alice"],
+                        "source_urls": {"videos": []},
+                        "clips": [
+                            {"agent_name": "Jake", "agent_dir": "A1_JAKE", "frames": []},
+                            {"agent_name": "Alice", "agent_dir": "A2_ALICE", "frames": []},
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            runner = SchemaRetryRunner()
+            with patch("egolife_two_user_qa.video_qa_loop.make_runner", return_value=runner):
+                rows = generate_video_qa_loop(
+                    evidence_path=evidence_path,
+                    output_path=root / "qa.jsonl",
+                    prompts_path=root / "prompts.jsonl",
+                    rejected_path=root / "rejected.jsonl",
+                    intermediate_path=root / "intermediate.jsonl",
+                    backend="transformers-local",
+                    target_count=1,
+                    max_attempts=2,
+                )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["attempt_count"], 2)
+        self.assertEqual(rows[0]["review"]["status"], "passed")
+        first_attempt = rows[0]["generation_trace"][0]
+        self.assertIn("options must contain exactly five entries", first_attempt["result"]["reason"])
+
     def test_answerability_gate_requires_combined_correct_and_asker_not_correct(self) -> None:
         qa = {"correct": "A", "required_users": ["Jake", "Alice"]}
         passed = answerability_gate(
@@ -1896,15 +2051,6 @@ class VideoFirstTests(unittest.TestCase):
         failed = judge_gate({"review_passed": True, "checks": checks})
         self.assertFalse(failed["passed"])
         self.assertIn("qa_formality", failed["failed_checks"])
-
-    def test_schema_errors_are_represented_as_qa_formality_judge_failure(self) -> None:
-        judge = qa_formality_judge_from_schema_errors(["answer must equal options[correct]"])
-
-        self.assertFalse(judge["review_passed"])
-        self.assertEqual(judge["checks"]["qa_formality"]["status"], "FAIL")
-        self.assertIn("answer must equal options[correct]", judge["feedback_to_generator"])
-        self.assertFalse(judge["gate"]["passed"])
-        self.assertIn("qa_formality", judge["gate"]["failed_checks"])
 
     def test_build_review_from_gates_for_accepted_row(self) -> None:
         review = build_review_from_gates(

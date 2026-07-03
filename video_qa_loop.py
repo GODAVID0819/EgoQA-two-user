@@ -603,7 +603,8 @@ def merge_parallel_judges(
             + str(model_qa_formality_check.get("reason", ""))
         )
         qa_formality_check["fix"] = (
-            "Repair the generated JSON shape, MCQ options, correct letter, answer text, required users, and required QA metadata."
+            "Repair the generated JSON shape, MCQ options, correct letter, answer text, "
+            "required users, and required QA metadata."
         )
     qa_formality_check["schema_branch"] = schema_branch
     qa_formality_check["model_branch"] = model_qa_formality_check
@@ -680,33 +681,6 @@ def answerability_check_from_gate(answerability: dict[str, Any] | None) -> dict[
     }
 
 
-def qa_formality_judge_from_schema_errors(schema_errors: list[str]) -> dict[str, Any]:
-    """Compatibility helper for tests and old callers."""
-
-    failed_model_branch = failed_single_judge(
-        "qa_formality",
-        "qa_formality model branch was not run",
-    )
-    passed_evidence_branch = {
-        "review_passed": True,
-        "checks": {
-            "evidence_groundedness": {
-                "status": "PASS",
-                "reason": "compatibility helper did not evaluate evidence groundedness",
-                "fix": "",
-            }
-        },
-        "blocking_failures": [],
-        "feedback_to_generator": "",
-    }
-    return merge_parallel_judges(
-        qa_formality_judge=failed_model_branch,
-        evidence_groundedness_judge=passed_evidence_branch,
-        answerability={"gate": {"passed": True, "reason": "compatibility helper did not evaluate answerability"}},
-        schema_errors=schema_errors,
-    )
-
-
 def build_review_from_gates(
     *,
     judge: dict[str, Any] | None,
@@ -719,7 +693,7 @@ def build_review_from_gates(
     """Build the final review object stored inside each QA row.
 
     Generator self-checks stay in generation_trace. The final review is derived
-    from the judger, answerability evaluator, and deterministic schema checks.
+    from the model/deterministic judges, answerability evaluator, and final schema validation.
     """
 
     schema_errors = list(schema_errors or [])
