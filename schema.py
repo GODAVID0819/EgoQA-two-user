@@ -42,6 +42,7 @@ VIDEO_FIRST_REQUIRED_FIELDS = {
 VIDEO_FIRST_JUDGE_CHECKS = {
     "qa_formality",
     "evidence_groundedness",
+    "answerability",
 }
 
 

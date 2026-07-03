@@ -1,0 +1,2 @@
+{"evidence_id": "E0", "required_users": ["Jake", "Alice"], "source_urls": {"videos": []}, "clips": [{"agent_name": "Jake", "agent_dir": "A1_JAKE", "frames": []}, {"agent_name": "Alice", "agent_dir": "A2_ALICE", "frames": []}]}
+{"evidence_id": "E1", "required_users": ["Jake", "Alice"], "source_urls": {"videos": []}, "clips": [{"agent_name": "Jake", "agent_dir": "A1_JAKE", "frames": []}, {"agent_name": "Alice", "agent_dir": "A2_ALICE", "frames": []}]}

@@ -1067,6 +1067,7 @@ class SchemaTests(unittest.TestCase):
             for name in [
                 "qa_formality",
                 "evidence_groundedness",
+                "answerability",
             ]
         }
 
@@ -1850,6 +1851,8 @@ class VideoFirstTests(unittest.TestCase):
         self.assertTrue(trace["parallel"])
         self.assertIn("qa_formality", judge["checks"])
         self.assertIn("evidence_groundedness", judge["checks"])
+        self.assertIn("answerability", judge["checks"])
+        self.assertEqual(judge["checks"]["answerability"]["status"], "PASS")
         self.assertIn("qa_formality_judge", [row["stage"] for row in prompt_rows])
         self.assertIn("evidence_groundedness_judge", [row["stage"] for row in prompt_rows])
         self.assertIn("answerability", [row["stage"] for row in prompt_rows])
@@ -1860,6 +1863,7 @@ class VideoFirstTests(unittest.TestCase):
             for name in [
                 "qa_formality",
                 "evidence_groundedness",
+                "answerability",
             ]
         }
         self.assertTrue(judge_gate({"review_passed": True, "checks": checks})["passed"])

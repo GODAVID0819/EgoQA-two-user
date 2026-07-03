@@ -50,6 +50,7 @@ QUESTION_TYPES = ("commonality", "difference")
 BLOCKING_JUDGE_CHECKS = (
     "qa_formality",
     "evidence_groundedness",
+    "answerability",
 )
 
 
@@ -588,6 +589,7 @@ def merge_parallel_judges(
     *,
     qa_formality_judge: dict[str, Any],
     evidence_groundedness_judge: dict[str, Any],
+    answerability: dict[str, Any],
     schema_errors: list[str],
 ) -> dict[str, Any]:
     schema_branch = schema_formality_branch(schema_errors)
@@ -607,12 +609,14 @@ def merge_parallel_judges(
     qa_formality_check["model_branch"] = model_qa_formality_check
 
     evidence_check = check_from_single_judge(evidence_groundedness_judge, "evidence_groundedness")
+    answerability_check = answerability_check_from_gate(answerability)
 
     combined = {
         "review_passed": True,
         "checks": {
             "qa_formality": qa_formality_check,
             "evidence_groundedness": evidence_check,
+            "answerability": answerability_check,
         },
         "blocking_failures": [],
         "why_generator_asked_this": (
@@ -624,6 +628,7 @@ def merge_parallel_judges(
         "branches": {
             "qa_formality": qa_formality_judge,
             "evidence_groundedness": evidence_groundedness_judge,
+            "answerability": answerability,
         },
     }
 
@@ -638,6 +643,41 @@ def merge_parallel_judges(
     combined["feedback_to_generator"] = " | ".join(feedback)
     combined["gate"] = judge_gate(combined)
     return combined
+
+
+def answerability_check_from_gate(answerability: dict[str, Any] | None) -> dict[str, Any]:
+    """Expose the deterministic answerability gate as a structured judge check."""
+
+    if not isinstance(answerability, dict):
+        return {
+            "status": "FAIL",
+            "reason": "answerability judge did not return a result",
+            "fix": "Run the answerability evaluator and return its gate result.",
+        }
+    gate = answerability.get("gate")
+    if not isinstance(gate, dict):
+        return {
+            "status": "FAIL",
+            "reason": "answerability judge did not return gate metadata",
+            "fix": "Return answerability.gate with passed and reason fields.",
+        }
+    reason = str(gate.get("reason") or "")
+    if gate.get("passed") is True:
+        check = {
+            "status": "PASS",
+            "reason": reason or "answerability gate passed",
+            "fix": "",
+        }
+        if gate.get("warning"):
+            check["warning"] = gate.get("warning")
+        if gate.get("evidence_provider_answerable"):
+            check["evidence_provider_answerable"] = gate.get("evidence_provider_answerable")
+        return check
+    return {
+        "status": "FAIL",
+        "reason": reason or "answerability gate failed",
+        "fix": "Revise the QA so the combined required users select the correct answer and the asker/subset conditions do not.",
+    }
 
 
 def qa_formality_judge_from_schema_errors(schema_errors: list[str]) -> dict[str, Any]:
@@ -662,6 +702,7 @@ def qa_formality_judge_from_schema_errors(schema_errors: list[str]) -> dict[str,
     return merge_parallel_judges(
         qa_formality_judge=failed_model_branch,
         evidence_groundedness_judge=passed_evidence_branch,
+        answerability={"gate": {"passed": True, "reason": "compatibility helper did not evaluate answerability"}},
         schema_errors=schema_errors,
     )
 
@@ -979,6 +1020,7 @@ def run_parallel_review_judges(
     judge = merge_parallel_judges(
         qa_formality_judge=qa_formality_judge,
         evidence_groundedness_judge=evidence_groundedness_judge,
+        answerability=answerability,
         schema_errors=schema_errors,
     )
     trace = {
@@ -994,6 +1036,7 @@ def run_parallel_review_judges(
             "raw_output": evidence_groundedness_judge.get("raw_output"),
             "parsed": evidence_groundedness_judge,
         },
+        "answerability": answerability,
         "merged": judge,
     }
     return judge, answerability, trace
@@ -1419,38 +1462,18 @@ def generate_video_qa_loop(
             attempt_trace["answerability"] = answerability
 
             judge_failed = judge.get("gate", {}).get("passed") is not True
-            answerability_failed = answerability.get("gate", {}).get("passed") is not True
             if judge_failed:
                 feedback = str(
                     judge.get("feedback_to_generator")
                     or judge["gate"].get("reason")
                     or "Judger rejected the question."
                 )
-                if answerability_failed:
-                    feedback += " | Answerability gate failed: " + str(
-                        answerability.get("gate", {}).get("reason", "")
-                    )
                 qa["review"] = build_review_from_gates(
                     judge=judge,
                     answerability=answerability,
                     schema_errors=schema_errors,
                     accepted=False,
                     rejection_stage="judger",
-                    final_reason=feedback,
-                )
-                last_review = qa["review"]
-                attempt_trace["result"] = {"accepted": False, "reason": feedback}
-                packet_rejections.append({"attempt": attempt, "reason": feedback, "qa": qa})
-                continue
-
-            if answerability_failed:
-                feedback = "Answerability gate failed: " + str(answerability.get("gate", {}).get("reason", ""))
-                qa["review"] = build_review_from_gates(
-                    judge=judge,
-                    answerability=answerability,
-                    schema_errors=[],
-                    accepted=False,
-                    rejection_stage="answerability",
                     final_reason=feedback,
                 )
                 last_review = qa["review"]
