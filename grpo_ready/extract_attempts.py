@@ -29,6 +29,17 @@ def _parse_generation(generation: dict[str, Any], raw_qa: str) -> dict[str, Any]
         return None
 
 
+def _schema_errors(source: dict[str, Any], parsed_qa: dict[str, Any] | None) -> tuple[str, ...]:
+    judge = source.get("judge")
+    branch = judge.get("schema_branch") if isinstance(judge, dict) else None
+    if isinstance(branch, dict) and str(branch.get("status") or "").upper() in {"PASS", "FAIL"}:
+        errors = branch.get("errors")
+        if isinstance(errors, list):
+            return tuple(str(error) for error in errors)
+        return () if str(branch.get("status")).upper() == "PASS" else ("historical schema branch failed",)
+    return tuple(validate_qa_item(dict(parsed_qa))) if parsed_qa is not None else ()
+
+
 def extract_packet_attempts(packet: dict[str, Any]) -> list[AttemptRecord]:
     evidence_id = str(packet.get("evidence_id") or "").strip()
     if not evidence_id:
@@ -60,7 +71,7 @@ def extract_packet_attempts(packet: dict[str, Any]) -> list[AttemptRecord]:
         if not raw_qa.strip():
             raise ValueError(f"packet {evidence_id} attempt {attempt_index} has empty raw generation")
         parsed_qa = _parse_generation(generation, raw_qa)
-        schema_errors = tuple(validate_qa_item(dict(parsed_qa))) if parsed_qa is not None else ()
+        schema_errors = _schema_errors(source, parsed_qa)
         media = source.get("media") if isinstance(source.get("media"), dict) else {}
         result = source.get("result") if isinstance(source.get("result"), dict) else {}
         judge = source.get("judge")

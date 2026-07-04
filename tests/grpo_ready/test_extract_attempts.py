@@ -58,6 +58,17 @@ class ExtractAttemptsTests(unittest.TestCase):
         self.assertEqual(rows[0].evaluator_video_paths, ("evaluator.mp4",))
         self.assertEqual(rows[1].feedback, "repair grounding")
 
+    def test_frozen_schema_branch_is_authoritative_for_historical_replay(self) -> None:
+        packet = fixture_packet()
+        packet["attempts"][0]["judge"]["schema_branch"] = {
+            "status": "PASS",
+            "errors": [],
+        }
+
+        row = extract_packet_attempts(packet)[0]
+
+        self.assertEqual(row.schema_errors, ())
+
     def test_rejected_compact_attempts_are_recovered_from_generation_trace(self) -> None:
         packet = fixture_packet()
         packet["status"] = "rejected"
