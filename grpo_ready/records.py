@@ -33,9 +33,26 @@ class AttemptRecord:
 
 @dataclass(frozen=True)
 class RewardRecord:
-    """Reward v0 记录；具体字段在奖励任务中补齐。"""
-
     attempt_id: str
+    parse_success: bool
+    schema_pass: bool | None
+    schema_error_count: int | None
+    formality_pass: bool | None
+    groundedness_pass: bool | None
+    combined_correct: bool | None
+    speaker_alone_correct: bool | None
+    provider_alone_correct: bool | None
+    parse_reward: float
+    schema_reward: float | None
+    formality_reward: float | None
+    groundedness_reward: float | None
+    combined_reward: float | None
+    speaker_leakage_reward: float | None
+    provider_alone_reward: float | None
+    total: float
+    reward_version: str
+    missing_components: tuple[str, ...]
+    is_complete_reward: bool
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
