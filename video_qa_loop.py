@@ -179,7 +179,6 @@ def complete_generator_metadata(
     required_users = list(packet.get("required_users") or qa.get("required_users") or [])
     qa["question_type"] = question_type
     qa["required_users"] = required_users
-    qa.setdefault("category", "environmental_interaction")
     qa.setdefault("referred_timestamps", [])
     if not isinstance(qa.get("referred_timestamps"), list):
         qa["referred_timestamps"] = []
@@ -290,7 +289,6 @@ def qa_for_judger_prompt(qa: dict[str, Any]) -> dict[str, Any]:
         "options",
         "correct",
         "answer",
-        "category",
         "required_users",
         "evidence",
         "single_user_answerability",
@@ -779,7 +777,6 @@ def dry_run_qa(packet: dict[str, Any], question_type: str, generation_mode: str 
         "options": ["Option A", "Option B", "Option C", "Option D", "Option E"],
         "correct": "A",
         "answer": "Option A",
-        "category": "environmental_interaction",
         "required_users": users,
         "evidence": [{"user": user, "needed_fact": "dry-run video evidence", "frames_used": []} for user in users],
         "single_user_answerability": {user: "insufficient in dry-run mode" for user in users},
@@ -1423,7 +1420,6 @@ def generate_video_qa_loop(
             complete_generator_metadata(qa, packet=packet, question_type=question_type)
             attempt_trace["generation"]["normalized_qa"] = {
                 "qa_id": qa.get("qa_id"),
-                "category": qa.get("category"),
                 "single_user_answerability": qa.get("single_user_answerability"),
                 "combined_answerability": qa.get("combined_answerability"),
                 "generator_rationale": qa.get("generator_rationale"),

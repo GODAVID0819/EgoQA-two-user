@@ -29,6 +29,9 @@ GENERATION_MODE="${GENERATION_MODE:-baseline}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-1536}"
 RESUME_GENERATION="${RESUME_GENERATION:-0}"
+MIN_PRUNED_VIDEO_SECONDS="${MIN_PRUNED_VIDEO_SECONDS:-1}"
+PRUNING_PROTECTION_MODE="${PRUNING_PROTECTION_MODE:-reject}"
+MIN_PRUNED_VIDEO_PERCENT="${MIN_PRUNED_VIDEO_PERCENT:-}"
 
 CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-1}"
 CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/egolife_two_user_qa/hpc/cuda.py}"
@@ -77,6 +80,9 @@ echo "generation_mode=${GENERATION_MODE}"
 echo "max_attempts=${MAX_ATTEMPTS}"
 echo "max_new_tokens=${MAX_NEW_TOKENS}"
 echo "resume_generation=${RESUME_GENERATION}"
+echo "min_pruned_video_seconds=${MIN_PRUNED_VIDEO_SECONDS}"
+echo "pruning_protection_mode=${PRUNING_PROTECTION_MODE}"
+echo "min_pruned_video_percent=${MIN_PRUNED_VIDEO_PERCENT}"
 echo "benchmark_contract=randomly_sample_${SELECTED_COUNT}_synchronized_videos_then_clip_prune_generator_media"
 echo "frame_sampling=one_frame_per_second_for_30_seconds_per_selected_video"
 echo "media_routing=generator_uses_pruned_videos;judges_and_answerability_use_full_30s_originals"
@@ -146,6 +152,10 @@ python -m egolife_two_user_qa build_manifest \
   --no-overlays
 
 echo "stage=prepare_clip_pruned_benchmark"
+protection_args=(--pruning-protection-mode "${PRUNING_PROTECTION_MODE}")
+if [[ -n "${MIN_PRUNED_VIDEO_PERCENT}" ]]; then
+  protection_args+=(--min-pruned-video-percent "${MIN_PRUNED_VIDEO_PERCENT}")
+fi
 python -m egolife_two_user_qa prepare_clip_pruned_benchmark \
   --manifest "${OUTDIR}/manifest.json" \
   --output "${OUTDIR}/evidence_pruned_pairs.jsonl" \
@@ -168,7 +178,8 @@ python -m egolife_two_user_qa prepare_clip_pruned_benchmark \
   --high-similarity-interval-threshold 0.82 \
   --pruning-clusters-per-video 12 \
   --preserve-shared-anchor-seconds 0.0 \
-  --min-pruned-video-seconds 1 \
+  --min-pruned-video-seconds "${MIN_PRUNED_VIDEO_SECONDS}" \
+  "${protection_args[@]}" \
   --random-seed 42 \
   --download-media
 

@@ -47,6 +47,7 @@ from egolife_two_user_qa.manifest import parse_egolife_path, seconds_from_time_t
 from egolife_two_user_qa.prompts import (
     build_qa_formality_judge_prompt,
     build_relation_discovery_prompt,
+    build_relation_mcq_prompt,
     build_video_generation_prompt,
 )
 from egolife_two_user_qa.qwen3vl_runner import DryRunRunner, normalize_video_kwargs, split_video_inputs_and_metadata
@@ -683,6 +684,29 @@ class GroupRelativeClipSamplingTests(unittest.TestCase):
         self.assertEqual(mine.call_args.kwargs["selected_count"], 2)
         self.assertEqual(mine.call_args.kwargs["pruning_clusters_per_video"], 12)
         self.assertTrue(mine.call_args.kwargs["random_pair_first"])
+        self.assertEqual(mine.call_args.kwargs["pruning_protection_mode"], "reject")
+
+    def test_prepare_clip_pruned_benchmark_cli_passes_percent_protection(self) -> None:
+        with patch("egolife_two_user_qa.cli.mine_group_relative_clip_candidates", return_value=[]) as mine:
+            exit_code = cli_main(
+                [
+                    "prepare_clip_pruned_benchmark",
+                    "--manifest",
+                    "manifest.json",
+                    "--output",
+                    "evidence.jsonl",
+                    "--output-dir",
+                    "out",
+                    "--pruning-protection-mode",
+                    "min_percent",
+                    "--min-pruned-video-percent",
+                    "40",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(mine.call_args.kwargs["pruning_protection_mode"], "min_percent")
+        self.assertEqual(mine.call_args.kwargs["min_pruned_video_percent"], 40)
 
     def test_mine_group_relative_randomizes_groups_before_max_groups(self) -> None:
         with workspace_temp_dir() as tmp:
@@ -945,6 +969,74 @@ class GroupRelativeClipSamplingTests(unittest.TestCase):
         self.assertEqual(pruning["left_keep_intervals"], [[1.5, 4.0]])
         self.assertEqual(pruning["high_similarity_representative_pair_count"], 1)
 
+    def test_clustered_temporal_pruning_protects_min_seconds_by_restoring_least_similar_high_matches(self) -> None:
+        frames = [
+            {"path": f"frame_{index}.jpg", "timestamp_seconds": float(index)}
+            for index in range(4)
+        ]
+        left_embeddings = [
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        ]
+        similarities = [0.99, 0.83, 0.95, 0.90]
+        right_embeddings = []
+        for index, similarity in enumerate(similarities):
+            vector = [0.0] * 8
+            vector[index] = similarity
+            vector[index + 4] = (1.0 - similarity * similarity) ** 0.5
+            right_embeddings.append(vector)
+
+        pruning = clustered_temporal_similarity_pruning(
+            frames,
+            frames,
+            left_embeddings,
+            right_embeddings,
+            start_seconds=0.0,
+            duration_seconds=4.0,
+            sample_interval_seconds=1.0,
+            cluster_count=4,
+            high_similarity_threshold=0.82,
+            min_pruned_video_seconds=2.0,
+            pruning_protection_mode="min_seconds",
+        )
+
+        self.assertTrue(pruning["passed"])
+        self.assertGreaterEqual(pruning["left_kept_duration_seconds"], 2.0)
+        self.assertEqual(pruning["left_restored_frame_indices"], [1, 3])
+        self.assertEqual(pruning["right_restored_frame_indices"], [1, 3])
+        self.assertEqual(
+            [row["best_match_similarity"] for row in pruning["left_restored_frames"]],
+            [0.83, 0.9],
+        )
+        self.assertEqual(pruning["duration_protection"]["mode"], "min_seconds")
+
+    def test_clustered_temporal_pruning_percent_mode_uses_percentage_floor(self) -> None:
+        frames = [
+            {"path": f"frame_{index}.jpg", "timestamp_seconds": float(index)}
+            for index in range(4)
+        ]
+
+        pruning = clustered_temporal_similarity_pruning(
+            frames,
+            frames,
+            [[1.0, 0.0], [0.99, 0.01], [0.0, 1.0], [0.01, 0.99]],
+            [[1.0, 0.0], [0.99, 0.01], [0.0, 1.0], [0.01, 0.99]],
+            start_seconds=0.0,
+            duration_seconds=4.0,
+            sample_interval_seconds=1.0,
+            cluster_count=2,
+            high_similarity_threshold=0.95,
+            min_pruned_video_seconds=8.0,
+            pruning_protection_mode="min_percent",
+            min_pruned_video_percent=50.0,
+        )
+
+        self.assertTrue(pruning["passed"])
+        self.assertEqual(pruning["required_kept_duration_seconds"], 2.0)
+        self.assertGreaterEqual(pruning["kept_duration_seconds"], 2.0)
+
     def test_materialize_pruned_video_overwrites_existing_output(self) -> None:
         with workspace_temp_dir() as tmp:
             root = Path(tmp)
@@ -1096,7 +1188,6 @@ class SchemaTests(unittest.TestCase):
             "options": ["A cup", "A plate", "A book", "A phone", "A key"],
             "correct": "A",
             "answer": "A cup",
-            "category": "environmental_interaction",
             "required_users": ["Jake", "Alice"],
             "evidence": [
                 {"user": "Jake", "needed_fact": "saw the cup", "frames_used": ["f1"]},
@@ -1375,6 +1466,8 @@ class VideoFirstTests(unittest.TestCase):
         self.assertIn("why_two_users_needed", prompt)
         self.assertIn("required_users[0] is the asker/speaker", prompt)
         self.assertIn("required_users[1] is the evidence provider", prompt)
+        self.assertIn("naturally askable from that user's first-person perspective", prompt)
+        self.assertNotIn("answerable from that user's first-person perspective", prompt)
         self.assertIn("Do not reject merely because required_users[1] alone can answer", prompt)
 
     def test_video_generation_prompt_discourages_fixed_question_templates(self) -> None:
@@ -1394,6 +1487,10 @@ class VideoFirstTests(unittest.TestCase):
         self.assertNotIn("checked the setup", prompt)
         self.assertIn("Do not use a fixed question template", prompt)
         self.assertIn("avoid opening with a temporal setup clause", prompt)
+        self.assertIn("Avoid shallow other-person activity questions", prompt)
+        self.assertIn("When I was washing dishes, what was Alice doing?", prompt)
+        self.assertIn("Was the stove left on after I walked away?", prompt)
+        self.assertIn("Do not copy their wording, objects, or structure", prompt)
 
     def test_clip_guided_prompt_includes_retrieval_hints(self) -> None:
         packet = {
@@ -1451,6 +1548,10 @@ class VideoFirstTests(unittest.TestCase):
         self.assertIn("semantic_subchecks.other_person_activity_query", prompt)
         self.assertIn("shallow concurrent-activity query", prompt)
         self.assertIn("concrete missing detail", prompt)
+        self.assertIn("what was Alice doing?", prompt)
+        self.assertIn("what were they doing on the laptop?", prompt)
+        self.assertIn("set checks.qa_formality.status to FAIL", prompt)
+        self.assertIn("Was the stove left on after I walked away?", prompt)
 
     def test_discovery_prompt_is_template_free_planning_stage(self) -> None:
         packet = {
@@ -1467,7 +1568,30 @@ class VideoFirstTests(unittest.TestCase):
         self.assertIn("Do not write the MCQ yet", prompt)
         self.assertIn("List 3-5 possible cross-user information needs", prompt)
         self.assertIn("likely_answerable_by_one_video_alone", prompt)
+        self.assertIn("Do not select a relation whose main question is just what required_users[1] was doing", prompt)
+        self.assertIn("Avoid shallow other-person activity questions", prompt)
         self.assertNotIn("Good example", prompt)
+
+    def test_relation_mcq_prompt_blocks_other_person_activity_template(self) -> None:
+        packet = {
+            "evidence_id": "E1",
+            "required_users": ["Jake", "Alice"],
+            "clips": [
+                {"agent_name": "Jake", "day": "DAY1", "clip_clock": "11:10:00.00", "local_video": "jake.mp4"},
+                {"agent_name": "Alice", "day": "DAY1", "clip_clock": "11:10:00.00", "local_video": "alice.mp4"},
+            ],
+        }
+
+        prompt = build_relation_mcq_prompt(
+            packet,
+            "commonality",
+            {"need": "where the object went", "speaker_user": "Jake"},
+        )
+
+        self.assertIn("Avoid shallow other-person activity questions", prompt)
+        self.assertIn("While I was eating, what was the other person doing on the laptop?", prompt)
+        self.assertIn("Which mug was still on the counter after I left the table?", prompt)
+        self.assertIn("Do not copy their wording, objects, or structure", prompt)
 
     def test_discovery_dry_run_writes_discovery_prompt_stage(self) -> None:
         with workspace_temp_dir() as tmp:

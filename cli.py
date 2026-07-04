@@ -1,4 +1,4 @@
-﻿"""Unified CLI for the EgoLife two-user QA pilot."""
+"""Unified CLI for the EgoLife two-user QA pilot."""
 
 from __future__ import annotations
 
@@ -282,6 +282,12 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--pruning-clusters-per-video", type=int, default=12)
     benchmark.add_argument("--preserve-shared-anchor-seconds", type=float, default=0.0)
     benchmark.add_argument("--min-pruned-video-seconds", type=float, default=8.0)
+    benchmark.add_argument(
+        "--pruning-protection-mode",
+        choices=["reject", "min_seconds", "min_percent"],
+        default="reject",
+    )
+    benchmark.add_argument("--min-pruned-video-percent", type=float)
     benchmark.add_argument("--compare-all-pairs", action="store_true")
     benchmark.add_argument("--random-seed", type=int, default=42)
     benchmark.add_argument("--ffmpeg-binary", default="ffmpeg")
@@ -481,6 +487,8 @@ def main(argv: list[str] | None = None) -> int:
             pruning_clusters_per_video=args.pruning_clusters_per_video,
             preserve_shared_anchor_seconds=args.preserve_shared_anchor_seconds,
             min_pruned_video_seconds=args.min_pruned_video_seconds,
+            pruning_protection_mode=args.pruning_protection_mode,
+            min_pruned_video_percent=args.min_pruned_video_percent,
             random_pair_first=not args.compare_all_pairs,
             random_seed=args.random_seed,
             ffmpeg_binary=args.ffmpeg_binary,

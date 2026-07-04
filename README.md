@@ -38,6 +38,15 @@ the CLIP-guided pruned MP4 for generation, while `full_local_video` and
 answerability. `generate_video_qa_loop` uses `media_role="generator"` for the
 generator and `media_role="full"` for all three verification branches.
 
+Pruning can be protected from collapsing videos to very short clips. Set
+`--pruning-protection-mode min_seconds --min-pruned-video-seconds 8` to restore
+enough least-similar high-threshold sampled-frame intervals to keep at least 8
+seconds per selected video, or set `--pruning-protection-mode min_percent
+--min-pruned-video-percent 40` to keep at least 40% of the input window. The
+restored intervals are chosen from frames whose best cross-video CLIP similarity
+is still at or above `--high-similarity-interval-threshold`, ordered from least
+similar to most similar.
+
 ## CLIP Anchor / Evidence-Gap Toy Demo
 
 `clip_gap_demo` 是一个独立的预处理实验，不会直接生成问题。它读取
@@ -162,7 +171,6 @@ sbatch hpc/run_egolife_discovery_control_only.sbatch
 - `options`
 - `correct`
 - `answer`
-- `category`
 - `question_type`
 - `required_users`
 - `evidence`

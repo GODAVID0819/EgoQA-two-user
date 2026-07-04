@@ -353,6 +353,157 @@ def _intervals_for_frame_indices(
     return _merge_intervals(intervals)
 
 
+def _side_best_frame_matches(
+    matrix: list[list[float]],
+    *,
+    side: str,
+) -> dict[int, dict[str, Any]]:
+    """Return each sampled frame's best cross-video match from a similarity matrix."""
+
+    if side == "left":
+        return {
+            left_index: {
+                "best_match_index": int(max(enumerate(row), key=lambda item: item[1])[0]),
+                "best_match_similarity": float(max(row)),
+            }
+            for left_index, row in enumerate(matrix)
+            if row
+        }
+    if side == "right":
+        if not matrix:
+            return {}
+        width = len(matrix[0])
+        return {
+            right_index: {
+                "best_match_index": int(max(
+                    ((left_index, matrix[left_index][right_index]) for left_index in range(len(matrix))),
+                    key=lambda item: item[1],
+                )[0]),
+                "best_match_similarity": float(max(matrix[left_index][right_index] for left_index in range(len(matrix)))),
+            }
+            for right_index in range(width)
+        }
+    raise ValueError(f"unknown side: {side}")
+
+
+def _filter_preserved_intervals(
+    intervals: list[tuple[float, float]],
+    preserved_intervals: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    if not preserved_intervals:
+        return intervals
+    return [
+        interval
+        for interval in intervals
+        if not any(interval[0] < preserved[1] and interval[1] > preserved[0] for preserved in preserved_intervals)
+    ]
+
+
+def _apply_pruning_duration_protection(
+    frames: list[dict[str, Any]],
+    marked_indices: set[int],
+    best_matches: dict[int, dict[str, Any]],
+    *,
+    side: str,
+    window_start: float,
+    window_end: float,
+    sample_interval_seconds: float,
+    high_similarity_threshold: float,
+    target_kept_seconds: float | None,
+    preserved_intervals: list[tuple[float, float]],
+) -> dict[str, Any]:
+    """Unmark least-similar high-threshold frames until the kept duration floor is met."""
+
+    current_marked = set(marked_indices)
+
+    def compute(marked: set[int]) -> tuple[list[tuple[float, float]], list[tuple[float, float]], float, float]:
+        remove = _intervals_for_frame_indices(
+            frames,
+            marked,
+            window_start=window_start,
+            window_end=window_end,
+            sample_interval_seconds=sample_interval_seconds,
+        )
+        remove = _merge_intervals(_filter_preserved_intervals(remove, preserved_intervals))
+        keep = _subtract_intervals((window_start, window_end), remove)
+        kept = round(sum(end - start for start, end in keep), 3)
+        removed = round(sum(end - start for start, end in remove), 3)
+        return remove, keep, kept, removed
+
+    remove_intervals, keep_intervals, kept_duration, removed_duration = compute(current_marked)
+    restored = []
+    target = None if target_kept_seconds is None else max(0.0, round(float(target_kept_seconds), 3))
+    if target is not None and kept_duration < target:
+        candidates = []
+        for frame_index in sorted(current_marked):
+            match = best_matches.get(frame_index)
+            if not match:
+                continue
+            similarity = float(match["best_match_similarity"])
+            if similarity < high_similarity_threshold:
+                continue
+            frame = frames[frame_index]
+            candidates.append(
+                {
+                    "side": side,
+                    "frame_index": int(frame_index),
+                    "timestamp_seconds": frame.get("timestamp_seconds"),
+                    "best_match_index": int(match["best_match_index"]),
+                    "best_match_similarity": round(similarity, 6),
+                }
+            )
+        candidates.sort(
+            key=lambda row: (
+                float(row["best_match_similarity"]),
+                float(row["timestamp_seconds"] if row["timestamp_seconds"] is not None else window_start),
+                int(row["frame_index"]),
+            )
+        )
+        for candidate in candidates:
+            if kept_duration >= target:
+                break
+            frame_index = int(candidate["frame_index"])
+            if frame_index not in current_marked:
+                continue
+            before = kept_duration
+            current_marked.remove(frame_index)
+            remove_intervals, keep_intervals, kept_duration, removed_duration = compute(current_marked)
+            restored.append({**candidate, "kept_duration_before_seconds": before, "kept_duration_after_seconds": kept_duration})
+
+    return {
+        "marked_indices": current_marked,
+        "remove_intervals": remove_intervals,
+        "keep_intervals": keep_intervals,
+        "kept_duration_seconds": kept_duration,
+        "removed_duration_seconds": removed_duration,
+        "restored_frames": restored,
+        "target_kept_seconds": target,
+        "target_met": True if target is None else kept_duration >= target,
+    }
+
+
+def _protected_duration_target_seconds(
+    *,
+    mode: str,
+    duration_seconds: float,
+    min_pruned_video_seconds: float,
+    min_pruned_video_percent: float | None,
+) -> float | None:
+    if mode == "reject":
+        return None
+    if mode == "min_seconds":
+        if min_pruned_video_seconds < 0:
+            raise ValueError("min_pruned_video_seconds must be non-negative")
+        return min(float(duration_seconds), float(min_pruned_video_seconds))
+    if mode == "min_percent":
+        if min_pruned_video_percent is None:
+            raise ValueError("min_pruned_video_percent is required when pruning_protection_mode is min_percent")
+        if min_pruned_video_percent < 0 or min_pruned_video_percent > 100:
+            raise ValueError("min_pruned_video_percent must be between 0 and 100")
+        return min(float(duration_seconds), float(duration_seconds) * float(min_pruned_video_percent) / 100.0)
+    raise ValueError(f"unknown pruning_protection_mode: {mode}")
+
+
 def clustered_frame_representatives(
     frames: list[dict[str, Any]],
     embeddings: list[list[float]],
@@ -416,6 +567,8 @@ def clustered_temporal_similarity_pruning(
     high_similarity_threshold: float = 0.82,
     preserve_shared_anchor_seconds: float = 0.0,
     min_pruned_video_seconds: float = 8.0,
+    pruning_protection_mode: str = "reject",
+    min_pruned_video_percent: float | None = None,
 ) -> dict[str, Any]:
     """Prune high-similarity clusters using representative sampled frames.
 
@@ -432,6 +585,12 @@ def clustered_temporal_similarity_pruning(
 
     window_start = float(start_seconds)
     window_end = round(window_start + float(duration_seconds), 3)
+    target_kept_seconds = _protected_duration_target_seconds(
+        mode=pruning_protection_mode,
+        duration_seconds=duration_seconds,
+        min_pruned_video_seconds=min_pruned_video_seconds,
+        min_pruned_video_percent=min_pruned_video_percent,
+    )
     left_clusters = clustered_frame_representatives(
         left_frames,
         left_embeddings,
@@ -494,46 +653,53 @@ def clustered_temporal_similarity_pruning(
 
     left_marked_indices = marked_frame_indices(left_clusters, left_marked_clusters)
     right_marked_indices = marked_frame_indices(right_clusters, right_marked_clusters)
-    left_remove_intervals = _intervals_for_frame_indices(
+    full_frame_matrix = frame_similarity_matrix(left_embeddings, right_embeddings)
+    left_protection = _apply_pruning_duration_protection(
         left_frames,
         left_marked_indices,
+        _side_best_frame_matches(full_frame_matrix, side="left"),
+        side="left",
         window_start=window_start,
         window_end=window_end,
         sample_interval_seconds=sample_interval_seconds,
+        high_similarity_threshold=high_similarity_threshold,
+        target_kept_seconds=target_kept_seconds,
+        preserved_intervals=preserved_intervals,
     )
-    right_remove_intervals = _intervals_for_frame_indices(
+    right_protection = _apply_pruning_duration_protection(
         right_frames,
         right_marked_indices,
+        _side_best_frame_matches(full_frame_matrix, side="right"),
+        side="right",
         window_start=window_start,
         window_end=window_end,
         sample_interval_seconds=sample_interval_seconds,
+        high_similarity_threshold=high_similarity_threshold,
+        target_kept_seconds=target_kept_seconds,
+        preserved_intervals=preserved_intervals,
     )
-
-    if preserved_intervals:
-        left_remove_intervals = [
-            interval
-            for interval in left_remove_intervals
-            if not any(interval[0] < preserved[1] and interval[1] > preserved[0] for preserved in preserved_intervals)
-        ]
-        right_remove_intervals = [
-            interval
-            for interval in right_remove_intervals
-            if not any(interval[0] < preserved[1] and interval[1] > preserved[0] for preserved in preserved_intervals)
-        ]
-
-    left_remove_intervals = _merge_intervals(left_remove_intervals)
-    right_remove_intervals = _merge_intervals(right_remove_intervals)
-    left_keep_intervals = _subtract_intervals((window_start, window_end), left_remove_intervals)
-    right_keep_intervals = _subtract_intervals((window_start, window_end), right_remove_intervals)
-    left_kept_duration = round(sum(end - start for start, end in left_keep_intervals), 3)
-    right_kept_duration = round(sum(end - start for start, end in right_keep_intervals), 3)
-    left_removed_duration = round(sum(end - start for start, end in left_remove_intervals), 3)
-    right_removed_duration = round(sum(end - start for start, end in right_remove_intervals), 3)
+    left_marked_indices = left_protection["marked_indices"]
+    right_marked_indices = right_protection["marked_indices"]
+    left_remove_intervals = left_protection["remove_intervals"]
+    right_remove_intervals = right_protection["remove_intervals"]
+    left_keep_intervals = left_protection["keep_intervals"]
+    right_keep_intervals = right_protection["keep_intervals"]
+    left_kept_duration = left_protection["kept_duration_seconds"]
+    right_kept_duration = right_protection["kept_duration_seconds"]
+    left_removed_duration = left_protection["removed_duration_seconds"]
+    right_removed_duration = right_protection["removed_duration_seconds"]
     removed_duration = round(left_removed_duration + right_removed_duration, 3)
     kept_duration = round(min(left_kept_duration, right_kept_duration), 3)
+    required_kept_duration = (
+        float(min_pruned_video_seconds)
+        if pruning_protection_mode == "reject"
+        else float(target_kept_seconds or 0.0)
+    )
     passed = (
-        left_kept_duration >= min_pruned_video_seconds
-        and right_kept_duration >= min_pruned_video_seconds
+        left_kept_duration >= required_kept_duration
+        and right_kept_duration >= required_kept_duration
+        and left_protection["target_met"]
+        and right_protection["target_met"]
         and removed_duration > 0.0
     )
 
@@ -557,6 +723,10 @@ def clustered_temporal_similarity_pruning(
         "right_cluster_count": right_clusters["cluster_count"],
         "preserve_shared_anchor_seconds": preserve_shared_anchor_seconds,
         "min_pruned_video_seconds": min_pruned_video_seconds,
+        "pruning_protection_mode": pruning_protection_mode,
+        "min_pruned_video_percent": min_pruned_video_percent,
+        "protection_target_kept_seconds": target_kept_seconds,
+        "required_kept_duration_seconds": round(required_kept_duration, 3),
         "window": {
             "start_seconds": round(window_start, 3),
             "end_seconds": window_end,
@@ -570,6 +740,22 @@ def clustered_temporal_similarity_pruning(
         "right_marked_cluster_count": len(right_marked_clusters),
         "left_marked_frame_indices": sorted(left_marked_indices),
         "right_marked_frame_indices": sorted(right_marked_indices),
+        "left_restored_frame_indices": [int(row["frame_index"]) for row in left_protection["restored_frames"]],
+        "right_restored_frame_indices": [int(row["frame_index"]) for row in right_protection["restored_frames"]],
+        "left_restored_frames": left_protection["restored_frames"],
+        "right_restored_frames": right_protection["restored_frames"],
+        "duration_protection": {
+            "mode": pruning_protection_mode,
+            "target_kept_seconds": target_kept_seconds,
+            "min_pruned_video_seconds": min_pruned_video_seconds,
+            "min_pruned_video_percent": min_pruned_video_percent,
+            "left_target_met": left_protection["target_met"],
+            "right_target_met": right_protection["target_met"],
+            "selection_rule": (
+                "When protection is enabled, restore least-similar sampled-frame intervals whose "
+                "best cross-video CLIP similarity is still at or above high_similarity_threshold."
+            ),
+        },
         "left_remove_intervals": [[round(start, 3), round(end, 3)] for start, end in left_remove_intervals],
         "right_remove_intervals": [[round(start, 3), round(end, 3)] for start, end in right_remove_intervals],
         "left_keep_intervals": [[round(start, 3), round(end, 3)] for start, end in left_keep_intervals],
@@ -811,6 +997,8 @@ def score_video_pairs(
     temporal_neighborhood_seconds: float | None = None,
     preserve_shared_anchor_seconds: float = 0.0,
     min_pruned_video_seconds: float = 8.0,
+    pruning_protection_mode: str = "reject",
+    min_pruned_video_percent: float | None = None,
 ) -> dict[str, Any]:
     """Filter video pairs using clustered-frame representatives and overlap metrics."""
 
@@ -837,6 +1025,8 @@ def score_video_pairs(
                 high_similarity_threshold=high_similarity_interval_threshold,
                 preserve_shared_anchor_seconds=preserve_shared_anchor_seconds,
                 min_pruned_video_seconds=min_pruned_video_seconds,
+                pruning_protection_mode=pruning_protection_mode,
+                min_pruned_video_percent=min_pruned_video_percent,
             )
             matrix = temporal_pruning["representative_similarity_matrix"]
             values = _flatten_matrix(matrix)
@@ -910,6 +1100,8 @@ def score_video_pairs(
             "temporal_neighborhood_seconds": temporal_neighborhood_seconds,
             "preserve_shared_anchor_seconds": preserve_shared_anchor_seconds,
             "min_pruned_video_seconds": min_pruned_video_seconds,
+            "pruning_protection_mode": pruning_protection_mode,
+            "min_pruned_video_percent": min_pruned_video_percent,
             "pair_count": len(pair_scores),
             "kept_pair_count": len(kept_pairs),
             "interpretation": (
@@ -1082,8 +1274,14 @@ def _clip_with_pruned_video(
         "pruned_local_video": str(output_video),
         "method": pruning.get("method"),
         "high_similarity_threshold": pruning.get("high_similarity_threshold"),
+        "pruning_protection_mode": pruning.get("pruning_protection_mode"),
+        "min_pruned_video_percent": pruning.get("min_pruned_video_percent"),
+        "protection_target_kept_seconds": pruning.get("protection_target_kept_seconds"),
+        "required_kept_duration_seconds": pruning.get("required_kept_duration_seconds"),
         "keep_intervals": keep_intervals,
         "remove_intervals": remove_intervals,
+        "restored_frame_indices": pruning.get(f"{side}_restored_frame_indices", []),
+        "restored_frames": pruning.get(f"{side}_restored_frames", []),
         "preserved_shared_intervals": pruning.get("preserved_shared_intervals", []),
         "kept_duration_seconds": pruning.get(f"{side}_kept_duration_seconds", pruning.get("kept_duration_seconds")),
         "removed_duration_seconds": pruning.get(
@@ -1179,6 +1377,8 @@ def analyze_group_relative_similarity(
     temporal_neighborhood_seconds: float | None = None,
     preserve_shared_anchor_seconds: float = 0.0,
     min_pruned_video_seconds: float = 8.0,
+    pruning_protection_mode: str = "reject",
+    min_pruned_video_percent: float | None = None,
     random_pair_first: bool = True,
     rng: random.Random | None = None,
     ffmpeg_binary: str = "ffmpeg",
@@ -1235,6 +1435,8 @@ def analyze_group_relative_similarity(
         temporal_neighborhood_seconds=temporal_neighborhood_seconds,
         preserve_shared_anchor_seconds=preserve_shared_anchor_seconds,
         min_pruned_video_seconds=min_pruned_video_seconds,
+        pruning_protection_mode=pruning_protection_mode,
+        min_pruned_video_percent=min_pruned_video_percent,
     )
     surviving_pairs = pair_analysis["surviving_pairs"]
     if not surviving_pairs:
@@ -1283,6 +1485,8 @@ def analyze_group_relative_similarity(
             "temporal_neighborhood_seconds": temporal_neighborhood_seconds,
             "preserve_shared_anchor_seconds": preserve_shared_anchor_seconds,
             "min_pruned_video_seconds": min_pruned_video_seconds,
+            "pruning_protection_mode": pruning_protection_mode,
+            "min_pruned_video_percent": min_pruned_video_percent,
             "selected_indices": selected_indices,
             "selected_agents": [clip.get("agent_dir") for clip in selected_clips],
             "selected_users": [clip.get("agent_name") for clip in selected_clips],
@@ -1547,7 +1751,6 @@ def build_candidate_packet(group_result: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
-
 def mine_group_relative_clip_candidates(
     *,
     manifest_path: str | Path,
@@ -1572,6 +1775,8 @@ def mine_group_relative_clip_candidates(
     temporal_neighborhood_seconds: float | None = None,
     preserve_shared_anchor_seconds: float = 0.0,
     min_pruned_video_seconds: float = 8.0,
+    pruning_protection_mode: str = "reject",
+    min_pruned_video_percent: float | None = None,
     random_pair_first: bool = True,
     random_seed: int | None = 42,
     ffmpeg_binary: str = "ffmpeg",
@@ -1622,6 +1827,8 @@ def mine_group_relative_clip_candidates(
                 temporal_neighborhood_seconds=temporal_neighborhood_seconds,
                 preserve_shared_anchor_seconds=preserve_shared_anchor_seconds,
                 min_pruned_video_seconds=min_pruned_video_seconds,
+                pruning_protection_mode=pruning_protection_mode,
+                min_pruned_video_percent=min_pruned_video_percent,
                 random_pair_first=random_pair_first,
                 rng=rng,
                 ffmpeg_binary=ffmpeg_binary,
@@ -1685,6 +1892,8 @@ def mine_group_relative_clip_candidates(
                 "temporal_neighborhood_seconds": temporal_neighborhood_seconds,
                 "preserve_shared_anchor_seconds": preserve_shared_anchor_seconds,
                 "min_pruned_video_seconds": min_pruned_video_seconds,
+                "pruning_protection_mode": pruning_protection_mode,
+                "min_pruned_video_percent": min_pruned_video_percent,
                 "random_pair_first": random_pair_first,
                 "random_seed": random_seed,
                 "download_media": download_media,
@@ -1762,7 +1971,22 @@ def main(argv: list[str] | None = None) -> int:
         "--min-pruned-video-seconds",
         type=float,
         default=8.0,
-        help="Reject a pair if interval pruning leaves less than this much video",
+        help="Minimum retained video seconds for reject mode or min_seconds protection mode",
+    )
+    parser.add_argument(
+        "--pruning-protection-mode",
+        choices=["reject", "min_seconds", "min_percent"],
+        default="reject",
+        help=(
+            "reject keeps legacy behavior; min_seconds restores least-similar high-threshold "
+            "sampled-frame intervals until --min-pruned-video-seconds remain; min_percent uses "
+            "--min-pruned-video-percent instead"
+        ),
+    )
+    parser.add_argument(
+        "--min-pruned-video-percent",
+        type=float,
+        help="Minimum retained percentage of the input window when --pruning-protection-mode=min_percent",
     )
     parser.add_argument(
         "--compare-all-pairs",
@@ -1797,6 +2021,8 @@ def main(argv: list[str] | None = None) -> int:
         temporal_neighborhood_seconds=args.temporal_neighborhood_seconds,
         preserve_shared_anchor_seconds=args.preserve_shared_anchor_seconds,
         min_pruned_video_seconds=args.min_pruned_video_seconds,
+        pruning_protection_mode=args.pruning_protection_mode,
+        min_pruned_video_percent=args.min_pruned_video_percent,
         random_pair_first=not args.compare_all_pairs,
         random_seed=args.random_seed,
         ffmpeg_binary=args.ffmpeg_binary,

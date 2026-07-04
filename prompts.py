@@ -11,7 +11,6 @@ VIDEO_GENERATION_SCHEMA = {
     "options": ["option A", "option A", "option C", "option D", "option E"],
     "correct": "A/B/C/D/E",
     "answer": "exact text of the correct option",
-    "category": "one of: social_interaction, task_coordination, theory_of_mind, temporal_reasoning, environmental_interaction",
     "required_users": ["asker/speaker user first", "evidence-provider user second"],
     "evidence": [
         {
@@ -85,6 +84,16 @@ ANSWERABILITY_SCHEMA = {
 
 
 GENERATION_MODES = ("baseline", "clip_guided", "discovery", "discovery_control")
+
+
+ANTI_ACTIVITY_QUERY_GUIDANCE = """Avoid shallow other-person activity questions:
+- Do not ask questions whose main purpose is to identify what required_users[1] was doing while the speaker was doing something.
+- Bad pattern: "When I was washing dishes, what was Alice doing?" This only asks for another person's concurrent activity.
+- Bad pattern: "While I was eating, what was the other person doing on the laptop?" This is still just a "what was B doing" query.
+- Better target: "Was the stove left on after I walked away?" because the speaker has an uncertainty and another view supplies a missing state.
+- Better target: "Which mug was still on the counter after I left the table?" because the answer is a specific object/state, not a person's general activity.
+- These examples are only to show the distinction. Do not copy their wording, objects, or structure unless the videos genuinely support that exact situation.
+"""
 
 
 JUDGE_CHECK_SCHEMA = {
@@ -299,19 +308,18 @@ def build_video_generation_prompt(
     feedback_block = _feedback_block(feedback)
     retrieval_block = clip_guidance_block(packet) if generation_mode == "clip_guided" else ""
     design_block = """Design rules:
-- Treat required_users[0] as the asker/speaker. The question must be answerable from that user's first-person perspective.
+- Treat required_users[0] as the asker/speaker. The question must be naturally askable from that user's first-person perspective.
 - required_users[0]'s own video alone must not reveal the correct answer.
 - Treat required_users[1] as the evidence provider. It is acceptable if required_users[1]'s video alone can answer the question, because that user supplies the missing visual evidence.
 - The question must combine a contextual clue from required_users[0]'s own view with complementary information from required_users[1]'s view.
 - The question does not need to begin with the contextual clue. Choose the most natural wording for the situation.
 - Do not use a fixed question template or repeat a stock opening. In particular, avoid opening with a temporal setup clause such as "After I ...", "When I ...", or "Once I ...".
 - Prefer varied everyday forms: checking where something ended up, identifying which object/person/action mattered, clarifying what changed, asking what was still true, or resolving a small uncertainty from the speaker's perspective.
-- The speaker/asker video must not already reveal the correct answer; another user's video must add the missing visual detail.
-- If required_users[0] alone can select the correct option, discard the question and create a different one.
+- The speaker/asker video must not already reveal the correct answer; the other user's video must add the missing visual detail.
 - Do not make a question just because clips share a timestamp.
 - Do not ask what both users saw, noticed, or looked at.
 - Do not ask what both users did, handled, had, shared, or were doing together.
-- Do not ask "what was the other person doing nearby" if the speaker's own view can already show it.
+- Do not ask what another person was doing while the speaker was doing something; that is a shallow activity query, not a speaker-side information need.
 - Do not ask a generic comparison of two views, rooms, or camera angles.
 """
     return f"""You are an assistant generating one meaningful, contextually grounded MCQ from raw egocentric videos.
@@ -325,7 +333,7 @@ Your task:
 4. The question must require visual evidence from at least two required users. Timestamp overlap is not enough.
 5. required_users[0] is the asker/speaker, and that user's video alone must be insufficient. required_users[1] is the evidence provider; it is acceptable if that user's video alone suffices because they provide the missing visual evidence.
 6. Fill the evidence field with each needed user's visual fact and a specific timeframe.
-7. Return every field in the JSON shape exactly. Do not omit category, single_user_answerability, combined_answerability, generator_rationale, why_two_users_needed, per_user_evidence_claims, referred_timestamps, or review.
+7. Return every field in the JSON shape exactly. Do not omit single_user_answerability, combined_answerability, generator_rationale, why_two_users_needed, per_user_evidence_claims, referred_timestamps, or review.
 8. The answer field must exactly equal the text of options[correct], and correct must be one letter: A, B, C, D, or E.
 
 Guidelines:
@@ -343,6 +351,8 @@ For example, if the question is asked from Jake's perspective, Jake's name shoul
 11) Before returning, mentally run the asker-alone test. If required_users[0] alone can answer the question, rewrite it. Do not reject merely because required_users[1] alone can answer.
 12) Avoid these rejected patterns: "What did we both...", "What did we all...", "What did everyone...", "What did I and Alice both...", "What were we doing together...", and "What was the other person doing nearby?".
 13) For commonality questions, the commonality should be the relationship between one user's contextual clue and another user's complementary detail, not merely a shared object or shared action visible in both views.
+
+{ANTI_ACTIVITY_QUERY_GUIDANCE}
 
 {design_block}
 
@@ -388,6 +398,9 @@ For each, identify:
 
 Then select exactly one relation that is natural, visually grounded, and not answerable from required_users[0]'s video alone. It is acceptable if required_users[1]'s video alone can answer.
 Avoid examples, stock phrasing, and fixed templates. Think in terms of the situation, not in terms of question patterns.
+Do not select a relation whose main question is just what required_users[1] was doing while required_users[0] was doing something.
+
+{ANTI_ACTIVITY_QUERY_GUIDANCE}
 
 {_feedback_block(feedback)}
 Evidence packet metadata:
@@ -433,6 +446,8 @@ Requirements:
 9. Return every field in the JSON shape exactly.
 10. The answer field must exactly equal the text of options[correct], and correct must be one letter: A, B, C, D, or E.
 
+{ANTI_ACTIVITY_QUERY_GUIDANCE}
+
 Discovered relation:
 {json.dumps(discovered_relation, ensure_ascii=False, indent=2)}
 
@@ -462,9 +477,14 @@ qa_formality asks whether the generated QA is natural and well-formed:
 - The question and options must not use dataset-observer wording such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, or timestamp.
 - The QA must be a valid five-option MCQ: exactly five non-empty, plausible, parallel options; correct is A-E; answer exactly matches options[correct]; and exactly one option is correct.
 - The question_type field, if used, must be either commonality or difference and must match the wording of the question.
-- Run the semantic_subchecks.other_person_activity_query subcheck. FAIL this subcheck when the question is essentially "while I was doing X, what was the other/named person doing?" and the answer is just that person's concurrent activity, without a concrete missing object, outcome, consequence, explanation, or follow-up that the speaker naturally needs.
-- PASS the subcheck when the question asks for a specific missing detail naturally tied to the speaker's anchor, such as where an object ended up, what changed after the speaker left, which item explains the speaker's uncertainty, or what outcome the speaker could not see.
+- Run the semantic_subchecks.other_person_activity_query subcheck explicitly.
+- FAIL this subcheck when the question is essentially "while/when I was doing X, what was the other/named person doing?" and the answer is just that person's concurrent activity.
+- FAIL this subcheck for variants such as "what was Alice doing?", "what was the other person doing nearby?", "what were they doing on the laptop?", or "what activity was B engaged in?" unless the question asks for a concrete missing object, state, location, outcome, consequence, explanation, or follow-up.
+- Bad qa_formality example: "When I was washing dishes, what was Alice doing?" with answer "reading a book" must FAIL because it only asks for Alice's activity.
+- Better qa_formality examples: "Was the stove left on after I walked away?" or "Which mug was still on the counter after I left?" may PASS if supported, because each asks for a specific missing state/location/object.
+- The examples show the distinction only. Do not require or reward copying their templates.
 - Do not fail merely because the wording contains "while" or mentions another person. Fail because the semantic relation is a shallow concurrent-activity query rather than a speaker-side information need.
+- If semantic_subchecks.other_person_activity_query is FAIL, set checks.qa_formality.status to FAIL, include "qa_formality" in blocking_failures, and give feedback telling the generator to ask for a concrete missing object/state/location/outcome instead of another person's activity.
 - PASS qa_formality only if the deterministic schema branch passes, the question wording and MCQ structure are acceptable, and semantic_subchecks.other_person_activity_query is not FAIL.
 
 Deterministic schema branch:

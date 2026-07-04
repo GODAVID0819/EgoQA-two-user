@@ -38,6 +38,8 @@ HIGH_SIMILARITY_INTERVAL_THRESHOLD="${GRP_HIGH_SIMILARITY_INTERVAL_THRESHOLD:-0.
 TEMPORAL_NEIGHBORHOOD_SECONDS="${GRP_TEMPORAL_NEIGHBORHOOD_SECONDS:-0}"
 PRESERVE_SHARED_ANCHOR_SECONDS="${GRP_PRESERVE_SHARED_ANCHOR_SECONDS:-4}"
 MIN_PRUNED_VIDEO_SECONDS="${GRP_MIN_PRUNED_VIDEO_SECONDS:-8}"
+PRUNING_PROTECTION_MODE="${GRP_PRUNING_PROTECTION_MODE:-reject}"
+MIN_PRUNED_VIDEO_PERCENT="${GRP_MIN_PRUNED_VIDEO_PERCENT:-}"
 RANDOM_SEED="${GRP_RANDOM_SEED:-42}"
 DURATION_SECONDS="${GRP_DURATION_SECONDS:-30}"
 SAMPLE_INTERVAL_SECONDS="${GRP_SAMPLE_INTERVAL_SECONDS:-1.0}"
@@ -74,6 +76,9 @@ echo "duration_seconds=${DURATION_SECONDS}"
 echo "sample_interval_seconds=${SAMPLE_INTERVAL_SECONDS}"
 echo "high_similarity_interval_threshold=${HIGH_SIMILARITY_INTERVAL_THRESHOLD}"
 echo "preserve_shared_anchor_seconds=${PRESERVE_SHARED_ANCHOR_SECONDS}"
+echo "min_pruned_video_seconds=${MIN_PRUNED_VIDEO_SECONDS}"
+echo "pruning_protection_mode=${PRUNING_PROTECTION_MODE}"
+echo "min_pruned_video_percent=${MIN_PRUNED_VIDEO_PERCENT}"
 python --version
 nvidia-smi || true
 
@@ -83,6 +88,10 @@ python -m egolife_two_user_qa build_manifest \
   --no-overlays
 
 echo "stage=mine_group_relative_pruned_video_candidates"
+protection_args=(--pruning-protection-mode "${PRUNING_PROTECTION_MODE}")
+if [[ -n "${MIN_PRUNED_VIDEO_PERCENT}" ]]; then
+  protection_args+=(--min-pruned-video-percent "${MIN_PRUNED_VIDEO_PERCENT}")
+fi
 python egolife_two_user_qa/group_relative_clip_sampling.py \
   --manifest "${OUTDIR}/manifest.json" \
   --output "${OUTDIR}/group_relative_pruned_video_candidates.jsonl" \
@@ -105,6 +114,7 @@ python egolife_two_user_qa/group_relative_clip_sampling.py \
   --temporal-neighborhood-seconds "${TEMPORAL_NEIGHBORHOOD_SECONDS}" \
   --preserve-shared-anchor-seconds "${PRESERVE_SHARED_ANCHOR_SECONDS}" \
   --min-pruned-video-seconds "${MIN_PRUNED_VIDEO_SECONDS}" \
+  "${protection_args[@]}" \
   --random-seed "${RANDOM_SEED}" \
   --download-media
 

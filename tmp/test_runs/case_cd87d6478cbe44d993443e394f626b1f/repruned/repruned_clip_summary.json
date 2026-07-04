@@ -1,0 +1,24 @@
+{
+  "source_evidence_path": "C:\\Users\\haoya\\OneDrive\\Desktop\\Long context video understanding ARVR\\Long-video-understanding\\egolife_two_user_qa\\tmp\\test_runs\\case_cd87d6478cbe44d993443e394f626b1f\\old.jsonl",
+  "output_path": "C:\\Users\\haoya\\OneDrive\\Desktop\\Long context video understanding ARVR\\Long-video-understanding\\egolife_two_user_qa\\tmp\\test_runs\\case_cd87d6478cbe44d993443e394f626b1f\\new.jsonl",
+  "source_packet_count": 1,
+  "selected_packet_count": 1,
+  "repruned_packet_count": 1,
+  "skipped_count": 0,
+  "skipped": [],
+  "settings": {
+    "model_id": "fake-clip",
+    "duration_seconds": 4.0,
+    "sample_interval_seconds": 1.0,
+    "start_seconds": 0.0,
+    "high_similarity_interval_threshold": 0.82,
+    "pruning_clusters_per_video": 4,
+    "preserve_shared_anchor_seconds": 0.0,
+    "min_pruned_video_seconds": 2.0,
+    "pruning_protection_mode": "min_seconds",
+    "min_pruned_video_percent": null,
+    "max_packets": null,
+    "id_suffix": null,
+    "download_media": false
+  }
+}
