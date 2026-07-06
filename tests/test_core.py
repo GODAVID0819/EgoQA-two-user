@@ -1470,6 +1470,58 @@ class VideoFirstTests(unittest.TestCase):
         self.assertNotIn("answerable from that user's first-person perspective", prompt)
         self.assertIn("Do not reject merely because required_users[1] alone can answer", prompt)
 
+    def test_video_generation_prompt_uses_compact_pruning_metadata(self) -> None:
+        packet = {
+            "evidence_id": "E1",
+            "required_users": ["Jake", "Alice"],
+            "requirement": "SHOULD_NOT_LEAK_CLIP_PRUNING_INTERNALS",
+            "clips": [
+                {
+                    "agent_name": "Jake",
+                    "day": "DAY1",
+                    "clip_clock": "11:10:00.00",
+                    "local_video": "jake_pruned.mp4",
+                    "generator_media_mode": "pruned_video",
+                    "temporal_pruning": {
+                        "kept_duration_seconds": 8.0,
+                        "removed_duration_seconds": 22.0,
+                        "protection_target_kept_seconds": 8.0,
+                        "keep_intervals": [[0.0, 1.0]],
+                        "remove_intervals": [[1.0, 2.0]],
+                        "restored_frame_indices": [4],
+                        "restored_frames": [
+                            {
+                                "frame_index": 4,
+                                "timestamp_seconds": 4.0,
+                                "best_match_similarity": 0.9,
+                            }
+                        ],
+                        "high_similarity_threshold": 0.8,
+                    },
+                },
+                {
+                    "agent_name": "Alice",
+                    "day": "DAY1",
+                    "clip_clock": "11:10:00.00",
+                    "local_video": "alice_pruned.mp4",
+                    "generator_media_mode": "pruned_video",
+                },
+            ],
+        }
+
+        prompt = build_video_generation_prompt(packet, "commonality")
+
+        self.assertIn("Output contract", prompt)
+        self.assertIn("pruning_summary", prompt)
+        self.assertIn('"kept_duration_seconds": 8.0', prompt)
+        self.assertNotIn("keep_intervals", prompt)
+        self.assertNotIn("remove_intervals", prompt)
+        self.assertNotIn("restored_frame_indices", prompt)
+        self.assertNotIn("restored_frames", prompt)
+        self.assertNotIn("best_match_similarity", prompt)
+        self.assertNotIn("high_similarity_threshold", prompt)
+        self.assertNotIn("SHOULD_NOT_LEAK_CLIP_PRUNING_INTERNALS", prompt)
+
     def test_video_generation_prompt_discourages_fixed_question_templates(self) -> None:
         packet = {
             "evidence_id": "E1",

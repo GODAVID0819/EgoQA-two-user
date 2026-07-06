@@ -130,6 +130,13 @@ JUDGE_SCHEMA = {
 }
 
 
+STRICT_JSON_OUTPUT_CONTRACT = """Output contract:
+- Return exactly one valid JSON object.
+- Do not include analysis, explanations, markdown, code fences, or any text outside the JSON object.
+- The first non-whitespace character must be "{" and the last non-whitespace character must be "}".
+"""
+
+
 def judge_schema_for_check(check_name: str) -> dict[str, Any]:
     check_schema = QA_FORMALITY_CHECK_SCHEMA if check_name == "qa_formality" else JUDGE_CHECK_SCHEMA
     return {
@@ -143,26 +150,36 @@ def judge_schema_for_check(check_name: str) -> dict[str, Any]:
     }
 
 
+def temporal_pruning_brief(temporal_pruning: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return only pruning facts useful to the VLM prompt."""
+
+    if not isinstance(temporal_pruning, dict):
+        return None
+    return {
+        "applied": True,
+        "kept_duration_seconds": temporal_pruning.get("kept_duration_seconds"),
+        "removed_duration_seconds": temporal_pruning.get("removed_duration_seconds"),
+        "protection_target_kept_seconds": temporal_pruning.get("protection_target_kept_seconds"),
+    }
+
+
 def video_packet_brief(packet: dict[str, Any]) -> str:
     required_users = list(packet.get("required_users") or [])
     speaker_user = required_users[0] if required_users else None
     evidence_provider_user = required_users[1] if len(required_users) > 1 else None
     clips = []
     for clip in packet.get("clips", []):
-        clips.append(
-            {
-                "user": clip.get("agent_name"),
-                "day": clip.get("day"),
-                "clip_clock": clip.get("clip_clock"),
-                "video_url": clip.get("video_url"),
-                "local_video": clip.get("local_video"),
-                "source_local_video": clip.get("source_local_video"),
-                "generator_media_mode": clip.get("generator_media_mode"),
-                "temporal_pruning": clip.get("temporal_pruning"),
-                "gaze_summary": clip.get("gaze_summary"),
-                "projection_status": clip.get("gaze_summary", {}).get("projection_status"),
-            }
-        )
+        gaze_summary = clip.get("gaze_summary") if isinstance(clip.get("gaze_summary"), dict) else {}
+        clip_brief = {
+            "user": clip.get("agent_name"),
+            "day": clip.get("day"),
+            "clip_clock": clip.get("clip_clock"),
+            "local_video": clip.get("local_video"),
+            "generator_media_mode": clip.get("generator_media_mode"),
+            "pruning_summary": temporal_pruning_brief(clip.get("temporal_pruning")),
+            "projection_status": gaze_summary.get("projection_status"),
+        }
+        clips.append({key: value for key, value in clip_brief.items() if value is not None})
     return json.dumps(
         {
             "evidence_id": packet.get("evidence_id"),
@@ -176,9 +193,12 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
                     "if that user's video alone can answer, and that case is logged."
                 ),
             },
-            "requirement": packet.get("requirement"),
+            "prompt_requirement": (
+                "Use the provided visual media directly. Generate a speaker-side question whose "
+                "answer is not clear from required_users[0] alone and whose missing detail is "
+                "supplied by required_users[1]."
+            ),
             "clips": clips,
-            "source_urls": packet.get("source_urls"),
         },
         ensure_ascii=False,
         indent=2,
@@ -324,6 +344,8 @@ def build_video_generation_prompt(
 """
     return f"""You are an assistant generating one meaningful, contextually grounded MCQ from raw egocentric videos.
 
+{STRICT_JSON_OUTPUT_CONTRACT}
+
 Input: raw videos from multiple people during the same time interval. They may be near each other, or in different places. Look directly at the videos and use only visual evidence, video metadata, and the provided 2D gaze coordinates when available. Do not use captions, subtitles, transcripts, or pre-written observations.
 
 Your task:
@@ -362,7 +384,7 @@ For example, if the question is asked from Jake's perspective, Jake's name shoul
 Evidence packet metadata:
 {video_packet_brief(packet)}
 
-Return one valid JSON object only, with this exact shape:
+Return exactly one valid JSON object with this exact shape:
 {json.dumps(VIDEO_GENERATION_SCHEMA, ensure_ascii=False, indent=2)}
 """
 
@@ -382,6 +404,8 @@ def build_relation_discovery_prompt(
         ),
     }[question_type]
     return f"""You are planning one template-free EgoLife two-user MCQ from raw egocentric videos.
+
+{STRICT_JSON_OUTPUT_CONTRACT}
 
 Do not write the MCQ yet. First discover possible cross-user information needs.
 Use only the raw videos, metadata, and available gaze summary. Do not use captions, transcripts, or outside knowledge.
@@ -406,7 +430,7 @@ Do not select a relation whose main question is just what required_users[1] was 
 Evidence packet metadata:
 {video_packet_brief(packet)}
 
-Return one valid JSON object only, with this exact shape:
+Return exactly one valid JSON object with this exact shape:
 {json.dumps(DISCOVERED_RELATION_SCHEMA, ensure_ascii=False, indent=2)}
 """
 
@@ -426,6 +450,8 @@ def build_relation_mcq_prompt(
         ),
     }[question_type]
     return f"""You are writing one natural first-person EgoLife MCQ from a discovered cross-user relation.
+
+{STRICT_JSON_OUTPUT_CONTRACT}
 
 Use the discovered relation to write one natural first-person MCQ.
 You may choose the wording freely.
@@ -455,7 +481,7 @@ Discovered relation:
 Evidence packet metadata:
 {video_packet_brief(packet)}
 
-Return one valid JSON object only, with this exact shape:
+Return exactly one valid JSON object with this exact shape:
 {json.dumps(VIDEO_GENERATION_SCHEMA, ensure_ascii=False, indent=2)}
 """
 
@@ -469,6 +495,8 @@ def build_qa_formality_judge_prompt(
     schema_errors = list(schema_errors or [])
     schema_status = "PASS" if not schema_errors else "FAIL"
     return f"""You are the qa_formality judge for EgoLife video-first two-user MCQ generation.
+
+{STRICT_JSON_OUTPUT_CONTRACT}
 
 You will see a generated QA plus deterministic schema/formality branch results. Judge only qa_formality.
 
@@ -496,13 +524,15 @@ Video set metadata:
 Generated QA:
 {json.dumps(qa_item, ensure_ascii=False, indent=2)}
 
-Return one valid JSON object only, with this exact shape:
+Return exactly one valid JSON object with this exact shape:
 {json.dumps(judge_schema_for_check("qa_formality"), ensure_ascii=False, indent=2)}
 """
 
 
 def build_evidence_groundedness_judge_prompt(qa_item: dict[str, Any], packet: dict[str, Any]) -> str:
     return f"""You are the evidence_groundedness judge for EgoLife video-first two-user MCQ generation.
+
+{STRICT_JSON_OUTPUT_CONTRACT}
 
 You will see the same raw egocentric videos used by the generator. Judge only evidence_groundedness.
 
@@ -521,7 +551,7 @@ Video set metadata:
 Generated QA:
 {json.dumps(qa_item, ensure_ascii=False, indent=2)}
 
-Return one valid JSON object only, with this exact shape:
+Return exactly one valid JSON object with this exact shape:
 {json.dumps(judge_schema_for_check("evidence_groundedness"), ensure_ascii=False, indent=2)}
 """
 
@@ -532,6 +562,8 @@ def build_answerability_prompt(qa_item: dict[str, Any], condition: dict[str, Any
         for letter, option in zip(["A", "B", "C", "D", "E"], qa_item.get("options", []))
     )
     return f"""Answer this EgoLife multiple-choice question using only the videos provided for this condition.
+
+{STRICT_JSON_OUTPUT_CONTRACT}
 
 Condition:
 {json.dumps(condition, ensure_ascii=False, indent=2)}
@@ -549,6 +581,6 @@ Rules:
 - Do not use information from users or videos outside this condition.
 - It is acceptable for the evidence-provider-only condition to answer correctly when the evidence provider's video alone contains the missing visual detail; report that choice normally.
 
-Return one valid JSON object only with this exact shape:
+Return exactly one valid JSON object with this exact shape:
 {json.dumps(ANSWERABILITY_SCHEMA, ensure_ascii=False, indent=2)}
 """
