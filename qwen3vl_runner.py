@@ -126,13 +126,6 @@ def load_transformers_model(model_id: str, dtype: str = "bfloat16"):
         import torch
         from transformers import AutoModelForImageTextToText
 
-        try:
-            from transformers import Qwen3VLForConditionalGeneration
-
-            model_cls = Qwen3VLForConditionalGeneration
-        except Exception:
-            model_cls = AutoModelForImageTextToText
-
         torch_dtype = {
             "auto": "auto",
             "float16": torch.float16,
@@ -144,10 +137,34 @@ def load_transformers_model(model_id: str, dtype: str = "bfloat16"):
             "attn_implementation": "sdpa",
             "trust_remote_code": True,
         }
+
+        def from_pretrained(model_cls):
+            try:
+                return model_cls.from_pretrained(model_id, dtype=torch_dtype, **kwargs)
+            except TypeError:
+                return model_cls.from_pretrained(model_id, torch_dtype=torch_dtype, **kwargs)
+
+        model_id_lower = model_id.lower()
+        prefer_explicit_qwen3vl = "qwen3-vl" in model_id_lower
+        if prefer_explicit_qwen3vl:
+            try:
+                from transformers import Qwen3VLForConditionalGeneration
+
+                return from_pretrained(Qwen3VLForConditionalGeneration)
+            except ImportError:
+                pass
+
         try:
-            return model_cls.from_pretrained(model_id, dtype=torch_dtype, **kwargs)
-        except (TypeError, ValueError):
-            return model_cls.from_pretrained(model_id, torch_dtype=torch_dtype, **kwargs)
+            return from_pretrained(AutoModelForImageTextToText)
+        except ValueError:
+            if prefer_explicit_qwen3vl:
+                raise
+            try:
+                from transformers import Qwen3VLForConditionalGeneration
+
+                return from_pretrained(Qwen3VLForConditionalGeneration)
+            except ImportError:
+                raise
     except ImportError as exc:
         raise RuntimeError(
             "transformers-local backend requires torch, transformers>=4.57, and qwen-vl-utils"
