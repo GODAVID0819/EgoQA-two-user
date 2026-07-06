@@ -362,7 +362,7 @@ Guidelines:
 1) Ask in a natural, informal, everyday way, like someone looking back on their memories. Use varied question forms such as where, which, what changed, what remained, what ended up happening, or which detail explains the situation.
 2) Use first-person or shared-memory wording from an AR-glasses user's perspective, such as "I", "me", "my", "we", or "our".
 3) Do not name a required user in the question or the answer when the question is asked from that person's perspective.
-For example, if the question is asked from Jake's perspective, Jake's name should not appear in the question or the answer.
+For example, if the question is asked from someone's perspective, or if someone's video was also provided, their name should not appear in the question or the answer. 
 4) Do not use words such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, or timestamp in the question or options.
 5) Keep the question specific, concrete, conversational, visually grounded, and phrased differently from common "setup then what" templates.
 6) Options must be multi-word, plausible, parallel in length/style, and have exactly one correct answer.
@@ -371,8 +371,6 @@ For example, if the question is asked from Jake's perspective, Jake's name shoul
 9) single_user_answerability must be an object with one entry for each required user. The required_users[0] entry must explicitly say "insufficient because ..."; the required_users[1] entry may say "sufficient because ..." if the evidence provider alone can answer.
 10) combined_answerability must explicitly say "sufficient because ..." and explain why the combined videos support the correct option.
 11) Before returning, mentally run the asker-alone test. If required_users[0] alone can answer the question, rewrite it. Do not reject merely because required_users[1] alone can answer.
-12) Avoid these rejected patterns: "What did we both...", "What did we all...", "What did everyone...", "What did I and Alice both...", "What were we doing together...", and "What was the other person doing nearby?".
-13) For commonality questions, the commonality should be the relationship between one user's contextual clue and another user's complementary detail, not merely a shared object or shared action visible in both views.
 
 {ANTI_ACTIVITY_QUERY_GUIDANCE}
 

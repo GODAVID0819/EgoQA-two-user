@@ -1046,6 +1046,7 @@ def generate_video_qa_loop(
     dtype: str = "bfloat16",
     allow_cpu: bool = False,
     allow_openai_video_input: bool = False,
+    disable_thinking: bool = False,
     dry_run: bool = False,
     generation_mode: str = "baseline",
     fixed_question_type_schedule: bool = False,
@@ -1062,6 +1063,7 @@ def generate_video_qa_loop(
         dtype=dtype,
         allow_cpu=allow_cpu,
         allow_openai_video_input=allow_openai_video_input,
+        disable_thinking=disable_thinking,
     )
     prompts = StreamingJsonlRows(prompts_path, reset=not resume)
     intermediate_rows = StreamingJsonlRows(intermediate_path, reset=not resume)
@@ -1541,6 +1543,7 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dtype", default="bfloat16", choices=["auto", "float16", "bfloat16", "float32"])
     parser.add_argument("--allow-cpu", action="store_true")
     parser.add_argument("--allow-openai-video-input", action="store_true")
+    parser.add_argument("--disable-thinking", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--fixed-question-type-schedule", action="store_true")
     parser.add_argument("--resume", action="store_true", help="Append to existing JSONL outputs and skip completed evidence IDs")
@@ -1573,6 +1576,7 @@ def main(argv: list[str] | None = None) -> int:
         dtype=args.dtype,
         allow_cpu=args.allow_cpu,
         allow_openai_video_input=args.allow_openai_video_input,
+        disable_thinking=args.disable_thinking,
         dry_run=args.dry_run,
         generation_mode=args.generation_mode,
         fixed_question_type_schedule=args.fixed_question_type_schedule,

@@ -171,6 +171,23 @@ def load_transformers_model(model_id: str, dtype: str = "bfloat16"):
         ) from exc
 
 
+def apply_chat_template_compat(processor: Any, messages: list[dict[str, Any]], *, disable_thinking: bool) -> str:
+    kwargs = {
+        "tokenize": False,
+        "add_generation_prompt": True,
+    }
+    if disable_thinking:
+        try:
+            return processor.apply_chat_template(
+                messages,
+                **kwargs,
+                enable_thinking=False,
+            )
+        except TypeError:
+            pass
+    return processor.apply_chat_template(messages, **kwargs)
+
+
 class Qwen3VLTransformersRunner:
     """Run Qwen3-VL directly through Hugging Face Transformers."""
 
@@ -182,6 +199,7 @@ class Qwen3VLTransformersRunner:
         max_image_pixels: int = DEFAULT_MAX_IMAGE_PIXELS,
         dtype: str = "bfloat16",
         allow_cpu: bool = False,
+        disable_thinking: bool = False,
     ) -> None:
         if not allow_cpu and not cuda_available():
             raise RuntimeError(
@@ -195,6 +213,7 @@ class Qwen3VLTransformersRunner:
         self.model_id = model_id
         self.max_new_tokens = max_new_tokens
         self.max_image_pixels = max_image_pixels
+        self.disable_thinking = disable_thinking
         self.process_vision_info = process_vision_info
         start = time.time()
         print(f"loading_processor={model_id}", flush=True)
@@ -228,13 +247,14 @@ class Qwen3VLTransformersRunner:
         start = time.time()
         print(
             "qwen_generate_start "
-            f"images={len(image_paths)} videos={len(video_paths)} prompt_chars={len(prompt)}",
+            f"images={len(image_paths)} videos={len(video_paths)} "
+            f"prompt_chars={len(prompt)} disable_thinking={self.disable_thinking}",
             flush=True,
         )
-        text = self.processor.apply_chat_template(
+        text = apply_chat_template_compat(
+            self.processor,
             messages,
-            tokenize=False,
-            add_generation_prompt=True,
+            disable_thinking=self.disable_thinking,
         )
         try:
             vision_info = self.process_vision_info(
@@ -382,6 +402,7 @@ def make_runner(
     dtype: str = "bfloat16",
     allow_cpu: bool = False,
     allow_openai_video_input: bool = False,
+    disable_thinking: bool = False,
 ) -> Generator:
     if backend == "transformers-local":
         return Qwen3VLTransformersRunner(
@@ -390,6 +411,7 @@ def make_runner(
             max_image_pixels=max_image_pixels,
             dtype=dtype,
             allow_cpu=allow_cpu,
+            disable_thinking=disable_thinking,
         )
     if backend == "openai-compatible-local":
         return OpenAICompatibleLocalRunner(

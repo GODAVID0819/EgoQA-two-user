@@ -59,6 +59,7 @@ def add_runner_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-image-pixels", type=int, default=262144)
     parser.add_argument("--dtype", default="bfloat16", choices=["auto", "float16", "bfloat16", "float32"])
     parser.add_argument("--allow-cpu", action="store_true")
+    parser.add_argument("--disable-thinking", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
 
 

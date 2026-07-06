@@ -120,6 +120,7 @@ def observe_clips(
     max_image_pixels: int = 262144,
     dtype: str = "bfloat16",
     allow_cpu: bool = False,
+    disable_thinking: bool = False,
     dry_run: bool = False,
     download_media: bool = True,
 ) -> list[dict[str, Any]]:
@@ -133,6 +134,7 @@ def observe_clips(
         max_image_pixels=max_image_pixels,
         dtype=dtype,
         allow_cpu=allow_cpu,
+        disable_thinking=disable_thinking,
     )
     rows = []
     prompt_rows = []
@@ -211,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-image-pixels", type=int, default=262144)
     parser.add_argument("--dtype", default="bfloat16", choices=["auto", "float16", "bfloat16", "float32"])
     parser.add_argument("--allow-cpu", action="store_true")
+    parser.add_argument("--disable-thinking", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-download-media", action="store_true")
     args = parser.parse_args(argv)
@@ -230,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         max_image_pixels=args.max_image_pixels,
         dtype=args.dtype,
         allow_cpu=args.allow_cpu,
+        disable_thinking=args.disable_thinking,
         dry_run=args.dry_run,
         download_media=not args.no_download_media,
     )

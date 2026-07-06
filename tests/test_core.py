@@ -50,7 +50,12 @@ from egolife_two_user_qa.prompts import (
     build_relation_mcq_prompt,
     build_video_generation_prompt,
 )
-from egolife_two_user_qa.qwen3vl_runner import DryRunRunner, normalize_video_kwargs, split_video_inputs_and_metadata
+from egolife_two_user_qa.qwen3vl_runner import (
+    apply_chat_template_compat,
+    DryRunRunner,
+    normalize_video_kwargs,
+    split_video_inputs_and_metadata,
+)
 from egolife_two_user_qa.review_media import materialize_review_videos
 from egolife_two_user_qa.schema import extract_json_object, validate_qa_item, write_human_review_sheet
 from egolife_two_user_qa.video_qa_loop import (
@@ -1431,6 +1436,46 @@ class VideoFirstTests(unittest.TestCase):
         self.assertEqual(kwargs["fps"], 1.0)
         self.assertEqual(kwargs["video_metadata"][0].fps, 30.0)
         self.assertEqual(kwargs["video_metadata"][0].frames_indices, [0, 15])
+
+    def test_apply_chat_template_disables_thinking_when_supported(self) -> None:
+        calls = []
+
+        class FakeProcessor:
+            def apply_chat_template(self, messages, **kwargs):
+                calls.append(kwargs)
+                return "templated"
+
+        text = apply_chat_template_compat(
+            FakeProcessor(),
+            [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            disable_thinking=True,
+        )
+
+        self.assertEqual(text, "templated")
+        self.assertEqual(calls[0]["enable_thinking"], False)
+        self.assertEqual(calls[0]["tokenize"], False)
+        self.assertEqual(calls[0]["add_generation_prompt"], True)
+
+    def test_apply_chat_template_falls_back_without_thinking_kwarg(self) -> None:
+        calls = []
+
+        class OldProcessor:
+            def apply_chat_template(self, messages, **kwargs):
+                calls.append(kwargs)
+                if "enable_thinking" in kwargs:
+                    raise TypeError("unexpected keyword argument enable_thinking")
+                return "templated"
+
+        text = apply_chat_template_compat(
+            OldProcessor(),
+            [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            disable_thinking=True,
+        )
+
+        self.assertEqual(text, "templated")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("enable_thinking", calls[0])
+        self.assertNotIn("enable_thinking", calls[1])
 
     def test_video_generation_prompt_does_not_use_observation(self) -> None:
         packet = {

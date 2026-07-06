@@ -372,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
             max_image_pixels=args.max_image_pixels,
             dtype=args.dtype,
             allow_cpu=args.allow_cpu,
+            disable_thinking=args.disable_thinking,
             dry_run=args.dry_run,
             download_media=not args.no_download_media,
         )
@@ -514,6 +515,7 @@ def main(argv: list[str] | None = None) -> int:
             dtype=args.dtype,
             allow_cpu=args.allow_cpu,
             allow_openai_video_input=args.allow_openai_video_input,
+            disable_thinking=args.disable_thinking,
             dry_run=args.dry_run,
             generation_mode=args.generation_mode,
             fixed_question_type_schedule=args.fixed_question_type_schedule,
