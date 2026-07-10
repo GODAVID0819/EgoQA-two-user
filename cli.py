@@ -1,4 +1,4 @@
-"""Unified CLI for the EgoLife two-user QA pilot."""
+"""Unified CLI for the EgoLife two-user question-answer pilot."""
 
 from __future__ import annotations
 
@@ -18,9 +18,17 @@ from .clip_gap_demo import (
 from .clip_exclusive_mining import mine_clip_exclusive_candidates
 from .group_relative_clip_sampling import mine_group_relative_clip_candidates
 from .observations import observe_clips
+from .object_hints import (
+    DEFAULT_LOCAL_BASE_URL,
+    DEFAULT_OBJECT_DETECTION_MODEL,
+    DEFAULT_REID_MODEL_ID,
+    DEFAULT_REID_TEXT_THRESHOLD,
+    DEFAULT_REID_VISUAL_THRESHOLD,
+    enrich_evidence_with_object_hints,
+)
 from .qa_pipeline import add_runner_args, validate_outputs
 from .review_media import materialize_review_videos
-from .video_qa_loop import add_video_loop_args, generate_video_qa_loop
+from .video_qa_loop import add_video_loop_args, generate_video_qa_loop, parse_question_types
 
 
 def _csv(value: str | None) -> list[str] | None:
@@ -294,7 +302,10 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--download-media", action="store_true")
     benchmark.add_argument("--review-dir")
 
-    video_gen = sub.add_parser("generate_video_qa_loop", help="Generate video-first QA with judge/eval retry loop")
+    video_gen = sub.add_parser(
+        "generate_video_qa_loop",
+        help="Generate video-first question-answer items with judge/evaluator retry loop",
+    )
     video_gen.add_argument("--evidence", required=True)
     video_gen.add_argument("--output", required=True)
     video_gen.add_argument("--prompts-output")
@@ -304,14 +315,60 @@ def main(argv: list[str] | None = None) -> int:
     video_gen.add_argument("--max-attempts", type=int, default=3)
     add_video_loop_args(video_gen)
 
-    val = sub.add_parser("validate_outputs", help="Validate QA JSONL and write report/CSV")
+    object_hints = sub.add_parser(
+        "add_object_hints",
+        help="Add EgoEverything-style key-object detection hints to evidence packets",
+    )
+    object_hints.add_argument("--evidence", required=True)
+    object_hints.add_argument("--output", required=True)
+    object_hints.add_argument("--output-dir", default="outputs/object_hint_assets")
+    object_hints.add_argument(
+        "--backend",
+        default="dry-run",
+        choices=["dry-run", "openrouter", "transformers-local", "openai-compatible-local"],
+    )
+    object_hints.add_argument("--api-key")
+    object_hints.add_argument("--model-id", default=DEFAULT_OBJECT_DETECTION_MODEL)
+    object_hints.add_argument("--base-url", default=DEFAULT_LOCAL_BASE_URL)
+    object_hints.add_argument("--max-new-tokens", type=int, default=1024)
+    object_hints.add_argument("--max-image-pixels", type=int, default=262144)
+    object_hints.add_argument("--dtype", default="bfloat16", choices=["auto", "float16", "bfloat16", "float32"])
+    object_hints.add_argument("--allow-cpu", action="store_true")
+    object_hints.add_argument("--disable-thinking", action="store_true")
+    object_hints.add_argument(
+        "--frame-sampling-mode",
+        default="evidence_frames",
+        choices=["evidence_frames", "clip_medoids"],
+    )
+    object_hints.add_argument(
+        "--frames-per-clip",
+        type=int,
+        default=3,
+        help="Maximum sampled frames per clip; with clip_medoids, 0 means all kept pruning clusters.",
+    )
+    object_hints.add_argument("--objects-per-clip", type=int, default=3)
+    object_hints.add_argument("--objects-per-packet", type=int, default=5)
+    object_hints.add_argument("--n-workers", type=int, default=5)
+    object_hints.add_argument("--max-packets", type=int)
+    object_hints.add_argument("--random-seed", type=int)
+    object_hints.add_argument("--disable-reid", action="store_true")
+    object_hints.add_argument("--reid-model-id", default=DEFAULT_REID_MODEL_ID)
+    object_hints.add_argument("--reid-device")
+    object_hints.add_argument("--reid-visual-threshold", type=float, default=DEFAULT_REID_VISUAL_THRESHOLD)
+    object_hints.add_argument("--reid-text-threshold", type=float, default=DEFAULT_REID_TEXT_THRESHOLD)
+    object_hints.add_argument("--reid-batch-size", type=int, default=32)
+
+    val = sub.add_parser("validate_outputs", help="Validate question-answer JSONL and write report/CSV")
     val.add_argument("--qa", required=True)
     val.add_argument("--report", required=True)
     val.add_argument("--csv-output")
     val.add_argument("--human-review-output")
     val.add_argument("--strict-review", action="store_true")
 
-    review_media = sub.add_parser("materialize_review_videos", help="Copy/download videos for manual QA review")
+    review_media = sub.add_parser(
+        "materialize_review_videos",
+        help="Copy/download videos for manual question-answer review",
+    )
     review_media.add_argument("--evidence")
     review_media.add_argument("--qa")
     review_media.add_argument("--output-dir", required=True)
@@ -498,6 +555,36 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"wrote {len(rows)} CLIP-pruned benchmark evidence packets to {args.output}")
         return 0
+    if args.command == "add_object_hints":
+        rows = enrich_evidence_with_object_hints(
+            evidence_path=args.evidence,
+            output_path=args.output,
+            output_dir=args.output_dir,
+            backend=args.backend,
+            api_key=args.api_key,
+            model_id=args.model_id,
+            base_url=args.base_url,
+            max_new_tokens=args.max_new_tokens,
+            max_image_pixels=args.max_image_pixels,
+            dtype=args.dtype,
+            allow_cpu=args.allow_cpu,
+            disable_thinking=args.disable_thinking,
+            frame_sampling_mode=args.frame_sampling_mode,
+            frames_per_clip=args.frames_per_clip,
+            objects_per_clip=args.objects_per_clip,
+            objects_per_packet=args.objects_per_packet,
+            n_workers=args.n_workers,
+            max_packets=args.max_packets,
+            random_seed=args.random_seed,
+            enable_reid=not args.disable_reid,
+            reid_model_id=args.reid_model_id,
+            reid_device=args.reid_device,
+            reid_visual_threshold=args.reid_visual_threshold,
+            reid_text_threshold=args.reid_text_threshold,
+            reid_batch_size=args.reid_batch_size,
+        )
+        print(f"wrote {len(rows)} object-hinted evidence packets to {args.output}")
+        return 0
     if args.command == "generate_video_qa_loop":
         rows = generate_video_qa_loop(
             evidence_path=args.evidence,
@@ -519,9 +606,14 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             generation_mode=args.generation_mode,
             fixed_question_type_schedule=args.fixed_question_type_schedule,
+            question_types=parse_question_types(args.question_types),
             resume=args.resume,
+            generator_decode_mode=args.generator_decode_mode,
+            generator_temperature=args.generator_temperature,
+            generator_top_p=args.generator_top_p,
+            generator_top_k=args.generator_top_k,
         )
-        print(f"accepted {len(rows)} video-first QA rows")
+        print(f"accepted {len(rows)} video-first question-answer rows")
         return 0
     if args.command == "validate_outputs":
         return validate_outputs(

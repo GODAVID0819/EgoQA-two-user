@@ -1,4 +1,4 @@
-"""Schema validation and JSON parsing for generated QA items."""
+"""Schema validation and JSON parsing for generated question-answer items."""
 
 from __future__ import annotations
 
@@ -42,6 +42,15 @@ VIDEO_FIRST_JUDGE_CHECKS = {
     "qa_formality",
     "evidence_groundedness",
     "answerability",
+}
+QUALITY_SCORED_JUDGE_CHECKS = {
+    "qa_formality",
+    "evidence_groundedness",
+}
+QUALITY_FLAGS = {
+    1: "1_weak_or_reject",
+    2: "2_acceptable",
+    3: "3_strong",
 }
 
 
@@ -121,8 +130,8 @@ def validate_qa_item(item: dict[str, Any], *, strict_review: bool = False) -> li
         errors.append("combined_answerability must state sufficient support")
 
     question_type = item.get("question_type")
-    if question_type is not None and question_type not in {"commonality", "difference"}:
-        errors.append("question_type must be commonality or difference")
+    if question_type is not None and question_type not in {"commonality", "difference", "neutral"}:
+        errors.append("question_type must be commonality, difference, or neutral")
 
     if strict_review:
         video_evidence = item.get("video_evidence")
@@ -162,6 +171,19 @@ def validate_qa_item(item: dict[str, Any], *, strict_review: bool = False) -> li
                         continue
                     if str(check_value.get("status", "")).upper() != "PASS":
                         errors.append(f"judge check {check_name} must be PASS in strict mode")
+                    if check_name in QUALITY_SCORED_JUDGE_CHECKS:
+                        score = check_value.get("quality_score")
+                        if not isinstance(score, int) or score not in {1, 2, 3}:
+                            errors.append(
+                                f"judge check {check_name} must include quality_score 1, 2, or 3"
+                            )
+                            continue
+                        if check_value.get("quality_flag") != QUALITY_FLAGS[score]:
+                            errors.append(
+                                f"judge check {check_name} must include quality_flag {QUALITY_FLAGS[score]}"
+                            )
+                        if not str(check_value.get("quality_reason") or "").strip():
+                            errors.append(f"judge check {check_name} must include quality_reason")
 
         answerability = review.get("answerability")
         if not isinstance(answerability, dict):
@@ -259,7 +281,7 @@ def write_human_review_sheet(jsonl_path: str | Path, sheet_path: str | Path) -> 
     lines = [
         "# EgoLife Human Review Sheet",
         "",
-        f"- Source QA: `{jsonl_path}`",
+        f"- Source question-answer file: `{jsonl_path}`",
         f"- Accepted rows: {len(rows)}",
         "",
     ]

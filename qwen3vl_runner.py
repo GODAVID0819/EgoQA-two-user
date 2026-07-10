@@ -15,6 +15,9 @@ from typing import Any, Protocol
 
 DEFAULT_MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
 DEFAULT_MAX_IMAGE_PIXELS = 262144
+GENERATOR_DECODING_MODES = ("greedy", "sampling")
+DEFAULT_SAMPLING_TEMPERATURE = 0.7
+DEFAULT_SAMPLING_TOP_P = 0.9
 
 
 class Generator(Protocol):
@@ -25,8 +28,38 @@ class Generator(Protocol):
         prompt: str,
         image_paths: list[str] | None = None,
         video_paths: list[str] | None = None,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
     ) -> str:
         ...
+
+
+def generation_kwargs(
+    *,
+    max_new_tokens: int,
+    decoding_mode: str = "greedy",
+    temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+    top_p: float = DEFAULT_SAMPLING_TOP_P,
+    top_k: int | None = None,
+) -> dict[str, Any]:
+    if decoding_mode not in GENERATOR_DECODING_MODES:
+        raise ValueError(f"unknown decoding_mode: {decoding_mode}")
+    kwargs: dict[str, Any] = {"max_new_tokens": max_new_tokens}
+    if decoding_mode == "sampling":
+        kwargs.update(
+            {
+                "do_sample": True,
+                "temperature": temperature,
+                "top_p": top_p,
+            }
+        )
+        if top_k is not None:
+            kwargs["top_k"] = top_k
+    else:
+        kwargs["do_sample"] = False
+    return kwargs
 
 
 def image_to_data_url(path: str | Path) -> str:
@@ -231,6 +264,10 @@ class Qwen3VLTransformersRunner:
         prompt: str,
         image_paths: list[str] | None = None,
         video_paths: list[str] | None = None,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
     ) -> str:
         image_paths = image_paths or []
         video_paths = video_paths or []
@@ -248,7 +285,8 @@ class Qwen3VLTransformersRunner:
         print(
             "qwen_generate_start "
             f"images={len(image_paths)} videos={len(video_paths)} "
-            f"prompt_chars={len(prompt)} disable_thinking={self.disable_thinking}",
+            f"prompt_chars={len(prompt)} disable_thinking={self.disable_thinking} "
+            f"decoding_mode={decoding_mode}",
             flush=True,
         )
         text = apply_chat_template_compat(
@@ -290,11 +328,17 @@ class Qwen3VLTransformersRunner:
             f"qwen_processor_encoded_seconds={encode_seconds:.1f} input_tokens={input_tokens}",
             flush=True,
         )
+        generate_kwargs = generation_kwargs(
+            max_new_tokens=self.max_new_tokens,
+            decoding_mode=decoding_mode,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+        )
         with self.torch.inference_mode():
             generated = self.model.generate(
                 **inputs,
-                max_new_tokens=self.max_new_tokens,
-                do_sample=False,
+                **generate_kwargs,
             )
         total_seconds = time.time() - start
         output_tokens = int(generated.shape[-1] - inputs.input_ids.shape[-1])
@@ -339,6 +383,10 @@ class OpenAICompatibleLocalRunner:
         prompt: str,
         image_paths: list[str] | None = None,
         video_paths: list[str] | None = None,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
     ) -> str:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for path in image_paths or []:
@@ -350,12 +398,16 @@ class OpenAICompatibleLocalRunner:
             )
         for path in video_paths or []:
             content.append({"type": "video_url", "video_url": {"url": file_to_data_url(path)}})
+        if decoding_mode not in GENERATOR_DECODING_MODES:
+            raise ValueError(f"unknown decoding_mode: {decoding_mode}")
         payload = {
             "model": self.model_id,
             "messages": [{"role": "user", "content": content}],
-            "temperature": 0,
+            "temperature": temperature if decoding_mode == "sampling" else 0,
             "max_tokens": self.max_new_tokens,
         }
+        if decoding_mode == "sampling":
+            payload["top_p"] = top_p
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
@@ -380,6 +432,10 @@ class DryRunRunner:
         prompt: str,
         image_paths: list[str] | None = None,
         video_paths: list[str] | None = None,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
     ) -> str:
         return json.dumps(
             {
@@ -387,6 +443,10 @@ class DryRunRunner:
                 "prompt_preview": prompt[:1000],
                 "image_count": len(image_paths or []),
                 "video_count": len(video_paths or []),
+                "decoding_mode": decoding_mode,
+                "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k,
             },
             ensure_ascii=False,
         )

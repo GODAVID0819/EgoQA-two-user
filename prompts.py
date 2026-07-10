@@ -1,3 +1,5 @@
+"""Prompts for EgoLife two-user video question-answer generation and review."""
+
 from __future__ import annotations
 
 import json
@@ -6,16 +8,16 @@ from typing import Any
 
 VIDEO_GENERATION_SCHEMA = {
     "qa_id": "string",
-    "question_type": "commonality or difference",
-    "question": "natural and casual question generated from a first-person perspective",
-    "options": ["option A", "option A", "option C", "option D", "option E"],
+    "question_type": "commonality, difference, or neutral",
+    "question": "natural first-person or shared-memory question",
+    "options": ["option A", "option B", "option C", "option D", "option E"],
     "correct": "A/B/C/D/E",
     "answer": "exact text of the correct option",
     "required_users": ["asker/speaker user first", "evidence-provider user second"],
     "evidence": [
         {
             "user": "name",
-            "needed_fact": "visual fact from this user's own video",
+            "needed_fact": "specific visible fact from this user's own video",
             "timeframe": "specific start-end time range, or an approximate moment, in this user's video",
             "frames_used": ["video-level evidence or approximate moment labels"],
         }
@@ -32,13 +34,13 @@ VIDEO_GENERATION_SCHEMA = {
         "Alice": "sufficient/insufficient because the evidence provider alone ...",
     },
     "combined_answerability": "sufficient because the required users' videos together support exactly one option",
-    "generator_rationale": "why this is a natural question and why the missing detail depends on multiple users",
-    "why_two_users_needed": "why each required user provides necessary, non-redundant visual evidence",
+    "generator_rationale": "why this is a natural speaker-side question with a missing visual detail",
+    "why_two_users_needed": "why the asker/speaker view and evidence-provider view are both needed",
     "per_user_evidence_claims": [
         {"user": "name", "claim": "claim grounded in that user's own video"}
     ],
     "review": {
-        "generator_self_check": "why one user alone cannot answer this, and why the question is not just asking what both users saw",
+        "generator_self_check": "why the asker/speaker alone cannot answer this, and why this is not a shallow activity or shared-view question",
         "status": "draft",
     },
 }
@@ -67,7 +69,7 @@ DISCOVERED_RELATION_SCHEMA = {
         "what_others_know_see": {
             "Alice": "missing visual detail"
         },
-        "only_clear_when_combining": "combined relation to turn into an MCQ",
+        "only_clear_when_combining": "combined relation to turn into a multiple-choice question",
         "why_natural_to_ask": "situated reason",
         "likely_answerable_by_one_video_alone": "no, because ...",
     },
@@ -86,13 +88,75 @@ ANSWERABILITY_SCHEMA = {
 GENERATION_MODES = ("baseline", "clip_guided", "discovery", "discovery_control")
 
 
+STRICT_JSON_OUTPUT_CONTRACT = """Output contract:
+- Return exactly one valid JSON object and nothing else.
+- Do not include markdown, code fences, comments, explanations, or extra text outside the JSON object.
+- Include every field shown in the requested JSON shape, even when a value is brief.
+"""
+
+
+QUESTION_TYPE_GENERATION_INSTRUCTIONS = {
+    "commonality": (
+        "Create a commonality question only when the shared state, consequence, or follow-up "
+        "becomes clear by combining a speaker-side anchor from one required user's video with "
+        "a related missing detail visible only in another required user's video. Do not ask "
+        "about an object, action, or room state that each single video reveals independently."
+    ),
+    "difference": (
+        "Create a difference question whose answer identifies a meaningful contrast, "
+        "asymmetry, or complementary detail between the required users' egocentric videos."
+    ),
+}
+
+
+QUESTION_TYPE_DISCOVERY_HINTS = {
+    "commonality": (
+        "Prefer a relation where one user's anchor and another user's missing detail together establish "
+        "a shared state, consequence, or follow-up."
+    ),
+    "difference": (
+        "Prefer a relation where the users' views reveal a meaningful asymmetry or complementary detail."
+    ),
+}
+
+
+QUESTION_TYPE_MULTIPLE_CHOICE_INSTRUCTIONS = {
+    "commonality": (
+        "Turn the relation into a question whose answer is clear only after combining the required users' views."
+    ),
+    "difference": (
+        "Turn the relation into a question about a meaningful contrast, asymmetry, or complementary detail."
+    ),
+}
+
+
 ANTI_ACTIVITY_QUERY_GUIDANCE = """Avoid shallow other-person activity questions:
-- Do not ask questions whose main purpose is to identify what required_users[1] was doing while the speaker was doing something.
-- Bad pattern: "When I was washing dishes, what was Alice doing?" This only asks for another person's concurrent activity.
-- Bad pattern: "While I was eating, what was the other person doing on the laptop?" This is still just a "what was B doing" query.
-- Better target: "Was the stove left on after I walked away?" because the speaker has an uncertainty and another view supplies a missing state.
-- Better target: "Which mug was still on the counter after I left the table?" because the answer is a specific object/state, not a person's general activity.
-- These examples are only to show the distinction. Do not copy their wording, objects, or structure unless the videos genuinely support that exact situation.
+- Do not make the main question "what was the other person doing while I was doing X?"
+- Bad pattern: "When I was washing dishes, what was the other person doing?" The answer is only another person's concurrent activity.
+- Bad pattern: "While I was eating, what was the other person doing on the laptop?" This still asks for a person-level activity, not the speaker's missing detail.
+- Better target: "Was the stove still on after I walked away?" The speaker has a concrete uncertainty and another view resolves the object state.
+- Better target: "Which mug was still on the counter after I left the table?" The answer is a specific object/location detail, not a general activity.
+- Use these examples only to understand the distinction. Do not copy their wording, objects, or structure unless the videos genuinely support that exact situation.
+"""
+
+
+POSITIVE_EXAMPLES_GUIDANCE = """Positive examples of strong two-user information gaps:
+These are taste examples, not templates. Do not copy their wording, objects, or sentence structure. Generate a new question only when the current videos genuinely support it.
+
+- I could see the blackboard in front of me, but the writing was too small for me to read. What did it say?
+  Strong because the speaker's view establishes the board and the uncertainty, while another view supplies the readable text.
+
+- I remember us entering the market, but I missed what ended up in the cart first. Which item was added?
+  Strong because the speaker's view anchors the situation, while another view reveals the specific item.
+
+- I was focused on taping the paper craft, so where did the extra cards get placed?
+  Strong because the speaker's view anchors the activity and the missing materials, while another view shows the placement.
+
+- I can remember this side of the room, but what was hanging on the wall I did not face?
+  Strong because the speaker's view establishes the room context, while another view supplies the missing wall detail.
+
+- I left the kitchen before checking the stove again. Was anything still cooking?
+  Strong because the speaker's view creates a concrete uncertainty about an object state, while another view resolves it directly.
 """
 
 
@@ -100,7 +164,34 @@ JUDGE_CHECK_SCHEMA = {
     "status": "PASS/FAIL/UNCERTAIN",
     "reason": "short evidence-grounded explanation",
     "fix": "specific repair instruction if the status is FAIL or UNCERTAIN; empty string if PASS",
+    "quality_score": "1/2/3 using the check-specific quality rubric",
+    "quality_flag": "1_weak_or_reject, 2_acceptable, or 3_strong",
+    "quality_reason": "brief reason for the quality score; this does not determine pass/fail status",
 }
+
+
+QA_FORMALITY_QUALITY_RUBRIC = """qa_formality quality_score rubric:
+- 3 / 3_strong: The JSON and multiple-choice structure are clean, the wording is natural and specific, the question preserves first-person or shared-memory perspective without direct names, and it asks for a concrete missing object, state, location, or outcome rather than a shallow activity report.
+- 2 / 2_acceptable: The question-answer item is acceptable but less elegant: wording is mildly generic, stiff, or template-like; options are merely adequate; or the perspective is understandable but not especially natural. It still has no blocking structure, name, or activity-query problems.
+- 1 / 1_weak_or_reject: The question-answer item has a blocking formality or structure issue, directly names a person in the question, uses dataset-observer wording, is invalid as a five-option multiple-choice question, or is mainly a "what was the other person doing" query.
+
+Scoring instructions:
+- Decide PASS/FAIL/UNCERTAIN first using the qa_formality rules. Then assign quality_score using this rubric.
+- The quality_score is for analysis and training signal; it must not override the pass/fail decision.
+- Also return quality_flag and quality_reason.
+"""
+
+
+EVIDENCE_GROUNDEDNESS_QUALITY_RUBRIC = """evidence_groundedness quality_score rubric:
+- 3 / 3_strong: The videos clearly demonstrate the speaker-side anchor and the evidence-provider missing detail; the answer-relevant object, action, or state is plainly visible, temporally aligned with the claims, and central enough that the relation is easy to verify.
+- 2 / 2_acceptable: The answer is still supported, but the evidence is weaker: the object, action, or state is blurry, brief, partially occluded, peripheral, not the focal point, only visible in a small part of the scene, or the timestamps/claims are somewhat coarse. This can still PASS if the support is sufficient.
+- 1 / 1_weak_or_reject: The visual support is missing, invented, ambiguous, answerable from the speaker alone, based on unrelated timestamp stitching, or too unclear to verify. This should normally be FAIL or UNCERTAIN.
+
+Scoring instructions:
+- Decide PASS/FAIL/UNCERTAIN first using the evidence_groundedness rules. Then assign quality_score using this rubric.
+- The quality_score is for analysis and training signal; it must not override the pass/fail decision.
+- Also return quality_flag and quality_reason.
+"""
 
 
 QA_FORMALITY_CHECK_SCHEMA = {
@@ -112,6 +203,13 @@ QA_FORMALITY_CHECK_SCHEMA = {
                 "whether the question merely asks what another person was doing while the speaker "
                 "was doing something, instead of asking for a concrete missing detail tied to the "
                 "speaker's own information need"
+            ),
+        },
+        "direct_name_leakage": {
+            "status": "PASS/FAIL/UNCERTAIN",
+            "reason": (
+                "whether the question directly names a required user or otherwise exposes a "
+                "participant name that could give away who supplies the answer"
             ),
         }
     },
@@ -128,13 +226,6 @@ JUDGE_SCHEMA = {
     "why_generator_asked_this": "brief explanation of why the generator may have asked this",
     "feedback_to_generator": "specific revision instructions if review_passed is false; use an empty string if it passed",
 }
-
-
-STRICT_JSON_OUTPUT_CONTRACT = """Output contract:
-- Return exactly one valid JSON object.
-- Do not include analysis, explanations, markdown, code fences, or any text outside the JSON object.
-- The first non-whitespace character must be "{" and the last non-whitespace character must be "}".
-"""
 
 
 def judge_schema_for_check(check_name: str) -> dict[str, Any]:
@@ -188,15 +279,18 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
                 "speaker_user": speaker_user,
                 "evidence_provider_user": evidence_provider_user,
                 "required_users_order": (
-                    "required_users[0] is the asker/speaker. That user alone must not be able "
-                    "to answer. required_users[1] is the evidence provider; it is acceptable "
-                    "if that user's video alone can answer, and that case is logged."
+                    "required_users[0] is the asker/speaker whose view anchors the question; "
+                    "aim for a question that is not answerable from that view alone. "
+                    "required_users[1] is the evidence provider whose view supplies the missing "
+                    "detail. It is acceptable if the evidence provider alone can answer, as long "
+                    "as that is logged."
                 ),
             },
             "prompt_requirement": (
-                "Use the provided visual media directly. Generate a speaker-side question whose "
-                "answer is not clear from required_users[0] alone and whose missing detail is "
-                "supplied by required_users[1]."
+                "Use the visual media directly. Try to generate a speaker-side question that "
+                "makes sense from required_users[0]'s own experience, needs both users' videos "
+                "to answer cleanly, and is resolved by a concrete visible detail from "
+                "required_users[1]."
             ),
             "clips": clips,
         },
@@ -281,9 +375,61 @@ def clip_guidance_block(packet: dict[str, Any]) -> str:
 
 Rules for using these hints:
 - Treat CLIP as a pointer to candidate moments where the users may see different things.
-- Verify every semantic claim from the raw videos before using it in the QA.
+- Verify every semantic claim from the raw videos before using it in the generated question-answer item.
 - Do not mention CLIP, embeddings, novelty, similarity, frame paths, or retrieval scores in the question or answer options.
 - It is okay to ignore a CLIP hint if the raw videos do not support a natural cross-user information need.
+"""
+
+
+def object_guidance_brief(packet: dict[str, Any], *, max_objects: int = 6) -> dict[str, Any]:
+    """Return compact object-detection hints for prompt injection."""
+
+    hints = packet.get("object_hints")
+    if not isinstance(hints, dict) or not hints.get("available"):
+        return {
+            "available": False,
+            "note": "No object-detection hints are attached to this evidence packet.",
+        }
+
+    rows = []
+    for obj in list(hints.get("key_objects") or [])[:max_objects]:
+        if not isinstance(obj, dict):
+            continue
+        rows.append(
+            {
+                "user": obj.get("user"),
+                "object_name": obj.get("object_name") or obj.get("name"),
+                "timestamp_seconds": obj.get("timestamp_seconds"),
+                "bbox_normalized_ymin_xmin_ymax_xmax": obj.get("gemini_bbox"),
+                "bbox_pixel_xyxy": obj.get("bbox"),
+                "selection_score": obj.get("selection_score"),
+            }
+        )
+    return {
+        "available": bool(rows),
+        "detector_model": hints.get("detector_model"),
+        "detector_philosophy": hints.get("detector_philosophy"),
+        "candidate_key_objects": rows,
+        "warning": (
+            "Object hints are VLM detections from sampled frames. They are attention anchors only; "
+            "verify object identity, location, state, and cross-user relation from the raw videos."
+        ),
+    }
+
+
+def object_guidance_block(packet: dict[str, Any]) -> str:
+    brief = object_guidance_brief(packet)
+    if not brief.get("available"):
+        return ""
+    return f"""Object-detection hints, for attention guidance only:
+{json.dumps(brief, ensure_ascii=False, indent=2)}
+
+Rules for using these hints:
+- Prefer forming a natural speaker-side question related to one of these candidate key objects when the raw videos support it.
+- Treat the detected object name and bounding box as a pointer, not a fact.
+- Verify the object and answer from the raw videos before using it in the question, answer, options, or evidence fields.
+- Do not mention object detection, bounding boxes, coordinates, detector models, sampled frames, or hint scores in the question or answer options.
+- Ignore these hints if they do not support a natural two-user information need.
 """
 
 
@@ -296,6 +442,10 @@ def _feedback_block(feedback: str | None) -> str:
         if feedback
         else ""
     )
+
+
+def _numbered_lines(lines: list[str]) -> str:
+    return "\n".join(f"{index}. {line}" for index, line in enumerate(lines, start=1))
 
 
 def build_video_generation_prompt(
@@ -313,70 +463,100 @@ def build_video_generation_prompt(
             discovered_relation={},
             feedback=feedback,
         )
-    type_instruction = {
-        "commonality": (
-            "Create a commonality question only when the shared state, consequence, or follow-up "
-            "becomes clear by combining a speaker-side anchor from one required user's video with "
-            "a related missing detail visible only in another required user's video. Do not ask "
-            "about an object, action, or room state that each single video reveals independently."
-        ),
-        "difference": (
-            "Create a difference question whose answer identifies a meaningful contrast, "
-            "asymmetry, or complementary detail between the required users' egocentric videos."
-        ),
-    }[question_type]
+    type_instruction = QUESTION_TYPE_GENERATION_INSTRUCTIONS.get(question_type)
+    type_requirement = (
+        f'The question_type must be "{question_type}": {type_instruction}'
+        if type_instruction
+        else ""
+    )
     feedback_block = _feedback_block(feedback)
     retrieval_block = clip_guidance_block(packet) if generation_mode == "clip_guided" else ""
-    design_block = """Design rules:
-- Treat required_users[0] as the asker/speaker. The question must be naturally askable from that user's first-person perspective.
+    object_block = object_guidance_block(packet)
+    if question_type == "neutral":
+        task_lines = [
+            "Generate exactly one five-option multiple-choice question.",
+            "Make the question a speaker-side information need: required_users[0]'s view should explain why the question naturally comes up, but should not already make the answer obvious.",
+            "Try to generate a question that needs both users' videos: required_users[0] supplies the speaker-side context, and required_users[1] supplies the decisive missing visual detail.",
+            "Shared timestamps, proximity, or unrelated simultaneous actions are not enough.",
+            "The available evidence should make exactly one answer option correct.",
+            "Fill the evidence field with each needed user's visible fact and a specific timeframe.",
+            "Return every field in the JSON shape exactly. Do not omit single_user_answerability, combined_answerability, generator_rationale, why_two_users_needed, per_user_evidence_claims, referred_timestamps, or review.",
+            "The answer field must exactly equal the option text indicated by correct, and correct must be one letter: A, B, C, D, or E.",
+        ]
+        design_block = """Baseline design rules:
+- Treat required_users[0] as the asker/speaker. The question should sound like that person trying to remember or verify something from their own experience.
+- Anchor the question in something visible to required_users[0]: an object they handled, a place they entered, a surface they looked toward, a task they were doing, or a state they could not fully verify.
+- Ask for a related missing detail supplied by required_users[1]: object identity, location, text, count, state, placement, outcome, follow-up, or another concrete visual fact.
+- Do not stitch together unrelated scenes just because they happen during the same interval.
+- Do not ask what both users saw, what everyone noticed, or how the two views compare.
+- Do not ask what required_users[1] was doing while the speaker was doing something unless the answer is a concrete missing object, state, location, outcome, or explanation.
+- Avoid fixed openings such as "After I ...", "When I ...", or "Once I ...". Use them only when that is genuinely the most natural wording for the specific situation.
+- Prefer compact everyday wording over formal dataset language.
+"""
+        guidelines_block = """Guidelines:
+1) Ask in a natural, informal, everyday way, like someone looking back on their own experience.
+2) Use first-person or shared-memory wording such as "I", "me", "my", "we", or "our".
+3) Do not name the required users in the question or options. Refer to people naturally only if the visible situation requires it.
+4) Keep the question specific enough that a person could answer it by checking one missing visible detail.
+5) Make all five options multi-word, plausible, mutually exclusive, and parallel in length and style.
+6) Keep distractors grounded in the same scene type. Do not make the correct option obvious by specificity, grammar, or option length.
+7) When 2D gaze coordinates are available, they appear as <gaze_coordinate> values indicating the user's attended image area. You may use nearby visible objects, regions, or actions as evidence, but do not invent exact gaze-object claims if the projection is unclear.
+8) single_user_answerability must have one entry for each required user. The required_users[0] entry should say whether that view is sufficient or insufficient and why; the required_users[1] entry may say "sufficient because ..." if the evidence provider alone can answer.
+9) combined_answerability must explicitly say "sufficient because ..." and explain why the required users' videos together support exactly one option.
+10) Before returning, run the asker-alone test. Prefer a question where required_users[0] alone is insufficient, but do not reject merely because required_users[1] alone can answer.
+"""
+    else:
+        task_lines = [
+            "Generate exactly one five-option multiple-choice question.",
+            *([type_requirement] if type_requirement else []),
+            "The question must use visual evidence from one required user's contextual clue and another required user's complementary detail, but it should not follow a fixed wording pattern.",
+            "Try to make the question need visual evidence from at least two required users. Timestamp overlap is not enough.",
+            "required_users[0] is the asker/speaker, and that user's video alone must be insufficient. required_users[1] is the evidence provider who provides supporting evidence.",
+            "Fill the evidence field with each needed user's visual fact and a specific timeframe.",
+            "Return every field in the JSON shape exactly. Do not omit single_user_answerability, combined_answerability, generator_rationale, why_two_users_needed, per_user_evidence_claims, referred_timestamps, or review.",
+            "The answer field must exactly equal the text of options[correct], and correct must be one letter: A, B, C, D, or E.",
+        ]
+        design_block = """Design rules:
+- Treat required_users[0] as the asker/speaker. The question must be asked in a natural way from that user's first-person perspective. Do not stitch together two unrelated scenes and form a question.
 - required_users[0]'s own video alone must not reveal the correct answer.
-- Treat required_users[1] as the evidence provider. It is acceptable if required_users[1]'s video alone can answer the question, because that user supplies the missing visual evidence.
-- The question must combine a contextual clue from required_users[0]'s own view with complementary information from required_users[1]'s view.
-- The question does not need to begin with the contextual clue. Choose the most natural wording for the situation.
+- Treat required_users[1] as the evidence provider that adds the missing visual detail. It is acceptable if required_users[1]'s video alone can answer the question, because that user supplies the missing visual evidence.
+- The question should combine a contextual clue from required_users[0]'s own view with complementary information from required_users[1]'s view.
 - Do not use a fixed question template or repeat a stock opening. In particular, avoid opening with a temporal setup clause such as "After I ...", "When I ...", or "Once I ...".
-- Prefer varied everyday forms: checking where something ended up, identifying which object/person/action mattered, clarifying what changed, asking what was still true, or resolving a small uncertainty from the speaker's perspective.
-- The speaker/asker video must not already reveal the correct answer; the other user's video must add the missing visual detail.
-- Do not make a question just because clips share a timestamp.
-- Do not ask what both users saw, noticed, or looked at.
-- Do not ask what both users did, handled, had, shared, or were doing together.
+- Prefer varied everyday forms: checking where something ended up, identifying which object/action mattered, clarifying what changed, asking what was still true, or resolving a small uncertainty from the speaker's perspective.
 - Do not ask what another person was doing while the speaker was doing something; that is a shallow activity query, not a speaker-side information need.
 - Do not ask a generic comparison of two views, rooms, or camera angles.
 """
-    return f"""You are an assistant generating one meaningful, contextually grounded MCQ from raw egocentric videos.
+        guidelines_block = """Guidelines:
+1) Ask in a natural, informal, everyday way, like someone looking back on their memories. Use varied question forms such as where, which, what changed, what remained, what ended up happening, or which detail explains the situation.
+2) Use first-person or shared-memory wording from an AR-glasses user's perspective, such as "I", "me", "my", "we", or "our".
+3) Do not name users in the question or answers.
+4) Keep the question specific, concrete, conversational, and visually grounded.
+5) Options must be multi-word, plausible, parallel in length/style, and have exactly one correct answer.
+6) When 2D gaze coordinates are available, they are provided as <gaze_coordinate> values indicating the user's attended image area. You may ask about visible objects, regions, or actions near that area.
+7) single_user_answerability must be an object with one entry for each required user. The required_users[0] entry must explicitly say "insufficient because ..."; the required_users[1] entry may say "sufficient because ..." if the evidence provider alone can answer.
+8) combined_answerability must explicitly say "sufficient because ..." and explain why the combined videos support the correct option.
+9) Before returning, mentally run the asker-alone test. If required_users[0] alone can answer the question, rewrite it. Do not reject merely because required_users[1] alone can answer.
+"""
+    return f"""You are generating one natural, evidence-grounded multiple-choice question from raw egocentric videos.
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
 Input: raw videos from multiple people during the same time interval. They may be near each other, or in different places. Look directly at the videos and use only visual evidence, video metadata, and the provided 2D gaze coordinates when available. Do not use captions, subtitles, transcripts, or pre-written observations.
 
 Your task:
-1. Generate exactly one five-option multiple-choice question.
-2. The question_type must be "{question_type}": {type_instruction}
-3. The question must use visual evidence from one required user's contextual clue and another required user's complementary detail, but it should not follow a fixed wording pattern.
-4. The question must require visual evidence from at least two required users. Timestamp overlap is not enough.
-5. required_users[0] is the asker/speaker, and that user's video alone must be insufficient. required_users[1] is the evidence provider; it is acceptable if that user's video alone suffices because they provide the missing visual evidence.
-6. Fill the evidence field with each needed user's visual fact and a specific timeframe.
-7. Return every field in the JSON shape exactly. Do not omit single_user_answerability, combined_answerability, generator_rationale, why_two_users_needed, per_user_evidence_claims, referred_timestamps, or review.
-8. The answer field must exactly equal the text of options[correct], and correct must be one letter: A, B, C, D, or E.
+{_numbered_lines(task_lines)}
 
-Guidelines:
-1) Ask in a natural, informal, everyday way, like someone looking back on their memories. Use varied question forms such as where, which, what changed, what remained, what ended up happening, or which detail explains the situation.
-2) Use first-person or shared-memory wording from an AR-glasses user's perspective, such as "I", "me", "my", "we", or "our".
-3) Do not name a required user in the question or the answer when the question is asked from that person's perspective.
-For example, if the question is asked from someone's perspective, or if someone's video was also provided, their name should not appear in the question or the answer. 
-4) Do not use words such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, or timestamp in the question or options.
-5) Keep the question specific, concrete, conversational, visually grounded, and phrased differently from common "setup then what" templates.
-6) Options must be multi-word, plausible, parallel in length/style, and have exactly one correct answer.
-7) False options may use names such as Jake, Alice, Tasha, Lucia, Katrina, or Shure when helpful, but follow guideline 3.
-8) When 2D gaze coordinates are available, they are provided as <gaze_coordinate> values indicating the user's attended image area. You may ask about visible objects, regions, or actions near that area.
-9) single_user_answerability must be an object with one entry for each required user. The required_users[0] entry must explicitly say "insufficient because ..."; the required_users[1] entry may say "sufficient because ..." if the evidence provider alone can answer.
-10) combined_answerability must explicitly say "sufficient because ..." and explain why the combined videos support the correct option.
-11) Before returning, mentally run the asker-alone test. If required_users[0] alone can answer the question, rewrite it. Do not reject merely because required_users[1] alone can answer.
+{guidelines_block}
 
 {ANTI_ACTIVITY_QUERY_GUIDANCE}
 
 {design_block}
 
+{POSITIVE_EXAMPLES_GUIDANCE}
+
 {retrieval_block}
+
+{object_block}
 
 {feedback_block}
 Evidence packet metadata:
@@ -392,23 +572,13 @@ def build_relation_discovery_prompt(
     question_type: str,
     feedback: str | None = None,
 ) -> str:
-    type_hint = {
-        "commonality": (
-            "Prefer a relation where one user's anchor and another user's missing detail together establish "
-            "a shared state, consequence, or follow-up."
-        ),
-        "difference": (
-            "Prefer a relation where the users' views reveal a meaningful asymmetry or complementary detail."
-        ),
-    }[question_type]
-    return f"""You are planning one template-free EgoLife two-user MCQ from raw egocentric videos.
+    type_hint = QUESTION_TYPE_DISCOVERY_HINTS.get(question_type)
+    target_block = f'\nTarget question_type: "{question_type}". {type_hint}\n' if type_hint else ""
+    return f"""You are planning one template-free EgoLife two-user multiple-choice question from raw egocentric videos.
 
-{STRICT_JSON_OUTPUT_CONTRACT}
-
-Do not write the MCQ yet. First discover possible cross-user information needs.
+Do not write the multiple-choice question yet. First discover possible cross-user information needs.
 Use only the raw videos, metadata, and available gaze summary. Do not use captions, transcripts, or outside knowledge.
-
-Target question_type: "{question_type}". {type_hint}
+{target_block}
 
 List 3-5 possible cross-user information needs.
 For each, identify:
@@ -423,6 +593,8 @@ Avoid examples, stock phrasing, and fixed templates. Think in terms of the situa
 Do not select a relation whose main question is just what required_users[1] was doing while required_users[0] was doing something.
 
 {ANTI_ACTIVITY_QUERY_GUIDANCE}
+
+{object_guidance_block(packet)}
 
 {_feedback_block(feedback)}
 Evidence packet metadata:
@@ -439,19 +611,26 @@ def build_relation_mcq_prompt(
     discovered_relation: dict[str, Any],
     feedback: str | None = None,
 ) -> str:
-    type_instruction = {
-        "commonality": (
-            "Turn the relation into a question whose answer is clear only after combining the required users' views."
+    type_instruction = QUESTION_TYPE_MULTIPLE_CHOICE_INSTRUCTIONS.get(question_type)
+    requirement_lines = [
+        "Generate exactly one five-option multiple-choice question.",
+        *(
+            [f'The question_type must be "{question_type}". {type_instruction}']
+            if type_instruction
+            else []
         ),
-        "difference": (
-            "Turn the relation into a question about a meaningful contrast, asymmetry, or complementary detail."
-        ),
-    }[question_type]
-    return f"""You are writing one natural first-person EgoLife MCQ from a discovered cross-user relation.
+        "required_users[0] is the asker/speaker; write the question from that user's perspective.",
+        "required_users[0]'s video alone must be insufficient.",
+        "required_users[1] is the evidence provider; it is acceptable if that user's video alone can answer because they supply the missing visual detail. The combined required users' videos must make exactly one option correct.",
+        "Do not use words such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, timestamp, CLIP, embedding, similarity, or novelty in the question or options.",
+        "Options must be multi-word, plausible, parallel in length/style, and have exactly one correct answer.",
+        "Fill the evidence fields with each needed user's visual fact and a specific timeframe.",
+        "Return every field in the JSON shape exactly.",
+        "The answer field must exactly equal the text of options[correct], and correct must be one letter: A, B, C, D, or E.",
+    ]
+    return f"""You are writing one natural first-person EgoLife multiple-choice question from a discovered cross-user relation.
 
-{STRICT_JSON_OUTPUT_CONTRACT}
-
-Use the discovered relation to write one natural first-person MCQ.
+Use the discovered relation to write one natural first-person multiple-choice question.
 You may choose the wording freely.
 Do not reuse examples or phrasing.
 Do not follow a fixed template.
@@ -459,18 +638,13 @@ Do not follow a fixed template.
 Input: raw videos from multiple people during the same time interval. Look directly at the videos and use only visual evidence, video metadata, and the provided gaze summary when available.
 
 Requirements:
-1. Generate exactly one five-option multiple-choice question.
-2. The question_type must be "{question_type}". {type_instruction}
-3. required_users[0] is the asker/speaker; write the question from that user's perspective.
-4. required_users[0]'s video alone must be insufficient.
-5. required_users[1] is the evidence provider; it is acceptable if that user's video alone can answer because they supply the missing visual detail. The combined required users' videos must make exactly one option correct.
-6. Do not use words such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, timestamp, CLIP, embedding, similarity, or novelty in the question or options.
-7. Options must be multi-word, plausible, parallel in length/style, and have exactly one correct answer.
-8. Fill the evidence fields with each needed user's visual fact and a specific timeframe.
-9. Return every field in the JSON shape exactly.
-10. The answer field must exactly equal the text of options[correct], and correct must be one letter: A, B, C, D, or E.
+{_numbered_lines(requirement_lines)}
 
 {ANTI_ACTIVITY_QUERY_GUIDANCE}
+
+{POSITIVE_EXAMPLES_GUIDANCE}
+
+{object_guidance_block(packet)}
 
 Discovered relation:
 {json.dumps(discovered_relation, ensure_ascii=False, indent=2)}
@@ -492,26 +666,31 @@ def build_qa_formality_judge_prompt(
 ) -> str:
     schema_errors = list(schema_errors or [])
     schema_status = "PASS" if not schema_errors else "FAIL"
-    return f"""You are the qa_formality judge for EgoLife video-first two-user MCQ generation.
+    return f"""You are the qa_formality judge for a two-user multiple-choice question generated using egocentric videos.
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
-You will see a generated QA plus deterministic schema/formality branch results. Judge only qa_formality.
+You will see a generated question-answer item plus deterministic schema/formality results. Judge only qa_formality.
 
-qa_formality asks whether the generated QA is natural and well-formed:
-- The question should sound like a natural first-person or shared-memory question from someone using AR glasses.
-- The question and options must not use dataset-observer wording such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, or timestamp.
-- The QA must be a valid five-option MCQ: exactly five non-empty, plausible, parallel options; correct is A-E; answer exactly matches options[correct]; and exactly one option is correct.
-- The question_type field, if used, must be either commonality or difference and must match the wording of the question.
-- Run the semantic_subchecks.other_person_activity_query subcheck explicitly.
-- FAIL this subcheck when the question is essentially "while/when I was doing X, what was the other/named person doing?" and the answer is just that person's concurrent activity.
-- FAIL this subcheck for variants such as "what was Alice doing?", "what was the other person doing nearby?", "what were they doing on the laptop?", or "what activity was B engaged in?" unless the question asks for a concrete missing object, state, location, outcome, consequence, explanation, or follow-up.
-- Bad qa_formality example: "When I was washing dishes, what was Alice doing?" with answer "reading a book" must FAIL because it only asks for Alice's activity.
+qa_formality asks whether the generated question-answer item is natural and well-formed:
+- The question should sound like a natural first-person or shared-memory question from someone in the situation, not like a dataset observer.
+- The question-answer item must be a valid five-option multiple-choice question: exactly five non-empty, mutually exclusive options, labeled A-E, with exactly one correct answer option; answer exactly matches options[correct].
+- The question_type field, if used, must be commonality, difference, or neutral. If it is commonality or difference, it must match the wording of the question.
+- Run semantic_subchecks.other_person_activity_query and semantic_subchecks.direct_name_leakage explicitly.
+- FAIL this subcheck when the question is essentially "while/when I was doing something, what was the other/named person doing?" and the answer is only that person's concurrent activity.
+- FAIL the other_person_activity_query subcheck for variants such as "what was the other person doing nearby?", "what were they doing on the laptop?", or "what activity were they engaged in?" unless the question asks for a concrete missing object, state, location, outcome, consequence, explanation, or follow-up.
+- FAIL direct_name_leakage when the question directly names a required user or participant, because naming the person can reveal which user's view supplies the answer.
+- Bad direct-name example: "When I left the counter, where did Alice put the mug?" must FAIL because the question names the evidence provider and is simply a shallow concurrent-activity question.
+- Better name-free version: "After I left the counter, where did the mug end up?" may PASS if supported, because it asks for the missing object location without naming a participant.
+- Bad activity example: "When I was washing dishes, what was the other person doing?" with answer "reading a book" must FAIL because it only asks for another person's activity.
 - Better qa_formality examples: "Was the stove left on after I walked away?" or "Which mug was still on the counter after I left?" may PASS if supported, because each asks for a specific missing state/location/object.
 - The examples show the distinction only. Do not require or reward copying their templates.
-- Do not fail merely because the wording contains "while" or mentions another person. Fail because the semantic relation is a shallow concurrent-activity query rather than a speaker-side information need.
+- Do not fail merely because the wording contains "while" or mentions another person. Fail only when the semantic relation is a shallow concurrent-activity query rather than a speaker-side information need.
 - If semantic_subchecks.other_person_activity_query is FAIL, set checks.qa_formality.status to FAIL, include "qa_formality" in blocking_failures, and give feedback telling the generator to ask for a concrete missing object/state/location/outcome instead of another person's activity.
-- PASS qa_formality only if the deterministic schema branch passes, the question wording and MCQ structure are acceptable, and semantic_subchecks.other_person_activity_query is not FAIL.
+- If semantic_subchecks.direct_name_leakage is FAIL, set checks.qa_formality.status to FAIL, include "qa_formality" in blocking_failures, and give feedback telling the generator to remove participant names from the question.
+- PASS qa_formality only if the deterministic schema branch passes, the question wording and multiple-choice structure are acceptable, and neither semantic subcheck is FAIL.
+
+{QA_FORMALITY_QUALITY_RUBRIC}
 
 Deterministic schema branch:
 {json.dumps({"status": schema_status, "errors": schema_errors}, ensure_ascii=False, indent=2)}
@@ -519,7 +698,7 @@ Deterministic schema branch:
 Video set metadata:
 {video_packet_brief(packet)}
 
-Generated QA:
+Generated question-answer item:
 {json.dumps(qa_item, ensure_ascii=False, indent=2)}
 
 Return exactly one valid JSON object with this exact shape:
@@ -528,25 +707,29 @@ Return exactly one valid JSON object with this exact shape:
 
 
 def build_evidence_groundedness_judge_prompt(qa_item: dict[str, Any], packet: dict[str, Any]) -> str:
-    return f"""You are the evidence_groundedness judge for EgoLife video-first two-user MCQ generation.
+    return f"""You are the evidence_groundedness judge for EgoLife video-first two-user multiple-choice question generation.
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
 You will see the same raw egocentric videos used by the generator. Judge only evidence_groundedness.
 
-evidence_groundedness asks whether the QA is supported only by the provided videos and metadata:
+evidence_groundedness asks whether the question-answer item is supported only by the provided videos and metadata:
 - The correct answer, evidence claims, referred timestamps, and per-user claims must be grounded in concrete visible moments or supplied metadata.
 - Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
-- Treat required_users[0] as the asker/speaker and required_users[1] as the evidence provider. It is acceptable if required_users[1]'s video alone can answer; answerability logs that separately.
-- FAIL if required_users[0]'s video alone already reveals the correct answer, because the asker/speaker is supposed to need the evidence provider's missing visual detail.
+- Treat required_users[0] as the asker/speaker and required_users[1] as the evidence provider.
+- The asker/speaker's view should anchor why the question is natural, but it must not reveal the decisive missing detail.
+- It is acceptable if required_users[1]'s video alone can answer because that user is the evidence provider; answerability logs that separately.
+- FAIL if required_users[0]'s video alone already reveals the correct answer.
 - FAIL if the question merely stitches unrelated clips by timestamp, asks what everyone saw/noticed, or makes a generic comparison of views rather than a situated speaker-side memory gap plus supported missing detail.
 - If 2D gaze projection is unavailable, FAIL invented exact gaze-to-object claims; visible object/action claims are still allowed when grounded in the video itself.
 - UNCERTAIN if the videos do not clearly support the anchor, the missing detail, the correct option, or the claimed relation.
 
+{EVIDENCE_GROUNDEDNESS_QUALITY_RUBRIC}
+
 Video set metadata:
 {video_packet_brief(packet)}
 
-Generated QA:
+Generated question-answer item:
 {json.dumps(qa_item, ensure_ascii=False, indent=2)}
 
 Return exactly one valid JSON object with this exact shape:
@@ -577,6 +760,7 @@ Rules:
 - If the condition does not contain enough evidence, set choice to "insufficient".
 - Do not guess from common sense or from the answer options.
 - Do not use information from users or videos outside this condition.
+- Base the answer on visible evidence, supplied metadata, and available gaze information only.
 - It is acceptable for the evidence-provider-only condition to answer correctly when the evidence provider's video alone contains the missing visual detail; report that choice normally.
 
 Return exactly one valid JSON object with this exact shape:

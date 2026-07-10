@@ -1246,6 +1246,12 @@ def _clip_with_pruned_video(
         remove_intervals = pruning.get("remove_intervals", [])
         if isinstance(remove_intervals, dict):
             remove_intervals = remove_intervals.get(side, [])
+    cluster_decisions = pruning.get(f"{side}_cluster_decisions", [])
+    kept_cluster_representatives = [
+        dict(row)
+        for row in cluster_decisions
+        if row.get("status") == "kept"
+    ]
     pair_key = _safe_filename_part(pair.get("pair_key"))
     agent = _safe_filename_part(pruned.get("agent_dir") or pruned.get("agent_name") or side)
     pair_dir = Path(output_dir) / "benchmark_video_pairs" / pair_key
@@ -1280,6 +1286,9 @@ def _clip_with_pruned_video(
         "required_kept_duration_seconds": pruning.get("required_kept_duration_seconds"),
         "keep_intervals": keep_intervals,
         "remove_intervals": remove_intervals,
+        "cluster_decisions": cluster_decisions,
+        "kept_cluster_representatives": kept_cluster_representatives,
+        "kept_cluster_count": len(kept_cluster_representatives),
         "restored_frame_indices": pruning.get(f"{side}_restored_frame_indices", []),
         "restored_frames": pruning.get(f"{side}_restored_frames", []),
         "preserved_shared_intervals": pruning.get("preserved_shared_intervals", []),

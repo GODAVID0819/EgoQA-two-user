@@ -1,4 +1,4 @@
-"""Video-first generation loop for EgoLife two-user MCQ construction."""
+"""Video-first generation loop for EgoLife two-user multiple-choice construction."""
 
 from __future__ import annotations
 
@@ -19,7 +19,13 @@ from .prompts import (
     build_relation_mcq_prompt,
     build_video_generation_prompt,
 )
-from .qwen3vl_runner import DEFAULT_MODEL_ID, make_runner
+from .qwen3vl_runner import (
+    DEFAULT_MODEL_ID,
+    DEFAULT_SAMPLING_TEMPERATURE,
+    DEFAULT_SAMPLING_TOP_P,
+    GENERATOR_DECODING_MODES,
+    make_runner,
+)
 from .schema import OPTION_LETTERS, extract_json_object, normalize_correct, validate_qa_item
 
 
@@ -46,12 +52,23 @@ class StreamingJsonlRows(list[dict[str, Any]]):
             append_jsonl(self.path, row)
 
 
-QUESTION_TYPES = ("commonality", "difference")
+QUESTION_TYPES = ("commonality", "difference", "neutral")
+DEFAULT_QUESTION_TYPES = ("commonality", "difference")
 BLOCKING_JUDGE_CHECKS = (
     "qa_formality",
     "evidence_groundedness",
     "answerability",
 )
+QUALITY_SCORED_JUDGE_CHECKS = {
+    "qa_formality",
+    "evidence_groundedness",
+}
+QUALITY_FLAGS = {
+    1: "1_weak_or_reject",
+    2: "2_acceptable",
+    3: "3_strong",
+}
+TEMPORAL_REASONING_MODE = "temporal_reasoning"
 
 
 def existing_path(value: str | None) -> str | None:
@@ -104,8 +121,83 @@ def media_for_clips(
     return images if not videos else [], videos
 
 
+def time_map_segments_from_keep_intervals(
+    keep_intervals: list[list[float]] | list[tuple[float, float]] | None,
+) -> list[dict[str, float]]:
+    """Map concatenated pruned-video time back to original-video time."""
+
+    segments = []
+    pruned_cursor = 0.0
+    for interval in keep_intervals or []:
+        if not isinstance(interval, (list, tuple)) or len(interval) < 2:
+            continue
+        original_start = float(interval[0])
+        original_end = float(interval[1])
+        if original_end <= original_start:
+            continue
+        duration = original_end - original_start
+        pruned_start = pruned_cursor
+        pruned_end = pruned_cursor + duration
+        segments.append(
+            {
+                "pruned_start_seconds": round(pruned_start, 3),
+                "pruned_end_seconds": round(pruned_end, 3),
+                "original_start_seconds": round(original_start, 3),
+                "original_end_seconds": round(original_end, 3),
+            }
+        )
+        pruned_cursor = pruned_end
+    return segments
+
+
+def _temporal_keep_intervals_for_clip(clip: dict[str, Any]) -> list[list[float]] | list[tuple[float, float]]:
+    pruning = clip.get("temporal_pruning")
+    if not isinstance(pruning, dict):
+        return []
+    keep_intervals = pruning.get("keep_intervals")
+    if isinstance(keep_intervals, list):
+        return keep_intervals
+    return []
+
+
+def packet_with_temporal_reasoning_media(packet: dict[str, Any]) -> dict[str, Any]:
+    """Return a packet whose prompt metadata exposes original timestamps.
+
+    This is intentionally opt-in for temporal_reasoning mode. Other modes use
+    the input packet unchanged, so no original_timestamp metadata leaks into
+    neutral/baseline/discovery prompts or media traces.
+    """
+
+    updated = dict(packet)
+    updated["generation_mode"] = TEMPORAL_REASONING_MODE
+    clips = []
+    for index, clip in enumerate(packet.get("clips", [])):
+        next_clip = dict(clip)
+        keep_intervals = _temporal_keep_intervals_for_clip(next_clip)
+        time_map_segments = time_map_segments_from_keep_intervals(keep_intervals)
+        local_video = next_clip.get("local_video")
+        pruned_video = existing_path(local_video) or (str(local_video) if local_video else None)
+        if time_map_segments and pruned_video:
+            next_clip["temporal_reasoning"] = {
+                "enabled": True,
+                "mapping_type": "contiguous_interval_map",
+                "generator_video": pruned_video,
+                "time_map_segments": time_map_segments,
+                "instruction": (
+                    "Each time_map_segments row says that the contiguous pruned-video interval "
+                    "[pruned_start_seconds, pruned_end_seconds] corresponds to the original-video "
+                    "interval [original_start_seconds, original_end_seconds]. Use these intervals "
+                    "to reason about original temporal order and jumps."
+                ),
+            }
+            next_clip["generator_media_mode"] = "temporal_reasoning_pruned_video_with_sidecar_time_map"
+        clips.append(next_clip)
+    updated["clips"] = clips
+    return updated
+
+
 def video_evidence_for_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return deterministic clip/video provenance for the generated QA row."""
+    """Return deterministic clip/video provenance for the generated question-answer row."""
 
     rows = []
     for clip in packet.get("clips", []):
@@ -130,6 +222,7 @@ def video_evidence_for_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
                 "benchmark_media": clip.get("benchmark_media"),
                 "generator_media_mode": clip.get("generator_media_mode"),
                 "temporal_pruning": clip.get("temporal_pruning"),
+                "temporal_reasoning": clip.get("temporal_reasoning"),
                 "gaze_url": clip.get("gaze_url"),
                 "gaze_summary": clip.get("gaze_summary"),
                 "sampled_frames": [
@@ -146,7 +239,7 @@ def video_evidence_for_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def human_audit_packet(packet: dict[str, Any]) -> dict[str, Any]:
-    """Compact evidence bundle intended for manual review of one generated QA."""
+    """Compact evidence bundle intended for manual review of one generated question-answer item."""
 
     required_users = list(packet.get("required_users") or [])
     speaker_user = required_users[0] if required_users else None
@@ -279,7 +372,7 @@ def condition_media_for_clips(
 
 
 def qa_for_judger_prompt(qa: dict[str, Any]) -> dict[str, Any]:
-    """Return only the generated QA fields the judger needs to evaluate."""
+    """Return only the generated question-answer fields the judger needs to evaluate."""
 
     wanted = [
         "qa_id",
@@ -307,16 +400,34 @@ def clips_for_users(packet: dict[str, Any], users: list[str]) -> list[dict[str, 
     return [clip for clip in packet.get("clips", []) if clip.get("agent_name") in wanted]
 
 
-def target_type_counts(target_count: int) -> dict[str, int]:
-    commonality = (target_count + 1) // 2
-    difference = target_count - commonality
-    return {"commonality": commonality, "difference": difference}
+def parse_question_types(value: str | None) -> tuple[str, ...]:
+    if value is None:
+        return DEFAULT_QUESTION_TYPES
+    question_types = tuple(part.strip() for part in value.split(",") if part.strip())
+    if not question_types:
+        raise ValueError("question_types must include at least one question type")
+    unknown = [question_type for question_type in question_types if question_type not in QUESTION_TYPES]
+    if unknown:
+        raise ValueError(f"unknown question_types: {unknown}")
+    return question_types
 
 
-def choose_question_type(counts: dict[str, int], targets: dict[str, int]) -> str | None:
+def target_type_counts(target_count: int, question_types: tuple[str, ...] = DEFAULT_QUESTION_TYPES) -> dict[str, int]:
+    base, remainder = divmod(target_count, len(question_types))
+    return {
+        question_type: base + (1 if index < remainder else 0)
+        for index, question_type in enumerate(question_types)
+    }
+
+
+def choose_question_type(
+    counts: dict[str, int],
+    targets: dict[str, int],
+    question_types: tuple[str, ...] = DEFAULT_QUESTION_TYPES,
+) -> str | None:
     remaining = {
         question_type: targets[question_type] - counts.get(question_type, 0)
-        for question_type in QUESTION_TYPES
+        for question_type in question_types
     }
     remaining = {key: value for key, value in remaining.items() if value > 0}
     if not remaining:
@@ -517,15 +628,42 @@ def schema_formality_branch(schema_errors: list[str]) -> dict[str, Any]:
     }
 
 
+def normalize_quality_fields(check: dict[str, Any], check_name: str) -> dict[str, Any]:
+    """Ensure non-answerability judge checks always carry comparable quality metadata."""
+
+    if check_name not in QUALITY_SCORED_JUDGE_CHECKS:
+        return check
+    raw_score = check.get("quality_score")
+    try:
+        score = int(raw_score)
+    except (TypeError, ValueError):
+        score = 2 if str(check.get("status", "")).upper() == "PASS" else 1
+    score = min(3, max(1, score))
+    check["quality_score"] = score
+    check["quality_flag"] = QUALITY_FLAGS[score]
+    if not str(check.get("quality_reason") or "").strip():
+        if score == 3:
+            check["quality_reason"] = f"{check_name} judged the question-answer item as strong on its rubric"
+        elif score == 2:
+            check["quality_reason"] = f"{check_name} judged the question-answer item as acceptable but not especially strong"
+        else:
+            check["quality_reason"] = f"{check_name} found a weak or rejecting issue"
+    return check
+
+
 def failed_single_judge(check_name: str, reason: str, *, raw_output: str | None = None) -> dict[str, Any]:
+    failed_check = normalize_quality_fields(
+        {
+            "status": "FAIL",
+            "reason": reason,
+            "fix": f"Repair the question-answer item so the {check_name} judge can pass.",
+        },
+        check_name,
+    )
     judge = {
         "review_passed": False,
         "checks": {
-            check_name: {
-                "status": "FAIL",
-                "reason": reason,
-                "fix": f"Repair the QA so the {check_name} judge can pass.",
-            }
+            check_name: failed_check
         },
         "blocking_failures": [check_name],
         "why_generator_asked_this": "",
@@ -575,12 +713,15 @@ def run_model_judge_branch(
 def check_from_single_judge(judge: dict[str, Any], check_name: str) -> dict[str, Any]:
     checks = judge.get("checks")
     if isinstance(checks, dict) and isinstance(checks.get(check_name), dict):
-        return dict(checks[check_name])
-    return {
-        "status": "FAIL",
-        "reason": f"{check_name} judge did not return checks.{check_name}",
-        "fix": f"Return a valid {check_name} check object.",
-    }
+        return normalize_quality_fields(dict(checks[check_name]), check_name)
+    return normalize_quality_fields(
+        {
+            "status": "FAIL",
+            "reason": f"{check_name} judge did not return checks.{check_name}",
+            "fix": f"Return a valid {check_name} check object.",
+        },
+        check_name,
+    )
 
 
 def merge_parallel_judges(
@@ -598,6 +739,7 @@ def merge_parallel_judges(
         other_activity = semantic_subchecks.get("other_person_activity_query")
         if isinstance(other_activity, dict) and str(other_activity.get("status", "")).upper() == "FAIL":
             qa_formality_check["status"] = "FAIL"
+            qa_formality_check["quality_score"] = 1
             reason = str(other_activity.get("reason") or "")
             qa_formality_check["reason"] = (
                 str(qa_formality_check.get("reason") or "")
@@ -609,19 +751,36 @@ def merge_parallel_judges(
                 "Replace the shallow concurrent-activity question with a concrete speaker-side "
                 "information need whose answer depends on the evidence provider's missing detail."
             )
+        direct_name = semantic_subchecks.get("direct_name_leakage")
+        if isinstance(direct_name, dict) and str(direct_name.get("status", "")).upper() == "FAIL":
+            qa_formality_check["status"] = "FAIL"
+            qa_formality_check["quality_score"] = 1
+            reason = str(direct_name.get("reason") or "")
+            qa_formality_check["reason"] = (
+                str(qa_formality_check.get("reason") or "")
+                + ("; " if qa_formality_check.get("reason") else "")
+                + "semantic_subchecks.direct_name_leakage failed"
+                + (f": {reason}" if reason else "")
+            )
+            qa_formality_check["fix"] = (
+                "Remove direct person names from the question and preserve the first-person "
+                "or shared-memory perspective with pronouns, roles, or descriptions."
+            )
     if schema_branch["status"] != "PASS":
         qa_formality_check["status"] = "FAIL"
+        qa_formality_check["quality_score"] = 1
         qa_formality_check["reason"] = (
             schema_branch["reason"]
             + "; model qa_formality branch: "
             + str(model_qa_formality_check.get("reason", ""))
         )
         qa_formality_check["fix"] = (
-            "Repair the generated JSON shape, MCQ options, correct letter, answer text, "
-            "required users, and required QA metadata."
+            "Repair the generated JSON shape, multiple-choice options, correct letter, "
+            "answer text, required users, and required question-answer metadata."
         )
     qa_formality_check["schema_branch"] = schema_branch
     qa_formality_check["model_branch"] = model_qa_formality_check
+    qa_formality_check = normalize_quality_fields(qa_formality_check, "qa_formality")
 
     evidence_check = check_from_single_judge(evidence_groundedness_judge, "evidence_groundedness")
     answerability_check = answerability_check_from_gate(answerability)
@@ -691,7 +850,10 @@ def answerability_check_from_gate(answerability: dict[str, Any] | None) -> dict[
     return {
         "status": "FAIL",
         "reason": reason or "answerability gate failed",
-        "fix": "Revise the QA so the combined required users select the correct answer and the asker/subset conditions do not.",
+        "fix": (
+            "Revise the question-answer item so the combined required users select the correct answer "
+            "and the asker/subset conditions do not."
+        ),
     }
 
 
@@ -704,7 +866,7 @@ def build_review_from_gates(
     rejection_stage: str | None = None,
     final_reason: str | None = None,
 ) -> dict[str, Any]:
-    """Build the final review object stored inside each QA row.
+    """Build the final review object stored inside each question-answer row.
 
     Generator self-checks stay in generation_trace. The final review is derived
     from the model/deterministic judges, answerability evaluator, and final schema validation.
@@ -735,6 +897,21 @@ def build_review_from_gates(
             "rejection_stage": None if accepted else (rejection_stage or "schema"),
             "reason": final_reason or ("passed all gates" if accepted else "rejected"),
         },
+    }
+
+
+def generator_decode_config(
+    *,
+    generator_decode_mode: str,
+    generator_temperature: float,
+    generator_top_p: float,
+    generator_top_k: int | None,
+) -> dict[str, Any]:
+    return {
+        "mode": generator_decode_mode,
+        "temperature": generator_temperature,
+        "top_p": generator_top_p,
+        "top_k": generator_top_k,
     }
 
 
@@ -924,9 +1101,9 @@ def run_parallel_review_judges(
             "generation_mode": qa_item.get("generation_mode"),
             "attempt": attempt,
             "prompt": qa_formality_prompt,
-            "image_paths": full_image_paths,
-            "video_paths": full_video_paths,
-            "media_role": "full",
+            "image_paths": [],
+            "video_paths": [],
+            "media_role": "text_only",
             "schema_branch": schema_formality_branch(schema_errors),
         }
     )
@@ -952,8 +1129,8 @@ def run_parallel_review_judges(
             check_name="qa_formality",
             prompt=qa_formality_prompt,
             runner=runner,
-            image_paths=full_image_paths,
-            video_paths=full_video_paths,
+            image_paths=[],
+            video_paths=[],
             evidence_id=packet.get("evidence_id"),
             qa_id=qa_item.get("qa_id"),
             attempt=attempt,
@@ -1050,10 +1227,31 @@ def generate_video_qa_loop(
     dry_run: bool = False,
     generation_mode: str = "baseline",
     fixed_question_type_schedule: bool = False,
+    question_types: tuple[str, ...] | None = None,
     resume: bool = False,
+    generator_decode_mode: str = "greedy",
+    generator_temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+    generator_top_p: float = DEFAULT_SAMPLING_TOP_P,
+    generator_top_k: int | None = None,
 ) -> list[dict[str, Any]]:
     if generation_mode not in GENERATION_MODES:
         raise ValueError(f"unknown generation_mode: {generation_mode}")
+    if generator_decode_mode not in GENERATOR_DECODING_MODES:
+        raise ValueError(f"unknown generator_decode_mode: {generator_decode_mode}")
+    active_question_types = tuple(question_types or DEFAULT_QUESTION_TYPES)
+    if not active_question_types:
+        raise ValueError("question_types must include at least one question type")
+    unknown_question_types = [
+        question_type for question_type in active_question_types if question_type not in QUESTION_TYPES
+    ]
+    if unknown_question_types:
+        raise ValueError(f"unknown question_types: {unknown_question_types}")
+    decode_config = generator_decode_config(
+        generator_decode_mode=generator_decode_mode,
+        generator_temperature=generator_temperature,
+        generator_top_p=generator_top_p,
+        generator_top_k=generator_top_k,
+    )
     runner = make_runner(
         "dry-run" if dry_run else backend,
         model_id=model_id,
@@ -1079,8 +1277,8 @@ def generate_video_qa_loop(
         for row in [*accepted, *rejected]
         if row.get("evidence_id")
     }
-    targets = target_type_counts(target_count)
-    counts = {question_type: 0 for question_type in QUESTION_TYPES}
+    targets = target_type_counts(target_count, active_question_types)
+    counts = {question_type: 0 for question_type in active_question_types}
     for row in accepted:
         question_type = row.get("question_type")
         if question_type in counts:
@@ -1096,12 +1294,14 @@ def generate_video_qa_loop(
             print(f"resume_skip evidence_id={evidence_id}", flush=True)
             continue
         question_type = (
-            QUESTION_TYPES[packet_index % len(QUESTION_TYPES)]
+            active_question_types[packet_index % len(active_question_types)]
             if fixed_question_type_schedule
-            else choose_question_type(counts, targets)
+            else choose_question_type(counts, targets, active_question_types)
         )
         if question_type is None:
             break
+        if generation_mode == TEMPORAL_REASONING_MODE:
+            packet = packet_with_temporal_reasoning_media(packet)
         clips = packet.get("clips", [])
         image_paths, video_paths = media_for_clips(
             clips,
@@ -1165,6 +1365,7 @@ def generate_video_qa_loop(
                     else {}
                 ),
                 "generation": {"prompt": gen_prompt, "raw_output": None},
+                "generator_decode": decode_config,
                 "judge": {
                     "parallel": True,
                     "schema_branch": schema_formality_branch(schema_errors),
@@ -1197,6 +1398,7 @@ def generate_video_qa_loop(
                     "prompt": gen_prompt,
                     "image_paths": image_paths,
                     "video_paths": video_paths,
+                    "generator_decode": decode_config,
                 }
             )
             prompts.append(
@@ -1208,9 +1410,9 @@ def generate_video_qa_loop(
                     "generation_mode": generation_mode,
                     "attempt": 1,
                     "prompt": qa_formality_prompt,
-                    "image_paths": full_image_paths,
-                    "video_paths": full_video_paths,
-                    "media_role": "full",
+                    "image_paths": [],
+                    "video_paths": [],
+                    "media_role": "text_only",
                     "schema_branch": schema_formality_branch(schema_errors),
                 }
             )
@@ -1267,6 +1469,7 @@ def generate_video_qa_loop(
                 )
             qa["generation_trace"] = [dry_trace]
             qa["human_audit"] = human_audit_packet(packet)
+            qa["generator_decode"] = decode_config
             intermediate_rows.append(dry_trace)
             counts[question_type] += 1
             accepted.append(qa)
@@ -1292,6 +1495,7 @@ def generate_video_qa_loop(
                 },
                 "discovery": {},
                 "generation": {},
+                "generator_decode": decode_config,
                 "judge": {},
                 "answerability": {},
                 "result": {},
@@ -1364,6 +1568,7 @@ def generate_video_qa_loop(
                     "prompt": gen_prompt,
                     "image_paths": image_paths,
                     "video_paths": video_paths,
+                    "generator_decode": decode_config,
                 }
             )
             stage_start = time.time()
@@ -1374,7 +1579,18 @@ def generate_video_qa_loop(
                 f"images={len(image_paths)} videos={len(video_paths)}",
                 flush=True,
             )
-            raw_generation = runner.generate(gen_prompt, image_paths=image_paths, video_paths=video_paths)
+            if generator_decode_mode == "sampling":
+                raw_generation = runner.generate(
+                    gen_prompt,
+                    image_paths=image_paths,
+                    video_paths=video_paths,
+                    decoding_mode=generator_decode_mode,
+                    temperature=generator_temperature,
+                    top_p=generator_top_p,
+                    top_k=generator_top_k,
+                )
+            else:
+                raw_generation = runner.generate(gen_prompt, image_paths=image_paths, video_paths=video_paths)
             print(
                 "qa_stage_done "
                 f"stage=generation evidence_id={packet.get('evidence_id')} "
@@ -1409,6 +1625,7 @@ def generate_video_qa_loop(
             qa["evidence_id"] = packet.get("evidence_id")
             qa["question_type"] = question_type
             qa["generation_mode"] = generation_mode
+            qa["generator_decode"] = decode_config
             qa["required_users"] = packet.get("required_users", qa.get("required_users", []))
             qa["model_id"] = runner.model_id
             qa["source_urls"] = packet.get("source_urls", {})
@@ -1503,6 +1720,7 @@ def generate_video_qa_loop(
                     "qa_id": qa.get("qa_id"),
                     "question_type": question_type,
                     "generation_mode": generation_mode,
+                    "generator_decode": decode_config,
                     "status": "accepted",
                     "attempts": packet_trace,
                 }
@@ -1514,6 +1732,7 @@ def generate_video_qa_loop(
                 "evidence_id": packet.get("evidence_id"),
                 "question_type": question_type,
                 "generation_mode": generation_mode,
+                "generator_decode": decode_config,
                 "attempts": packet_rejections,
                 "generation_trace": packet_trace,
                 "human_audit": human_audit_packet(packet),
@@ -1537,6 +1756,10 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--backend", default="transformers-local", choices=["transformers-local", "openai-compatible-local"])
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     parser.add_argument("--generation-mode", default="baseline", choices=GENERATION_MODES)
+    parser.add_argument("--generator-decode-mode", default="greedy", choices=GENERATOR_DECODING_MODES)
+    parser.add_argument("--generator-temperature", type=float, default=DEFAULT_SAMPLING_TEMPERATURE)
+    parser.add_argument("--generator-top-p", type=float, default=DEFAULT_SAMPLING_TOP_P)
+    parser.add_argument("--generator-top-k", type=int)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
     parser.add_argument("--max-new-tokens", type=int, default=1536)
     parser.add_argument("--max-image-pixels", type=int, default=262144)
@@ -1546,11 +1769,16 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--disable-thinking", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--fixed-question-type-schedule", action="store_true")
+    parser.add_argument(
+        "--question-types",
+        default="commonality,difference",
+        help="Comma-separated question types to schedule. Use 'neutral' to disable commonality/difference subtype constraints.",
+    )
     parser.add_argument("--resume", action="store_true", help="Append to existing JSONL outputs and skip completed evidence IDs")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Video-first EgoLife two-user QA generation loop")
+    parser = argparse.ArgumentParser(description="Video-first EgoLife two-user question-answer generation loop")
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--prompts-output")
@@ -1580,9 +1808,14 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         generation_mode=args.generation_mode,
         fixed_question_type_schedule=args.fixed_question_type_schedule,
+        question_types=parse_question_types(args.question_types),
         resume=args.resume,
+        generator_decode_mode=args.generator_decode_mode,
+        generator_temperature=args.generator_temperature,
+        generator_top_p=args.generator_top_p,
+        generator_top_k=args.generator_top_k,
     )
-    print(f"accepted {len(rows)} video-first QA rows")
+    print(f"accepted {len(rows)} video-first question-answer rows")
     return 0
 
 
