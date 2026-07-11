@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=egolife_neutral50
+#SBATCH --job-name=egolife_neutral50_gem
 #SBATCH --account=torch_pr_111_tandon_advanced
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1
-#SBATCH --constraint=h100
 #SBATCH --mem=128G
 #SBATCH --time=12:00:00
 #SBATCH --output=hpc/logs/%x_%j.out
@@ -21,14 +19,14 @@ PROJECT_ROOT="${QWEN3VL_PROJECT_ROOT:-/scratch/${USER}/Long-video-understanding-
 EVIDENCE_ROOT="${EGOLIFE2U_EVIDENCE_ROOT:-egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2}"
 EVIDENCE_PATH="${EGOLIFE2U_EVIDENCE_PATH:-${EVIDENCE_ROOT}/evidence_pruned_pairs.jsonl}"
 
-OUTDIR="${EGOLIFE2U_OUTPUT_ROOT:-egolife_two_user_qa/outputs/clip_pruned_neutral_prompt_50}"
+OUTDIR="${EGOLIFE2U_OUTPUT_ROOT:-egolife_two_user_qa/outputs/clip_pruned_neutral_prompt_50_gemini}"
 CACHE_DIR="${EGOLIFE2U_CACHE_DIR:-/scratch/${USER}/egolife_two_user_qa_cache}"
 
 TARGET_COUNT="${EGOLIFE2U_TARGET_COUNT:-50}"
 EVAL_PACKET_COUNT="${EGOLIFE2U_EVAL_PACKET_COUNT:-${TARGET_COUNT}}"
 
 QWEN_MODEL_ID="${QWEN_MODEL_ID:-Qwen/Qwen3.6-27B}"
-VLM_BACKEND="${VLM_BACKEND:-${EGOLIFE2U_BACKEND:-transformers-local}}"
+VLM_BACKEND="${VLM_BACKEND:-${EGOLIFE2U_BACKEND:-gemini}}"
 if [[ -z "${VLM_MODEL_ID:-}" ]]; then
   if [[ "${VLM_BACKEND}" == "gemini" ]]; then
     VLM_MODEL_ID="${GEMINI_MODEL_ID:-gemini-2.5-flash}"
@@ -36,19 +34,19 @@ if [[ -z "${VLM_MODEL_ID:-}" ]]; then
     VLM_MODEL_ID="${QWEN_MODEL_ID}"
   fi
 fi
-VLM_API_KEY="${VLM_API_KEY:-${GEMINI_API_KEY:-}}"
+VLM_API_KEY="${VLM_API_KEY:-${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}}"
 GENERATION_MODE="${GENERATION_MODE:-baseline}"
 GENERATOR_DECODE_MODE="${GENERATOR_DECODE_MODE:-greedy}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-4096}"
-DISABLE_THINKING="${DISABLE_THINKING:-1}"
+DISABLE_THINKING="${DISABLE_THINKING:-0}"
 RESUME_GENERATION="${RESUME_GENERATION:-0}"
 
 SAMPLING_TEMPERATURE="${SAMPLING_TEMPERATURE:-0.7}"
 SAMPLING_TOP_P="${SAMPLING_TOP_P:-0.9}"
 SAMPLING_TOP_K="${SAMPLING_TOP_K:-}"
 
-CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-1}"
+CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-0}"
 CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/hpc/cuda.py}"
 CUDA_KEEPER_THRESHOLD="${CUDA_KEEPER_THRESHOLD:-60}"
 CUDA_KEEPER_GPUS="${CUDA_KEEPER_GPUS:-0}"
@@ -108,7 +106,7 @@ echo "cuda_keeper_threshold=${CUDA_KEEPER_THRESHOLD}"
 echo "cuda_keeper_gpus=${CUDA_KEEPER_GPUS}"
 echo "cuda_keeper_reserve=${CUDA_KEEPER_RESERVE}"
 echo "cuda_keeper_auto_install=${CUDA_KEEPER_AUTO_INSTALL}"
-echo "benchmark_contract=reuse_same_first_50_clip_pruned_packets_neutral_prompt"
+echo "benchmark_contract=reuse_same_first_50_clip_pruned_packets_neutral_prompt_gemini"
 echo "media_routing=generator_uses_existing_pruned_videos;judges_and_answerability_use_full_30s_originals"
 python --version
 nvidia-smi || true
@@ -116,6 +114,11 @@ nvidia-smi || true
 if [[ ! -s "${EVIDENCE_PATH}" ]]; then
   echo "error=evidence_file_missing path=${EVIDENCE_PATH}" >&2
   exit 1
+fi
+
+if [[ "${VLM_BACKEND}" == "gemini" && -z "${VLM_API_KEY}" ]]; then
+  echo "error=gemini_api_key_missing set GEMINI_API_KEY, GOOGLE_API_KEY, or VLM_API_KEY before sbatch" >&2
+  exit 2
 fi
 
 if [[ "${CUDA_KEEPER_ENABLE}" == "1" ]]; then
@@ -383,5 +386,7 @@ echo "  intermediate=${QA_DIR}/qa_mcq.intermediate.jsonl"
 echo "  rejected=${QA_DIR}/qa_mcq.rejected.jsonl"
 echo "  prompts=${QA_DIR}/video_first_prompts.jsonl"
 echo "  report=${QA_DIR}/generation_report.md"
-echo "  cuda_keeper_log=${OUTDIR}/cuda_keeper_${SLURM_JOB_ID:-local}.log"
+if [[ "${CUDA_KEEPER_ENABLE}" == "1" ]]; then
+  echo "  cuda_keeper_log=${OUTDIR}/cuda_keeper_${SLURM_JOB_ID:-local}.log"
+fi
 echo "date_done=$(date --iso-8601=seconds)"

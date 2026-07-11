@@ -137,6 +137,39 @@ python -m egolife_two_user_qa generate_video_qa_loop \
 
 如果不传 `--allow-openai-video-input`，OpenAI-compatible backend 会退回 sampled frame images，因为不是每个本地 server 都支持 video data URL。
 
+### Gemini 2.5 Flash Backend
+
+The QA loop can also use Gemini through the native Gemini API while preserving
+the same evidence JSONL paths and media routing. Qwen remains the default; use
+Gemini only by selecting the backend explicitly.
+
+```bash
+export GEMINI_API_KEY="..."
+
+python -m egolife_two_user_qa generate_video_qa_loop \
+  --backend gemini \
+  --model-id gemini-2.5-flash \
+  --evidence egolife_two_user_qa/outputs/pilot_20_video_first/evidence_manifest.jsonl \
+  --output egolife_two_user_qa/outputs/pilot_20_video_first/qa_mcq.gemini.jsonl \
+  --prompts-output egolife_two_user_qa/outputs/pilot_20_video_first/video_first_prompts.gemini.jsonl \
+  --intermediate-output egolife_two_user_qa/outputs/pilot_20_video_first/qa_mcq.gemini.intermediate.jsonl
+```
+
+For sbatch runs that call `generate_video_qa_loop`, keep the existing evidence
+root/path variables and set:
+
+```bash
+export VLM_BACKEND=gemini
+export GEMINI_API_KEY="..."
+# optional; defaults to gemini-2.5-flash when VLM_BACKEND=gemini
+export VLM_MODEL_ID=gemini-2.5-flash
+```
+
+Unset `VLM_BACKEND` or set `VLM_BACKEND=transformers-local` to switch back to
+Qwen. Existing `local_video`, `original_local_video`, and `full_local_video`
+fields are still used; Gemini uploads those local files through its Files API
+at call time.
+
 ## Discovery Control
 
 `discovery_control` is a control mode for the discovery ablation. It records a

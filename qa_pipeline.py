@@ -52,7 +52,7 @@ def validate_outputs(
 
 
 def add_runner_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--backend", default="transformers-local", choices=["transformers-local", "openai-compatible-local"])
+    parser.add_argument("--backend", default="transformers-local", choices=["transformers-local", "openai-compatible-local", "gemini"])
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
     parser.add_argument("--max-new-tokens", type=int, default=1024)
@@ -60,6 +60,7 @@ def add_runner_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dtype", default="bfloat16", choices=["auto", "float16", "bfloat16", "float32"])
     parser.add_argument("--allow-cpu", action="store_true")
     parser.add_argument("--disable-thinking", action="store_true")
+    parser.add_argument("--api-key", help="Provider API key; Gemini also reads GEMINI_API_KEY or GOOGLE_API_KEY")
     parser.add_argument("--dry-run", action="store_true")
 
 

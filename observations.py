@@ -121,6 +121,7 @@ def observe_clips(
     dtype: str = "bfloat16",
     allow_cpu: bool = False,
     disable_thinking: bool = False,
+    api_key: str | None = None,
     dry_run: bool = False,
     download_media: bool = True,
 ) -> list[dict[str, Any]]:
@@ -135,6 +136,7 @@ def observe_clips(
         dtype=dtype,
         allow_cpu=allow_cpu,
         disable_thinking=disable_thinking,
+        api_key=api_key,
     )
     rows = []
     prompt_rows = []

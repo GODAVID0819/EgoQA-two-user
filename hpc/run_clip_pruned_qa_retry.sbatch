@@ -21,6 +21,15 @@ EVIDENCE_PATH="${EGOLIFE2U_EVIDENCE_PATH:-${OUTDIR}/evidence_pruned_pairs.jsonl}
 
 EVAL_PACKET_COUNT="${EGOLIFE2U_EVAL_PACKET_COUNT:-auto}"
 QWEN_MODEL_ID="${QWEN_MODEL_ID:-Qwen/Qwen3-VL-8B-Instruct}"
+VLM_BACKEND="${VLM_BACKEND:-${EGOLIFE2U_BACKEND:-transformers-local}}"
+if [[ -z "${VLM_MODEL_ID:-}" ]]; then
+  if [[ "${VLM_BACKEND}" == "gemini" ]]; then
+    VLM_MODEL_ID="${GEMINI_MODEL_ID:-gemini-2.5-flash}"
+  else
+    VLM_MODEL_ID="${QWEN_MODEL_ID}"
+  fi
+fi
+VLM_API_KEY="${VLM_API_KEY:-${GEMINI_API_KEY:-}}"
 GENERATION_MODE="${GENERATION_MODE:-baseline}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-1536}"
@@ -82,6 +91,11 @@ if [[ "${RESUME_GENERATION}" == "1" ]]; then
   resume_args+=(--resume)
 fi
 
+api_key_args=()
+if [[ -n "${VLM_API_KEY}" ]]; then
+  api_key_args+=(--api-key "${VLM_API_KEY}")
+fi
+
 echo "job_id=${SLURM_JOB_ID:-}"
 echo "hostname=$(hostname)"
 echo "pwd=$(pwd)"
@@ -91,6 +105,11 @@ echo "evidence_path=${EVIDENCE_PATH}"
 echo "qa_dir=${QA_DIR}"
 echo "eval_packet_count=${EVAL_PACKET_COUNT}"
 echo "qwen_model_id=${QWEN_MODEL_ID}"
+echo "vlm_backend=${VLM_BACKEND}"
+echo "vlm_model_id=${VLM_MODEL_ID}"
+if [[ -n "${VLM_API_KEY}" ]]; then
+  echo "vlm_api_key=provided"
+fi
 echo "generation_mode=${GENERATION_MODE}"
 echo "max_attempts=${MAX_ATTEMPTS}"
 echo "max_new_tokens=${MAX_NEW_TOKENS}"
@@ -165,12 +184,13 @@ python -m egolife_two_user_qa generate_video_qa_loop \
   --intermediate-output "${QA_DIR}/qa_mcq.intermediate.jsonl" \
   --target-count "${EVAL_PACKET_COUNT}" \
   --max-attempts "${MAX_ATTEMPTS}" \
-  --backend transformers-local \
-  --model-id "${QWEN_MODEL_ID}" \
+  --backend "${VLM_BACKEND}" \
+  --model-id "${VLM_MODEL_ID}" \
   --dtype bfloat16 \
   --max-new-tokens "${MAX_NEW_TOKENS}" \
   --generation-mode "${GENERATION_MODE}" \
   --fixed-question-type-schedule \
+  "${api_key_args[@]}" \
   "${resume_args[@]}"
 
 echo "stage=verify_generation_traces"

@@ -28,6 +28,15 @@ TARGET_COUNT="${EGOLIFE2U_TARGET_COUNT:-50}"
 EVAL_PACKET_COUNT="${EGOLIFE2U_EVAL_PACKET_COUNT:-${TARGET_COUNT}}"
 
 QWEN_MODEL_ID="${QWEN_MODEL_ID:-Qwen/Qwen3.6-27B}"
+VLM_BACKEND="${VLM_BACKEND:-${EGOLIFE2U_BACKEND:-transformers-local}}"
+if [[ -z "${VLM_MODEL_ID:-}" ]]; then
+  if [[ "${VLM_BACKEND}" == "gemini" ]]; then
+    VLM_MODEL_ID="${GEMINI_MODEL_ID:-gemini-2.5-flash}"
+  else
+    VLM_MODEL_ID="${QWEN_MODEL_ID}"
+  fi
+fi
+VLM_API_KEY="${VLM_API_KEY:-${GEMINI_API_KEY:-}}"
 GENERATION_MODE="${GENERATION_MODE:-baseline}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-4096}"
@@ -80,6 +89,11 @@ echo "cache_dir=${CACHE_DIR}"
 echo "target_count=${TARGET_COUNT}"
 echo "eval_packet_count=${EVAL_PACKET_COUNT}"
 echo "qwen_model_id=${QWEN_MODEL_ID}"
+echo "vlm_backend=${VLM_BACKEND}"
+echo "vlm_model_id=${VLM_MODEL_ID}"
+if [[ -n "${VLM_API_KEY}" ]]; then
+  echo "vlm_api_key=provided"
+fi
 echo "generation_mode=${GENERATION_MODE}"
 echo "max_attempts=${MAX_ATTEMPTS}"
 echo "max_new_tokens=${MAX_NEW_TOKENS}"
@@ -165,6 +179,11 @@ if [[ "${DISABLE_THINKING}" == "1" ]]; then
   thinking_args+=(--disable-thinking)
 fi
 
+api_key_args=()
+if [[ -n "${VLM_API_KEY}" ]]; then
+  api_key_args+=(--api-key "${VLM_API_KEY}")
+fi
+
 run_decode_mode() {
   local decode_mode="$1"
   local qa_dir="${OUTDIR}/${GENERATION_MODE}_${decode_mode}"
@@ -188,14 +207,15 @@ run_decode_mode() {
     --intermediate-output "${qa_dir}/qa_mcq.intermediate.jsonl" \
     --target-count "${EVAL_PACKET_COUNT}" \
     --max-attempts "${MAX_ATTEMPTS}" \
-    --backend transformers-local \
-    --model-id "${QWEN_MODEL_ID}" \
+    --backend "${VLM_BACKEND}" \
+    --model-id "${VLM_MODEL_ID}" \
     --dtype bfloat16 \
     --max-new-tokens "${MAX_NEW_TOKENS}" \
     --generation-mode "${GENERATION_MODE}" \
     --fixed-question-type-schedule \
     "${decode_args[@]}" \
     "${thinking_args[@]}" \
+    "${api_key_args[@]}" \
     "${resume_args[@]}"
 
   echo "stage=verify_generation_traces decode_mode=${decode_mode}"

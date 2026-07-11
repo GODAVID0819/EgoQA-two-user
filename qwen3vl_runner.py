@@ -6,7 +6,9 @@ import base64
 import json
 import mimetypes
 import os
+import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +16,9 @@ from typing import Any, Protocol
 
 
 DEFAULT_MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
+DEFAULT_GEMINI_MODEL_ID = "gemini-2.5-flash"
+DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+DEFAULT_GEMINI_UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta"
 DEFAULT_MAX_IMAGE_PIXELS = 262144
 GENERATOR_DECODING_MODES = ("greedy", "sampling")
 DEFAULT_SAMPLING_TEMPERATURE = 0.7
@@ -74,6 +79,16 @@ def file_to_data_url(path: str | Path) -> str:
     mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     data = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{data}"
+
+
+def read_json_response(req: urllib.request.Request, *, timeout: int) -> dict[str, Any]:
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code} from {req.full_url}: {detail}") from exc
+    return json.loads(raw) if raw else {}
 
 
 def cuda_available() -> bool:
@@ -422,6 +437,215 @@ class OpenAICompatibleLocalRunner:
         return data["choices"][0]["message"]["content"].strip()
 
 
+class GeminiRunner:
+    """Call Gemini through the native generateContent and Files APIs."""
+
+    def __init__(
+        self,
+        model_id: str = DEFAULT_GEMINI_MODEL_ID,
+        *,
+        base_url: str = DEFAULT_GEMINI_BASE_URL,
+        upload_url: str = DEFAULT_GEMINI_UPLOAD_URL,
+        max_new_tokens: int = 1024,
+        timeout: int = 600,
+        api_key: str | None = None,
+        file_poll_interval_seconds: float = 2.0,
+        file_poll_timeout_seconds: float = 300.0,
+    ) -> None:
+        self.model_id = model_id or DEFAULT_GEMINI_MODEL_ID
+        self.base_url = base_url.rstrip("/")
+        self.upload_url = upload_url.rstrip("/")
+        self.max_new_tokens = max_new_tokens
+        self.timeout = timeout
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        self.file_poll_interval_seconds = file_poll_interval_seconds
+        self.file_poll_timeout_seconds = file_poll_timeout_seconds
+        self._file_cache: dict[tuple[str, int, int], dict[str, Any]] = {}
+        self._file_cache_lock = threading.Lock()
+        if not self.api_key:
+            raise RuntimeError("Gemini backend requires --api-key, GEMINI_API_KEY, or GOOGLE_API_KEY")
+
+    def _headers(self, *, content_type: str = "application/json") -> dict[str, str]:
+        return {
+            "Content-Type": content_type,
+            "x-goog-api-key": str(self.api_key),
+        }
+
+    def _request_json(
+        self,
+        url: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        method: str = "POST",
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        data = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers=headers or self._headers(),
+            method=method,
+        )
+        return read_json_response(req, timeout=self.timeout)
+
+    def _file_cache_key(self, path: str | Path) -> tuple[str, int, int]:
+        resolved = Path(path).resolve()
+        stat = resolved.stat()
+        return str(resolved), int(stat.st_size), int(stat.st_mtime_ns)
+
+    def _upload_file_once(self, path: str | Path) -> dict[str, Any]:
+        path = Path(path).resolve()
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        size = path.stat().st_size
+        start_req = urllib.request.Request(
+            f"{self.upload_url}/files",
+            data=json.dumps({"file": {"display_name": path.name}}).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": str(self.api_key),
+                "X-Goog-Upload-Protocol": "resumable",
+                "X-Goog-Upload-Command": "start",
+                "X-Goog-Upload-Header-Content-Length": str(size),
+                "X-Goog-Upload-Header-Content-Type": mime,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(start_req, timeout=self.timeout) as resp:
+                upload_session_url = resp.headers.get("X-Goog-Upload-URL")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Gemini file upload start failed for {path}: HTTP {exc.code}: {detail}") from exc
+        if not upload_session_url:
+            raise RuntimeError(f"Gemini file upload start did not return X-Goog-Upload-URL for {path}")
+
+        upload_req = urllib.request.Request(
+            upload_session_url,
+            data=path.read_bytes(),
+            headers={
+                "Content-Length": str(size),
+                "Content-Type": mime,
+                "X-Goog-Upload-Offset": "0",
+                "X-Goog-Upload-Command": "upload, finalize",
+            },
+            method="POST",
+        )
+        uploaded = read_json_response(upload_req, timeout=self.timeout)
+        file_obj = uploaded.get("file") if isinstance(uploaded, dict) else None
+        if not isinstance(file_obj, dict) or not file_obj.get("uri"):
+            raise RuntimeError(f"Gemini file upload returned no file.uri for {path}: {uploaded}")
+        return self._wait_for_file_active(file_obj)
+
+    def _wait_for_file_active(self, file_obj: dict[str, Any]) -> dict[str, Any]:
+        name = str(file_obj.get("name") or "")
+        if not name:
+            return file_obj
+        deadline = time.time() + self.file_poll_timeout_seconds
+        last_state = str(file_obj.get("state") or "")
+        while time.time() < deadline:
+            if last_state in {"", "ACTIVE"}:
+                return file_obj
+            if last_state == "FAILED":
+                raise RuntimeError(f"Gemini file processing failed for {name}: {file_obj}")
+            time.sleep(self.file_poll_interval_seconds)
+            file_obj = self._request_json(
+                f"{self.base_url}/{name}",
+                method="GET",
+                headers=self._headers(),
+            )
+            last_state = str(file_obj.get("state") or "")
+        raise RuntimeError(f"Gemini file {name} did not become ACTIVE; last_state={last_state}")
+
+    def _file_part(self, path: str | Path) -> dict[str, Any]:
+        key = self._file_cache_key(path)
+        with self._file_cache_lock:
+            cached = self._file_cache.get(key)
+            if cached is None:
+                print(f"gemini_upload_start path={key[0]} bytes={key[1]}", flush=True)
+                cached = self._upload_file_once(key[0])
+                self._file_cache[key] = cached
+                print(
+                    "gemini_upload_done "
+                    f"path={key[0]} uri={cached.get('uri')} state={cached.get('state')}",
+                    flush=True,
+                )
+        mime = cached.get("mimeType") or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        return {"file_data": {"mime_type": mime, "file_uri": cached["uri"]}}
+
+    def _image_part(self, path: str | Path) -> dict[str, Any]:
+        path = Path(path)
+        mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+        return {
+            "inline_data": {
+                "mime_type": mime,
+                "data": base64.b64encode(path.read_bytes()).decode("ascii"),
+            }
+        }
+
+    def prepare_videos(self, video_paths: list[str] | None = None) -> list[dict[str, Any]]:
+        """Upload video files now so later generation/review calls reuse them."""
+
+        prepared = []
+        for path in dict.fromkeys(video_paths or []):
+            prepared.append(self._file_part(path)["file_data"])
+        return prepared
+
+    def generate(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
+    ) -> str:
+        if decoding_mode not in GENERATOR_DECODING_MODES:
+            raise ValueError(f"unknown decoding_mode: {decoding_mode}")
+        image_paths = image_paths or []
+        video_paths = video_paths or []
+        start = time.time()
+        print(
+            "gemini_generate_start "
+            f"model={self.model_id} images={len(image_paths)} videos={len(video_paths)} "
+            f"prompt_chars={len(prompt)} decoding_mode={decoding_mode}",
+            flush=True,
+        )
+        parts = [self._image_part(path) for path in image_paths]
+        parts.extend(self._file_part(path) for path in video_paths)
+        parts.append({"text": prompt})
+        generation_config: dict[str, Any] = {
+            "maxOutputTokens": self.max_new_tokens,
+            "temperature": temperature if decoding_mode == "sampling" else 0,
+        }
+        if decoding_mode == "sampling":
+            generation_config["topP"] = top_p
+            if top_k is not None:
+                generation_config["topK"] = top_k
+        payload = {
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": generation_config,
+        }
+        data = self._request_json(
+            f"{self.base_url}/models/{self.model_id}:generateContent",
+            payload=payload,
+            method="POST",
+        )
+        candidates = data.get("candidates") if isinstance(data, dict) else None
+        if not candidates:
+            raise RuntimeError(f"Gemini returned no candidates: {data}")
+        content = candidates[0].get("content") if isinstance(candidates[0], dict) else None
+        out_parts = content.get("parts") if isinstance(content, dict) else None
+        text = "".join(str(part.get("text") or "") for part in out_parts or [] if isinstance(part, dict)).strip()
+        if not text:
+            raise RuntimeError(f"Gemini returned no text content: {data}")
+        print(
+            f"gemini_generate_done model={self.model_id} seconds={time.time() - start:.1f} output_chars={len(text)}",
+            flush=True,
+        )
+        return text
+
+
 class DryRunRunner:
     """A no-model runner used only to write prompts and test plumbing."""
 
@@ -463,6 +687,7 @@ def make_runner(
     allow_cpu: bool = False,
     allow_openai_video_input: bool = False,
     disable_thinking: bool = False,
+    api_key: str | None = None,
 ) -> Generator:
     if backend == "transformers-local":
         return Qwen3VLTransformersRunner(
@@ -478,7 +703,21 @@ def make_runner(
             model_id,
             base_url=base_url,
             max_new_tokens=max_new_tokens,
+            api_key=api_key,
             allow_video_input=allow_openai_video_input,
+        )
+    if backend == "gemini":
+        effective_base_url = (
+            DEFAULT_GEMINI_BASE_URL
+            if base_url == "http://127.0.0.1:8000/v1"
+            else base_url
+        )
+        effective_model_id = DEFAULT_GEMINI_MODEL_ID if model_id == DEFAULT_MODEL_ID else model_id
+        return GeminiRunner(
+            effective_model_id,
+            base_url=effective_base_url,
+            max_new_tokens=max_new_tokens,
+            api_key=api_key,
         )
     if backend == "dry-run":
         return DryRunRunner()

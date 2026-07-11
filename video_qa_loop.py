@@ -121,6 +121,51 @@ def media_for_clips(
     return images if not videos else [], videos
 
 
+def prepare_runner_video_uploads(
+    *,
+    runner: Any,
+    evidence_id: Any,
+    generator_video_paths: list[str],
+    full_video_paths: list[str],
+) -> dict[str, Any] | None:
+    """Let remote runners pre-upload all packet videos before generation starts."""
+
+    prepare_videos = getattr(runner, "prepare_videos", None)
+    if not callable(prepare_videos):
+        return None
+    all_video_paths = list(dict.fromkeys([*generator_video_paths, *full_video_paths]))
+    if not all_video_paths:
+        return None
+    stage_start = time.time()
+    print(
+        "qa_stage_start "
+        f"stage=prepare_media evidence_id={evidence_id} "
+        f"generator_videos={len(generator_video_paths)} "
+        f"full_videos={len(full_video_paths)} "
+        f"unique_videos={len(all_video_paths)}",
+        flush=True,
+    )
+    prepared = prepare_videos(all_video_paths)
+    print(
+        "qa_stage_done "
+        f"stage=prepare_media evidence_id={evidence_id} "
+        f"seconds={time.time() - stage_start:.1f} "
+        f"prepared_videos={len(prepared or [])}",
+        flush=True,
+    )
+    return {
+        "stage": "prepare_media",
+        "generator_video_paths": generator_video_paths,
+        "full_video_paths": full_video_paths,
+        "unique_video_paths": all_video_paths,
+        "prepared_video_count": len(prepared or []),
+        "purpose": (
+            "pre-upload generator pruned videos and full original videos so the generator sees pruned media "
+            "and judges/answerability see complete originals"
+        ),
+    }
+
+
 def time_map_segments_from_keep_intervals(
     keep_intervals: list[list[float]] | list[tuple[float, float]] | None,
 ) -> list[dict[str, float]]:
@@ -1224,6 +1269,7 @@ def generate_video_qa_loop(
     allow_cpu: bool = False,
     allow_openai_video_input: bool = False,
     disable_thinking: bool = False,
+    api_key: str | None = None,
     dry_run: bool = False,
     generation_mode: str = "baseline",
     fixed_question_type_schedule: bool = False,
@@ -1262,6 +1308,7 @@ def generate_video_qa_loop(
         allow_cpu=allow_cpu,
         allow_openai_video_input=allow_openai_video_input,
         disable_thinking=disable_thinking,
+        api_key=api_key,
     )
     prompts = StreamingJsonlRows(prompts_path, reset=not resume)
     intermediate_rows = StreamingJsonlRows(intermediate_path, reset=not resume)
@@ -1315,6 +1362,12 @@ def generate_video_qa_loop(
             allow_openai_video_input=allow_openai_video_input,
             media_role="full",
         )
+        prepared_video_uploads = prepare_runner_video_uploads(
+            runner=runner,
+            evidence_id=packet.get("evidence_id"),
+            generator_video_paths=video_paths,
+            full_video_paths=full_video_paths,
+        )
         feedback = None
         if dry_run:
             qa = dry_run_qa(packet, question_type, generation_mode=generation_mode)
@@ -1353,6 +1406,7 @@ def generate_video_qa_loop(
                     "media_role": "generator",
                     "full_image_paths": full_image_paths,
                     "full_video_paths": full_video_paths,
+                    "prepared_video_uploads": prepared_video_uploads,
                     "human_audit": human_audit_packet(packet),
                 },
                 "discovery": (
@@ -1491,6 +1545,7 @@ def generate_video_qa_loop(
                     "media_role": "generator",
                     "full_image_paths": full_image_paths,
                     "full_video_paths": full_video_paths,
+                    "prepared_video_uploads": prepared_video_uploads,
                     "human_audit": human_audit_packet(packet),
                 },
                 "discovery": {},
@@ -1753,7 +1808,7 @@ def generate_video_qa_loop(
 
 
 def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--backend", default="transformers-local", choices=["transformers-local", "openai-compatible-local"])
+    parser.add_argument("--backend", default="transformers-local", choices=["transformers-local", "openai-compatible-local", "gemini"])
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     parser.add_argument("--generation-mode", default="baseline", choices=GENERATION_MODES)
     parser.add_argument("--generator-decode-mode", default="greedy", choices=GENERATOR_DECODING_MODES)
@@ -1767,6 +1822,7 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--allow-cpu", action="store_true")
     parser.add_argument("--allow-openai-video-input", action="store_true")
     parser.add_argument("--disable-thinking", action="store_true")
+    parser.add_argument("--api-key", help="Provider API key; Gemini also reads GEMINI_API_KEY or GOOGLE_API_KEY")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--fixed-question-type-schedule", action="store_true")
     parser.add_argument(
@@ -1805,6 +1861,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_cpu=args.allow_cpu,
         allow_openai_video_input=args.allow_openai_video_input,
         disable_thinking=args.disable_thinking,
+        api_key=args.api_key,
         dry_run=args.dry_run,
         generation_mode=args.generation_mode,
         fixed_question_type_schedule=args.fixed_question_type_schedule,

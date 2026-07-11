@@ -25,6 +25,15 @@ MAX_GROUPS="${EGOLIFE2U_MAX_GROUPS:-1500}"
 SELECTED_COUNT="${EGOLIFE2U_SELECTED_COUNT:-2}"
 CLIP_MODEL_ID="${CLIP_MODEL_ID:-openai/clip-vit-base-patch32}"
 QWEN_MODEL_ID="${QWEN_MODEL_ID:-Qwen/Qwen3-VL-8B-Instruct}"
+VLM_BACKEND="${VLM_BACKEND:-${EGOLIFE2U_BACKEND:-transformers-local}}"
+if [[ -z "${VLM_MODEL_ID:-}" ]]; then
+  if [[ "${VLM_BACKEND}" == "gemini" ]]; then
+    VLM_MODEL_ID="${GEMINI_MODEL_ID:-gemini-2.5-flash}"
+  else
+    VLM_MODEL_ID="${QWEN_MODEL_ID}"
+  fi
+fi
+VLM_API_KEY="${VLM_API_KEY:-${GEMINI_API_KEY:-}}"
 GENERATION_MODE="${GENERATION_MODE:-baseline}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-1536}"
@@ -76,6 +85,11 @@ echo "max_groups=${MAX_GROUPS}"
 echo "selected_count=${SELECTED_COUNT}"
 echo "clip_model_id=${CLIP_MODEL_ID}"
 echo "qwen_model_id=${QWEN_MODEL_ID}"
+echo "vlm_backend=${VLM_BACKEND}"
+echo "vlm_model_id=${VLM_MODEL_ID}"
+if [[ -n "${VLM_API_KEY}" ]]; then
+  echo "vlm_api_key=provided"
+fi
 echo "generation_mode=${GENERATION_MODE}"
 echo "max_attempts=${MAX_ATTEMPTS}"
 echo "max_new_tokens=${MAX_NEW_TOKENS}"
@@ -188,6 +202,11 @@ if [[ "${RESUME_GENERATION}" == "1" ]]; then
   resume_args+=(--resume)
 fi
 
+api_key_args=()
+if [[ -n "${VLM_API_KEY}" ]]; then
+  api_key_args+=(--api-key "${VLM_API_KEY}")
+fi
+
 QA_DIR="${OUTDIR}/${GENERATION_MODE}"
 mkdir -p "${QA_DIR}"
 
@@ -200,12 +219,13 @@ python -m egolife_two_user_qa generate_video_qa_loop \
   --intermediate-output "${QA_DIR}/qa_mcq.intermediate.jsonl" \
   --target-count "${EVAL_PACKET_COUNT}" \
   --max-attempts "${MAX_ATTEMPTS}" \
-  --backend transformers-local \
-  --model-id "${QWEN_MODEL_ID}" \
+  --backend "${VLM_BACKEND}" \
+  --model-id "${VLM_MODEL_ID}" \
   --dtype bfloat16 \
   --max-new-tokens "${MAX_NEW_TOKENS}" \
   --generation-mode "${GENERATION_MODE}" \
   --fixed-question-type-schedule \
+  "${api_key_args[@]}" \
   "${resume_args[@]}"
 
 echo "stage=verify_generation_traces"

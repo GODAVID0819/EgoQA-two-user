@@ -28,6 +28,16 @@ CACHE_DIR="${EGOLIFE2U_CACHE_DIR:-/scratch/${USER}/egolife_two_user_qa_cache}"
 EVIDENCE_JSONL="${EGOLIFE2U_EVIDENCE_JSONL:-}"
 RESOLVED_EVIDENCE_JSONL="${EGOLIFE2U_RESOLVED_EVIDENCE_JSONL:-${OUTDIR}/evidence_manifest.cache_resolved.jsonl}"
 EVAL_PACKET_COUNT="${EGOLIFE2U_EVAL_PACKET_COUNT:-${EGOLIFE2U_TARGET_COUNT:-5}}"
+QWEN_MODEL_ID="${QWEN_MODEL_ID:-Qwen/Qwen3-VL-8B-Instruct}"
+VLM_BACKEND="${VLM_BACKEND:-${EGOLIFE2U_BACKEND:-transformers-local}}"
+if [[ -z "${VLM_MODEL_ID:-}" ]]; then
+  if [[ "${VLM_BACKEND}" == "gemini" ]]; then
+    VLM_MODEL_ID="${GEMINI_MODEL_ID:-gemini-2.5-flash}"
+  else
+    VLM_MODEL_ID="${QWEN_MODEL_ID}"
+  fi
+fi
+VLM_API_KEY="${VLM_API_KEY:-${GEMINI_API_KEY:-}}"
 MAX_ATTEMPTS="${EGOLIFE2U_MAX_ATTEMPTS:-3}"
 MAX_NEW_TOKENS="${EGOLIFE2U_MAX_NEW_TOKENS:-2048}"
 RESUME_GENERATION="${EGOLIFE2U_RESUME_GENERATION:-0}"
@@ -66,6 +76,11 @@ echo "evidence_jsonl=${EVIDENCE_JSONL}"
 echo "resolved_evidence_jsonl=${RESOLVED_EVIDENCE_JSONL}"
 echo "eval_packet_count=${EVAL_PACKET_COUNT}"
 echo "cache_dir=${CACHE_DIR}"
+echo "vlm_backend=${VLM_BACKEND}"
+echo "vlm_model_id=${VLM_MODEL_ID}"
+if [[ -n "${VLM_API_KEY}" ]]; then
+  echo "vlm_api_key=provided"
+fi
 echo "resume_generation=${RESUME_GENERATION}"
 echo "materialize_review_videos=${MATERIALIZE_REVIEW_VIDEOS}"
 python --version
@@ -83,6 +98,10 @@ resume_args=()
 if [[ "${RESUME_GENERATION}" == "1" ]]; then
   resume_args+=(--resume)
 fi
+api_key_args=()
+if [[ -n "${VLM_API_KEY}" ]]; then
+  api_key_args+=(--api-key "${VLM_API_KEY}")
+fi
 mkdir -p "${mode_dir}"
 
 echo "stage=generate_video_qa_loop mode=discovery_control"
@@ -94,12 +113,13 @@ python -m egolife_two_user_qa generate_video_qa_loop \
   --intermediate-output "${mode_dir}/qa_mcq.intermediate.jsonl" \
   --target-count "${EVAL_PACKET_COUNT}" \
   --max-attempts "${MAX_ATTEMPTS}" \
-  --backend transformers-local \
-  --model-id Qwen/Qwen3-VL-8B-Instruct \
+  --backend "${VLM_BACKEND}" \
+  --model-id "${VLM_MODEL_ID}" \
   --dtype bfloat16 \
   --max-new-tokens "${MAX_NEW_TOKENS}" \
   --generation-mode discovery_control \
   --fixed-question-type-schedule \
+  "${api_key_args[@]}" \
   "${resume_args[@]}"
 
 echo "stage=validate_outputs mode=discovery_control"
