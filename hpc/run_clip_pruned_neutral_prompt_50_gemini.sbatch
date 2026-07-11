@@ -29,7 +29,7 @@ QWEN_MODEL_ID="${QWEN_MODEL_ID:-Qwen/Qwen3.6-27B}"
 VLM_BACKEND="${VLM_BACKEND:-${EGOLIFE2U_BACKEND:-gemini}}"
 if [[ -z "${VLM_MODEL_ID:-}" ]]; then
   if [[ "${VLM_BACKEND}" == "gemini" ]]; then
-    VLM_MODEL_ID="${GEMINI_MODEL_ID:-gemini-2.5-flash}"
+    VLM_MODEL_ID="${GEMINI_MODEL_ID:-gemini-3.5-flash}"
   else
     VLM_MODEL_ID="${QWEN_MODEL_ID}"
   fi
@@ -109,7 +109,11 @@ echo "cuda_keeper_auto_install=${CUDA_KEEPER_AUTO_INSTALL}"
 echo "benchmark_contract=reuse_same_first_50_clip_pruned_packets_neutral_prompt_gemini"
 echo "media_routing=generator_uses_existing_pruned_videos;judges_and_answerability_use_full_30s_originals"
 python --version
-nvidia-smi || true
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi || true
+else
+  echo "nvidia_smi=unavailable"
+fi
 
 if [[ ! -s "${EVIDENCE_PATH}" ]]; then
   echo "error=evidence_file_missing path=${EVIDENCE_PATH}" >&2

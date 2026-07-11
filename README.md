@@ -148,7 +148,7 @@ export GEMINI_API_KEY="..."
 
 python -m egolife_two_user_qa generate_video_qa_loop \
   --backend gemini \
-  --model-id gemini-2.5-flash \
+  --model-id gemini-3.5-flash \
   --evidence egolife_two_user_qa/outputs/pilot_20_video_first/evidence_manifest.jsonl \
   --output egolife_two_user_qa/outputs/pilot_20_video_first/qa_mcq.gemini.jsonl \
   --prompts-output egolife_two_user_qa/outputs/pilot_20_video_first/video_first_prompts.gemini.jsonl \
@@ -161,8 +161,8 @@ root/path variables and set:
 ```bash
 export VLM_BACKEND=gemini
 export GEMINI_API_KEY="..."
-# optional; defaults to gemini-2.5-flash when VLM_BACKEND=gemini
-export VLM_MODEL_ID=gemini-2.5-flash
+# optional; defaults to gemini-3.5-flash when VLM_BACKEND=gemini
+export VLM_MODEL_ID=gemini-3.5-flash
 ```
 
 Unset `VLM_BACKEND` or set `VLM_BACKEND=transformers-local` to switch back to

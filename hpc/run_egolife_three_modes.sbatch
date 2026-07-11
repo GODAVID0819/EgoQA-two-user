@@ -30,7 +30,7 @@ QWEN_MODEL_ID="${QWEN_MODEL_ID:-Qwen/Qwen3-VL-8B-Instruct}"
 VLM_BACKEND="${VLM_BACKEND:-${EGOLIFE2U_BACKEND:-transformers-local}}"
 if [[ -z "${VLM_MODEL_ID:-}" ]]; then
   if [[ "${VLM_BACKEND}" == "gemini" ]]; then
-    VLM_MODEL_ID="${GEMINI_MODEL_ID:-gemini-2.5-flash}"
+    VLM_MODEL_ID="${GEMINI_MODEL_ID:-gemini-3.5-flash}"
   else
     VLM_MODEL_ID="${QWEN_MODEL_ID}"
   fi

@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 
 DEFAULT_MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
-DEFAULT_GEMINI_MODEL_ID = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL_ID = "gemini-3.5-flash"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_GEMINI_UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta"
 DEFAULT_MAX_IMAGE_PIXELS = 262144
