@@ -1,0 +1,170 @@
+You are the evidence_groundedness judge for EgoLife video-first two-user multiple-choice question generation.
+
+Output contract:
+- Return exactly one valid JSON object and nothing else.
+- Do not include markdown, code fences, comments, explanations, or extra text outside the JSON object.
+- Include every field shown in the requested JSON shape, even when a value is brief.
+
+
+You will see the same raw egocentric videos used by the generator. Judge only evidence_groundedness.
+
+evidence_groundedness asks whether the question-answer item is supported only by the provided videos and metadata:
+- The correct answer, evidence claims, referred timestamps, and per-user claims must be grounded in concrete visible moments or supplied metadata.
+- Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
+- Treat required_users[0] as the asker/speaker and required_users[1] as the evidence provider.
+- The asker/speaker's view should anchor why the question is natural, but it must not reveal the decisive missing detail.
+- It is acceptable if required_users[1]'s video alone can answer because that user is the evidence provider; answerability logs that separately.
+- FAIL if required_users[0]'s video alone already reveals the correct answer.
+- FAIL if the question merely stitches unrelated clips by timestamp, asks what everyone saw/noticed, or makes a generic comparison of views rather than a situated speaker-side memory gap plus supported missing detail.
+- If 2D gaze projection is unavailable, FAIL invented exact gaze-to-object claims; visible object/action claims are still allowed when grounded in the video itself.
+- UNCERTAIN if the videos do not clearly support the anchor, the missing detail, the correct option, or the claimed relation.
+
+evidence_groundedness quality_score rubric:
+- 3 / 3_strong: The videos clearly demonstrate the speaker-side anchor and the evidence-provider missing detail; the answer-relevant object, action, or state is plainly visible, temporally aligned with the claims, and central enough that the relation is easy to verify.
+- 2 / 2_acceptable: The answer is still supported, but the evidence is weaker: the object, action, or state is blurry, brief, partially occluded, peripheral, not the focal point, only visible in a small part of the scene, or the timestamps/claims are somewhat coarse. This can still PASS if the support is sufficient.
+- 1 / 1_weak_or_reject: The visual support is missing, invented, ambiguous, answerable from the speaker alone, based on unrelated timestamp stitching, or too unclear to verify. This should normally be FAIL or UNCERTAIN.
+
+Scoring instructions:
+- Decide PASS/FAIL/UNCERTAIN first using the evidence_groundedness rules. Then assign quality_score using this rubric.
+- The quality_score is for analysis and training signal; it must not override the pass/fail decision.
+- Also return quality_flag and quality_reason.
+
+
+Video set metadata:
+{
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_17340000_A3_A6_0-1",
+  "required_users": [
+    "Tasha",
+    "Shure"
+  ],
+  "role_contract": {
+    "speaker_user": "Tasha",
+    "evidence_provider_user": "Shure",
+    "required_users_order": "required_users[0] is the asker/speaker whose view anchors the question; aim for a question that is not answerable from that view alone. required_users[1] is the evidence provider whose view supplies the missing detail. It is acceptable if the evidence provider alone can answer, as long as that is logged."
+  },
+  "prompt_requirement": "Use the visual media directly. Try to generate a speaker-side question that makes sense from required_users[0]'s own experience, needs both users' videos to answer cleanly, and is resolved by a concrete visible detail from required_users[1].",
+  "clips": [
+    {
+      "user": "Tasha",
+      "day": "DAY6",
+      "clip_clock": "17:34:00.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY6_17340000/benchmark_video_pairs/0-1/left_A3_TASHA_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 8.0,
+        "removed_duration_seconds": 22.0,
+        "protection_target_kept_seconds": 8.0
+      }
+    },
+    {
+      "user": "Shure",
+      "day": "DAY6",
+      "clip_clock": "17:34:00.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY6_17340000/benchmark_video_pairs/0-1/right_A6_SHURE_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 8.0,
+        "removed_duration_seconds": 22.0,
+        "protection_target_kept_seconds": 8.0
+      }
+    }
+  ]
+}
+
+Generated question-answer item:
+{
+  "qa_id": "Tasha_Shure_Cake_Color_Day6",
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_17340000_A3_A6_0-1",
+  "question_type": "neutral",
+  "question": "I remember someone bringing a little cake over to the group, but I wasn't close enough to see the colors on it. What colors were the decorations on top of the cake?",
+  "options": [
+    "Red and yellow",
+    "Blue and green",
+    "Pink and white",
+    "Orange and purple",
+    "Brown and tan"
+  ],
+  "correct": "A",
+  "answer": "Red and yellow",
+  "required_users": [
+    "Tasha",
+    "Shure"
+  ],
+  "evidence": [
+    {
+      "user": "Tasha",
+      "needed_fact": "Shows the room with people gathered, but the view is obstructed by people and furniture, making it impossible to see the details of the cake being held.",
+      "timeframe": "17:34:00 - 17:34:05",
+      "frames_used": [
+        "Tasha_17:34:02",
+        "Tasha_17:34:04"
+      ]
+    },
+    {
+      "user": "Shure",
+      "needed_fact": "Holds a small round cake in their hands, clearly showing red and yellow decorations (likely fruit or candy) on top.",
+      "timeframe": "17:34:07 - 17:34:13",
+      "frames_used": [
+        "Shure_17:34:07",
+        "Shure_17:34:13"
+      ]
+    }
+  ],
+  "single_user_answerability": {
+    "Tasha": "insufficient because the view is obstructed by people and furniture, and the camera is facing away from the cake or too far to see details.",
+    "Shure": "sufficient because the camera is pointed directly at the cake held in their hands, revealing the specific colors of the decorations."
+  },
+  "combined_answerability": "sufficient because Tasha's view establishes the context of the gathering and the presence of the cake (though obscured), while Shure's view provides the specific visual detail of the red and yellow decorations on the cake.",
+  "generator_rationale": "This question addresses a concrete visual detail (cake decoration colors) that is present in the scene but only visible from one specific perspective. It avoids asking about general activities and focuses on an object state that requires cross-view verification.",
+  "why_two_users_needed": "Tasha's view provides the context of the social gathering where the cake is introduced, but lacks the visual resolution to identify the object's details. Shure's view, being the one holding the object, provides the necessary close-up detail to answer the question.",
+  "per_user_evidence_claims": [
+    {
+      "user": "Tasha",
+      "claim": "The video shows a group setting where a cake is present but not clearly visible due to obstructions."
+    },
+    {
+      "user": "Shure",
+      "claim": "The video shows a first-person perspective of holding a cake with distinct red and yellow toppings."
+    }
+  ],
+  "referred_timestamps": [
+    {
+      "user": "Tasha",
+      "timestamp_seconds": 2.0,
+      "moment": "View of the room with people sitting, obstructed view of the center."
+    },
+    {
+      "user": "Shure",
+      "timestamp_seconds": 7.0,
+      "moment": "Clear view of the cake with red and yellow toppings held in hands."
+    }
+  ],
+  "review": {
+    "generator_self_check": "The asker (Tasha) cannot see the cake details due to obstructions and distance. The evidence provider (Shure) holds the cake and can clearly see the colors. This is not a shallow activity question but a specific object detail question.",
+    "status": "draft",
+    "speaker_user": "Tasha",
+    "evidence_provider_user": "Shure"
+  }
+}
+
+Return exactly one valid JSON object with this exact shape:
+{
+  "review_passed": true,
+  "checks": {
+    "evidence_groundedness": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if the status is FAIL or UNCERTAIN; empty string if PASS",
+      "quality_score": "1/2/3 using the check-specific quality rubric",
+      "quality_flag": "1_weak_or_reject, 2_acceptable, or 3_strong",
+      "quality_reason": "brief reason for the quality score; this does not determine pass/fail status"
+    }
+  },
+  "blocking_failures": [
+    "names of failed checks that should block acceptance"
+  ],
+  "why_generator_asked_this": "brief explanation of why the generator may have asked this",
+  "feedback_to_generator": "specific revision instructions if review_passed is false; use an empty string if it passed"
+}

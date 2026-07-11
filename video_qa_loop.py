@@ -255,7 +255,7 @@ def human_audit_packet(packet: dict[str, Any]) -> dict[str, Any]:
         "review_instructions": [
             "Open each listed local_video or video_url for the required users.",
             "Check the referred_timestamps and per_user_evidence_claims against the visible content.",
-            "Verify that required_users[0], the asker/speaker, cannot answer from their own video alone.",
+            "Verify that required_users[0], the asker, cannot answer from their own video alone.",
             "If required_users[1], the evidence provider, can answer alone, confirm that this is logged in review.answerability.gate.evidence_provider_answerable.",
         ],
     }
@@ -296,7 +296,7 @@ def complete_generator_metadata(
             not text or not any(marker in text.lower() for marker in ("insufficient", "cannot", "not enough"))
         ):
             single[user] = (
-                "insufficient because the asker/speaker's video alone does not provide "
+                "insufficient because the asker's video alone does not provide "
                 "the missing visual detail from the evidence provider"
             )
         elif index > 0 and not text:
@@ -317,7 +317,7 @@ def complete_generator_metadata(
     if not qa.get("generator_rationale"):
         qa["generator_rationale"] = (
             "The question is framed as a natural first-person memory gap anchored "
-            "in the asker/speaker's experience and answered with another user's visual evidence."
+            "in the asker's experience and answered with another user's visual evidence."
         )
     if not qa.get("why_two_users_needed"):
         qa["why_two_users_needed"] = (

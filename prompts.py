@@ -13,7 +13,7 @@ VIDEO_GENERATION_SCHEMA = {
     "options": ["option A", "option B", "option C", "option D", "option E"],
     "correct": "A/B/C/D/E",
     "answer": "exact text of the correct option",
-    "required_users": ["asker/speaker user first", "evidence-provider user second"],
+    "required_users": ["asker user first", "evidence-provider user second"],
     "evidence": [
         {
             "user": "name",
@@ -30,17 +30,17 @@ VIDEO_GENERATION_SCHEMA = {
         }
     ],
     "single_user_answerability": {
-        "Jake": "insufficient because the asker/speaker alone only provides ...",
+        "Jake": "insufficient because the asker alone only provides ...",
         "Alice": "sufficient/insufficient because the evidence provider alone ...",
     },
     "combined_answerability": "sufficient because the required users' videos together support exactly one option",
     "generator_rationale": "why this is a natural speaker-side question with a missing visual detail",
-    "why_two_users_needed": "why the asker/speaker view and evidence-provider view are both needed",
+    "why_two_users_needed": "why the asker view and evidence-provider view are both needed",
     "per_user_evidence_claims": [
         {"user": "name", "claim": "claim grounded in that user's own video"}
     ],
     "review": {
-        "generator_self_check": "why the asker/speaker alone cannot answer this, and why this is not a shallow activity or shared-view question",
+        "generator_self_check": "why the asker alone cannot answer this, and why this is not a shallow activity or shared-view question",
         "status": "draft",
     },
 }
@@ -279,7 +279,7 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
                 "speaker_user": speaker_user,
                 "evidence_provider_user": evidence_provider_user,
                 "required_users_order": (
-                    "required_users[0] is the asker/speaker whose view anchors the question; "
+                    "required_users[0] is the asker whose view anchors the question; "
                     "aim for a question that is not answerable from that view alone. "
                     "required_users[1] is the evidence provider whose view supplies the missing "
                     "detail. It is acceptable if the evidence provider alone can answer, as long "
@@ -483,27 +483,25 @@ def build_video_generation_prompt(
             "Return every field in the JSON shape exactly. Do not omit single_user_answerability, combined_answerability, generator_rationale, why_two_users_needed, per_user_evidence_claims, referred_timestamps, or review.",
             "The answer field must exactly equal the option text indicated by correct, and correct must be one letter: A, B, C, D, or E.",
         ]
-        design_block = """Baseline design rules:
-- Treat required_users[0] as the asker/speaker. The question should sound like that person trying to remember or verify something from their own experience.
+        design_block = """Design rules:
+- Treat required_users[0] as the asker. The question should sound like that person trying to remember or verify something from their own experience or querying external information that they do not possess.
 - Anchor the question in something visible to required_users[0]: an object they handled, a place they entered, a surface they looked toward, a task they were doing, or a state they could not fully verify.
 - Ask for a related missing detail supplied by required_users[1]: object identity, location, text, count, state, placement, outcome, follow-up, or another concrete visual fact.
 - Do not stitch together unrelated scenes just because they happen during the same interval.
-- Do not ask what both users saw, what everyone noticed, or how the two views compare.
 - Do not ask what required_users[1] was doing while the speaker was doing something unless the answer is a concrete missing object, state, location, outcome, or explanation.
 - Avoid fixed openings such as "After I ...", "When I ...", or "Once I ...". Use them only when that is genuinely the most natural wording for the specific situation.
-- Prefer compact everyday wording over formal dataset language.
+- Prefer compact everyday wording over formal language.
 """
         guidelines_block = """Guidelines:
 1) Ask in a natural, informal, everyday way, like someone looking back on their own experience.
 2) Use first-person or shared-memory wording such as "I", "me", "my", "we", or "our".
 3) Do not name the required users in the question or options. Refer to people naturally only if the visible situation requires it.
-4) Keep the question specific enough that a person could answer it by checking one missing visible detail.
-5) Make all five options multi-word, plausible, mutually exclusive, and parallel in length and style.
-6) Keep distractors grounded in the same scene type. Do not make the correct option obvious by specificity, grammar, or option length.
-7) When 2D gaze coordinates are available, they appear as <gaze_coordinate> values indicating the user's attended image area. You may use nearby visible objects, regions, or actions as evidence, but do not invent exact gaze-object claims if the projection is unclear.
-8) single_user_answerability must have one entry for each required user. The required_users[0] entry should say whether that view is sufficient or insufficient and why; the required_users[1] entry may say "sufficient because ..." if the evidence provider alone can answer.
-9) combined_answerability must explicitly say "sufficient because ..." and explain why the required users' videos together support exactly one option.
-10) Before returning, run the asker-alone test. Prefer a question where required_users[0] alone is insufficient, but do not reject merely because required_users[1] alone can answer.
+4) Make all five options multi-word, plausible, mutually exclusive, and parallel in length and style.
+5) Keep distractors grounded in the same scene type. Do not make the correct option obvious by specificity, grammar, or option length.
+6) When 2D gaze coordinates are available, they appear as <gaze_coordinate> values indicating the user's attended image area. You may use nearby visible objects, regions, or actions as evidence, but do not invent exact gaze-object claims if the projection is unclear.
+7) single_user_answerability must have one entry for each required user. The required_users[0] entry should say whether that view is sufficient or insufficient and why; the required_users[1] entry may say "sufficient because ..." if the evidence provider alone can answer.
+8) combined_answerability must explicitly say "sufficient because ..." and explain why the required users' videos together support exactly one option.
+9) Before returning, run the asker-alone test. Prefer a question where required_users[0] alone is insufficient, but do not reject merely because required_users[1] alone can answer.
 """
     else:
         task_lines = [
@@ -511,13 +509,13 @@ def build_video_generation_prompt(
             *([type_requirement] if type_requirement else []),
             "The question must use visual evidence from one required user's contextual clue and another required user's complementary detail, but it should not follow a fixed wording pattern.",
             "Try to make the question need visual evidence from at least two required users. Timestamp overlap is not enough.",
-            "required_users[0] is the asker/speaker, and that user's video alone must be insufficient. required_users[1] is the evidence provider who provides supporting evidence.",
+            "required_users[0] is the asker, and that user's video alone must be insufficient. required_users[1] is the evidence provider who provides supporting evidence.",
             "Fill the evidence field with each needed user's visual fact and a specific timeframe.",
             "Return every field in the JSON shape exactly. Do not omit single_user_answerability, combined_answerability, generator_rationale, why_two_users_needed, per_user_evidence_claims, referred_timestamps, or review.",
             "The answer field must exactly equal the text of options[correct], and correct must be one letter: A, B, C, D, or E.",
         ]
         design_block = """Design rules:
-- Treat required_users[0] as the asker/speaker. The question must be asked in a natural way from that user's first-person perspective. Do not stitch together two unrelated scenes and form a question.
+- Treat required_users[0] as the asker. The question must be asked in a natural way from that user's first-person perspective. Do not stitch together two unrelated scenes and form a question.
 - required_users[0]'s own video alone must not reveal the correct answer.
 - Treat required_users[1] as the evidence provider that adds the missing visual detail. It is acceptable if required_users[1]'s video alone can answer the question, because that user supplies the missing visual evidence.
 - The question should combine a contextual clue from required_users[0]'s own view with complementary information from required_users[1]'s view.
@@ -582,7 +580,7 @@ Use only the raw videos, metadata, and available gaze summary. Do not use captio
 
 List 3-5 possible cross-user information needs.
 For each, identify:
-- what required_users[0], the asker/speaker, knows or sees
+- what required_users[0], the asker, knows or sees
 - what required_users[1], the evidence provider, knows or sees
 - what is only clear when combining them
 - why someone in the situation would naturally ask this
@@ -619,7 +617,7 @@ def build_relation_mcq_prompt(
             if type_instruction
             else []
         ),
-        "required_users[0] is the asker/speaker; write the question from that user's perspective.",
+        "required_users[0] is the asker; write the question from that user's perspective.",
         "required_users[0]'s video alone must be insufficient.",
         "required_users[1] is the evidence provider; it is acceptable if that user's video alone can answer because they supply the missing visual detail. The combined required users' videos must make exactly one option correct.",
         "Do not use words such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, timestamp, CLIP, embedding, similarity, or novelty in the question or options.",
@@ -707,7 +705,7 @@ Return exactly one valid JSON object with this exact shape:
 
 
 def build_evidence_groundedness_judge_prompt(qa_item: dict[str, Any], packet: dict[str, Any]) -> str:
-    return f"""You are the evidence_groundedness judge for EgoLife video-first two-user multiple-choice question generation.
+    return f"""You are the evidence_groundedness judge for a two-user multiple-choice question generated using egocentric videos.
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
@@ -716,11 +714,11 @@ You will see the same raw egocentric videos used by the generator. Judge only ev
 evidence_groundedness asks whether the question-answer item is supported only by the provided videos and metadata:
 - The correct answer, evidence claims, referred timestamps, and per-user claims must be grounded in concrete visible moments or supplied metadata.
 - Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
-- Treat required_users[0] as the asker/speaker and required_users[1] as the evidence provider.
-- The asker/speaker's view should anchor why the question is natural, but it must not reveal the decisive missing detail.
-- It is acceptable if required_users[1]'s video alone can answer because that user is the evidence provider; answerability logs that separately.
-- FAIL if required_users[0]'s video alone already reveals the correct answer.
-- FAIL if the question merely stitches unrelated clips by timestamp, asks what everyone saw/noticed, or makes a generic comparison of views rather than a situated speaker-side memory gap plus supported missing detail.
+- Treat required_users[0] as the asker and required_users[1] as the evidence provider.
+- The asker's view should visibly support the contextual anchor described in the item, and the evidence provider's view should visibly support the claimed answer-bearing detail.
+- Do not decide whether either user's video alone is sufficient to select the correct option. Single-user and combined-video sufficiency are evaluated separately by answerability.
+- PASS only when the correct answer and all material evidence, timestamp, and per-user claims are clearly supported by the provided videos or metadata, the asker’s contextual anchor and the evidence provider’s answer-bearing detail form a coherent situated relation, and no claim relies on outside knowledge, invented gaze evidence, or unrelated clip stitching.
+- FAIL if the question merely stitches unrelated clips by timestamp, or makes a generic comparison of views rather than a situated speaker-side memory gap plus supported missing detail.
 - If 2D gaze projection is unavailable, FAIL invented exact gaze-to-object claims; visible object/action claims are still allowed when grounded in the video itself.
 - UNCERTAIN if the videos do not clearly support the anchor, the missing detail, the correct option, or the claimed relation.
 

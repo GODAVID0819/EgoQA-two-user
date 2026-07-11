@@ -1729,7 +1729,7 @@ def build_candidate_packet(group_result: dict[str, Any]) -> dict[str, Any]:
             "representative clusters were removed as uniform temporal intervals from both selected "
             "videos. Generation should use the pruned videos; judgers and "
             "answerability gates should use the original 30-second videos. Treat "
-            "required_users[0] as the asker/speaker and required_users[1] as the evidence "
+            "required_users[0] as the asker and required_users[1] as the evidence "
             "provider, then verify shared context, asymmetric evidence, asker-side "
             "insufficiency, and answerability."
         ),

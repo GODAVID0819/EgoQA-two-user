@@ -1,0 +1,171 @@
+You are the evidence_groundedness judge for EgoLife video-first two-user multiple-choice question generation.
+
+Output contract:
+- Return exactly one valid JSON object and nothing else.
+- Do not include markdown, code fences, comments, explanations, or extra text outside the JSON object.
+- Include every field shown in the requested JSON shape, even when a value is brief.
+
+
+You will see the same raw egocentric videos used by the generator. Judge only evidence_groundedness.
+
+evidence_groundedness asks whether the question-answer item is supported only by the provided videos and metadata:
+- The correct answer, evidence claims, referred timestamps, and per-user claims must be grounded in concrete visible moments or supplied metadata.
+- Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
+- Treat required_users[0] as the asker/speaker and required_users[1] as the evidence provider.
+- The asker/speaker's view should anchor why the question is natural, but it must not reveal the decisive missing detail.
+- It is acceptable if required_users[1]'s video alone can answer because that user is the evidence provider; answerability logs that separately.
+- FAIL if required_users[0]'s video alone already reveals the correct answer.
+- FAIL if the question merely stitches unrelated clips by timestamp, asks what everyone saw/noticed, or makes a generic comparison of views rather than a situated speaker-side memory gap plus supported missing detail.
+- If 2D gaze projection is unavailable, FAIL invented exact gaze-to-object claims; visible object/action claims are still allowed when grounded in the video itself.
+- UNCERTAIN if the videos do not clearly support the anchor, the missing detail, the correct option, or the claimed relation.
+
+evidence_groundedness quality_score rubric:
+- 3 / 3_strong: The videos clearly demonstrate the speaker-side anchor and the evidence-provider missing detail; the answer-relevant object, action, or state is plainly visible, temporally aligned with the claims, and central enough that the relation is easy to verify.
+- 2 / 2_acceptable: The answer is still supported, but the evidence is weaker: the object, action, or state is blurry, brief, partially occluded, peripheral, not the focal point, only visible in a small part of the scene, or the timestamps/claims are somewhat coarse. This can still PASS if the support is sufficient.
+- 1 / 1_weak_or_reject: The visual support is missing, invented, ambiguous, answerable from the speaker alone, based on unrelated timestamp stitching, or too unclear to verify. This should normally be FAIL or UNCERTAIN.
+
+Scoring instructions:
+- Decide PASS/FAIL/UNCERTAIN first using the evidence_groundedness rules. Then assign quality_score using this rubric.
+- The quality_score is for analysis and training signal; it must not override the pass/fail decision.
+- Also return quality_flag and quality_reason.
+
+
+Video set metadata:
+{
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_11360000_A2_A4_0-1",
+  "required_users": [
+    "Alice",
+    "Lucia"
+  ],
+  "role_contract": {
+    "speaker_user": "Alice",
+    "evidence_provider_user": "Lucia",
+    "required_users_order": "required_users[0] is the asker/speaker whose view anchors the question; aim for a question that is not answerable from that view alone. required_users[1] is the evidence provider whose view supplies the missing detail. It is acceptable if the evidence provider alone can answer, as long as that is logged."
+  },
+  "prompt_requirement": "Use the visual media directly. Try to generate a speaker-side question that makes sense from required_users[0]'s own experience, needs both users' videos to answer cleanly, and is resolved by a concrete visible detail from required_users[1].",
+  "clips": [
+    {
+      "user": "Alice",
+      "day": "DAY4",
+      "clip_clock": "11:36:00.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY4_11360000/benchmark_video_pairs/0-1/left_A2_ALICE_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 8.0,
+        "removed_duration_seconds": 22.0,
+        "protection_target_kept_seconds": 8.0
+      }
+    },
+    {
+      "user": "Lucia",
+      "day": "DAY4",
+      "clip_clock": "11:36:00.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY4_11360000/benchmark_video_pairs/0-1/right_A4_LUCIA_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 8.5,
+        "removed_duration_seconds": 21.5,
+        "protection_target_kept_seconds": 8.0
+      }
+    }
+  ]
+}
+
+Generated question-answer item:
+{
+  "qa_id": "EGOLIFE2U_DAY4_11360000_A2_A4_0-1_Q1",
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_11360000_A2_A4_0-1",
+  "question_type": "neutral",
+  "question": "I remember grabbing the pineapple, but I can't recall where we put the eggs right after. Which bowl on the table was holding the eggs?",
+  "options": [
+    "A small white bowl with purple floral patterns",
+    "A silver metal mixing bowl",
+    "A blue plastic container",
+    "A clear glass measuring cup",
+    "A red ceramic pot"
+  ],
+  "correct": "A",
+  "answer": "A small white bowl with purple floral patterns",
+  "required_users": [
+    "Alice",
+    "Lucia"
+  ],
+  "evidence": [
+    {
+      "user": "Alice",
+      "needed_fact": "Alice is seen holding a pineapple and placing it on the table, but her view is obstructed or focused on the pineapple, not clearly showing the egg container.",
+      "timeframe": "11:36:00 - 11:36:02",
+      "frames_used": [
+        "00:00",
+        "00:01"
+      ]
+    },
+    {
+      "user": "Lucia",
+      "needed_fact": "Lucia's view clearly shows a small white bowl with purple floral patterns containing three white eggs on the checkered tablecloth.",
+      "timeframe": "11:36:00 - 11:36:05",
+      "frames_used": [
+        "00:00",
+        "00:01",
+        "00:02"
+      ]
+    }
+  ],
+  "single_user_answerability": {
+    "Alice": "insufficient because Alice's view is focused on the pineapple and her hands, and the specific container for the eggs is not clearly visible or identifiable in her frame.",
+    "Lucia": "sufficient because Lucia's camera angle provides a clear, unobstructed top-down view of the table, showing the eggs sitting in a small white bowl with purple floral patterns."
+  },
+  "combined_answerability": "sufficient because Alice's view establishes the context of handling food items (pineapple) at the table, while Lucia's view provides the specific visual detail of the egg container that Alice missed or could not see.",
+  "generator_rationale": "This question arises naturally from Alice's perspective as she is handling food items but may not have a clear view of all containers on the table. It requires Lucia's view to identify the specific bowl holding the eggs, which is a concrete object detail rather than a general activity.",
+  "why_two_users_needed": "Alice's view is obstructed or focused on the pineapple, making it difficult to identify the egg container. Lucia's view offers a clear, complementary angle of the table surface where the eggs are placed.",
+  "per_user_evidence_claims": [
+    {
+      "user": "Alice",
+      "claim": "Alice is holding a pineapple and placing it on the table."
+    },
+    {
+      "user": "Lucia",
+      "claim": "A small white bowl with purple floral patterns containing three white eggs is visible on the table."
+    }
+  ],
+  "referred_timestamps": [
+    {
+      "user": "Alice",
+      "timestamp_seconds": 0.0,
+      "moment": "Alice places pineapple on table"
+    },
+    {
+      "user": "Lucia",
+      "timestamp_seconds": 0.0,
+      "moment": "Lucia's view shows eggs in bowl"
+    }
+  ],
+  "review": {
+    "generator_self_check": "Alice alone cannot identify the egg container because her view is focused on the pineapple. This is not a shallow activity question because it asks for a specific object detail (the bowl type) rather than what someone was doing. The answer is grounded in Lucia's clear view of the table.",
+    "status": "draft",
+    "speaker_user": "Alice",
+    "evidence_provider_user": "Lucia"
+  }
+}
+
+Return exactly one valid JSON object with this exact shape:
+{
+  "review_passed": true,
+  "checks": {
+    "evidence_groundedness": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if the status is FAIL or UNCERTAIN; empty string if PASS",
+      "quality_score": "1/2/3 using the check-specific quality rubric",
+      "quality_flag": "1_weak_or_reject, 2_acceptable, or 3_strong",
+      "quality_reason": "brief reason for the quality score; this does not determine pass/fail status"
+    }
+  },
+  "blocking_failures": [
+    "names of failed checks that should block acceptance"
+  ],
+  "why_generator_asked_this": "brief explanation of why the generator may have asked this",
+  "feedback_to_generator": "specific revision instructions if review_passed is false; use an empty string if it passed"
+}

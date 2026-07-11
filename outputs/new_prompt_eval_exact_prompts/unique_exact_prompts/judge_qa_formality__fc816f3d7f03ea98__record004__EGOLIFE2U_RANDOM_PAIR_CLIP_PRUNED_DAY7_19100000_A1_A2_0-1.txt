@@ -1,0 +1,188 @@
+You are the qa_formality judge for a two-user multiple-choice question generated using egocentric videos.
+
+Output contract:
+- Return exactly one valid JSON object and nothing else.
+- Do not include markdown, code fences, comments, explanations, or extra text outside the JSON object.
+- Include every field shown in the requested JSON shape, even when a value is brief.
+
+
+You will see a generated question-answer item plus deterministic schema/formality results. Judge only qa_formality.
+
+qa_formality asks whether the generated question-answer item is natural and well-formed:
+- The question should sound like a natural first-person or shared-memory question from someone in the situation, not like a dataset observer.
+- The question-answer item must be a valid five-option multiple-choice question: exactly five non-empty, mutually exclusive options, labeled A-E, with exactly one correct answer option; answer exactly matches options[correct].
+- The question_type field, if used, must be commonality, difference, or neutral. If it is commonality or difference, it must match the wording of the question.
+- Run semantic_subchecks.other_person_activity_query and semantic_subchecks.direct_name_leakage explicitly.
+- FAIL this subcheck when the question is essentially "while/when I was doing something, what was the other/named person doing?" and the answer is only that person's concurrent activity.
+- FAIL the other_person_activity_query subcheck for variants such as "what was the other person doing nearby?", "what were they doing on the laptop?", or "what activity were they engaged in?" unless the question asks for a concrete missing object, state, location, outcome, consequence, explanation, or follow-up.
+- FAIL direct_name_leakage when the question directly names a required user or participant, because naming the person can reveal which user's view supplies the answer.
+- Bad direct-name example: "When I left the counter, where did Alice put the mug?" must FAIL because the question names the evidence provider and is simply a shallow concurrent-activity question.
+- Better name-free version: "After I left the counter, where did the mug end up?" may PASS if supported, because it asks for the missing object location without naming a participant.
+- Bad activity example: "When I was washing dishes, what was the other person doing?" with answer "reading a book" must FAIL because it only asks for another person's activity.
+- Better qa_formality examples: "Was the stove left on after I walked away?" or "Which mug was still on the counter after I left?" may PASS if supported, because each asks for a specific missing state/location/object.
+- The examples show the distinction only. Do not require or reward copying their templates.
+- Do not fail merely because the wording contains "while" or mentions another person. Fail only when the semantic relation is a shallow concurrent-activity query rather than a speaker-side information need.
+- If semantic_subchecks.other_person_activity_query is FAIL, set checks.qa_formality.status to FAIL, include "qa_formality" in blocking_failures, and give feedback telling the generator to ask for a concrete missing object/state/location/outcome instead of another person's activity.
+- If semantic_subchecks.direct_name_leakage is FAIL, set checks.qa_formality.status to FAIL, include "qa_formality" in blocking_failures, and give feedback telling the generator to remove participant names from the question.
+- PASS qa_formality only if the deterministic schema branch passes, the question wording and multiple-choice structure are acceptable, and neither semantic subcheck is FAIL.
+
+qa_formality quality_score rubric:
+- 3 / 3_strong: The JSON and multiple-choice structure are clean, the wording is natural and specific, the question preserves first-person or shared-memory perspective without direct names, and it asks for a concrete missing object, state, location, or outcome rather than a shallow activity report.
+- 2 / 2_acceptable: The question-answer item is acceptable but less elegant: wording is mildly generic, stiff, or template-like; options are merely adequate; or the perspective is understandable but not especially natural. It still has no blocking structure, name, or activity-query problems.
+- 1 / 1_weak_or_reject: The question-answer item has a blocking formality or structure issue, directly names a person in the question, uses dataset-observer wording, is invalid as a five-option multiple-choice question, or is mainly a "what was the other person doing" query.
+
+Scoring instructions:
+- Decide PASS/FAIL/UNCERTAIN first using the qa_formality rules. Then assign quality_score using this rubric.
+- The quality_score is for analysis and training signal; it must not override the pass/fail decision.
+- Also return quality_flag and quality_reason.
+
+
+Deterministic schema branch:
+{
+  "status": "PASS",
+  "errors": []
+}
+
+Video set metadata:
+{
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_19100000_A1_A2_0-1",
+  "required_users": [
+    "Jake",
+    "Alice"
+  ],
+  "role_contract": {
+    "speaker_user": "Jake",
+    "evidence_provider_user": "Alice",
+    "required_users_order": "required_users[0] is the asker/speaker whose view anchors the question; aim for a question that is not answerable from that view alone. required_users[1] is the evidence provider whose view supplies the missing detail. It is acceptable if the evidence provider alone can answer, as long as that is logged."
+  },
+  "prompt_requirement": "Use the visual media directly. Try to generate a speaker-side question that makes sense from required_users[0]'s own experience, needs both users' videos to answer cleanly, and is resolved by a concrete visible detail from required_users[1].",
+  "clips": [
+    {
+      "user": "Jake",
+      "day": "DAY7",
+      "clip_clock": "19:10:00.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY7_19100000/benchmark_video_pairs/0-1/left_A1_JAKE_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 8.0,
+        "removed_duration_seconds": 22.0,
+        "protection_target_kept_seconds": 8.0
+      }
+    },
+    {
+      "user": "Alice",
+      "day": "DAY7",
+      "clip_clock": "19:10:00.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY7_19100000/benchmark_video_pairs/0-1/right_A2_ALICE_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 18.0,
+        "removed_duration_seconds": 12.0,
+        "protection_target_kept_seconds": 8.0
+      }
+    }
+  ]
+}
+
+Generated question-answer item:
+{
+  "qa_id": "EGOLIFE2U_DAY7_191000_A1_A2_Q1",
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_19100000_A1_A2_0-1",
+  "question_type": "neutral",
+  "question": "I was sitting at the table looking at my phone, but I didn't see what was happening on the other side of the room. What was the person sitting at the table doing?",
+  "options": [
+    "Holding a clapperboard",
+    "Cooking food in the kitchen",
+    "Cleaning the living room floor",
+    "Sleeping in the bedroom",
+    "Walking out the front door"
+  ],
+  "correct": "A",
+  "answer": "Holding a clapperboard",
+  "required_users": [
+    "Jake",
+    "Alice"
+  ],
+  "evidence": [
+    {
+      "user": "Jake",
+      "needed_fact": "Jake is seated at a table with a checkered tablecloth, focused on a smartphone. The view is directed forward, showing the table and a window, but does not show the person sitting to the right of the table.",
+      "timeframe": "19:10:00 - 19:10:08",
+      "frames_used": [
+        "19:10:00.00",
+        "19:10:05.00"
+      ]
+    },
+    {
+      "user": "Alice",
+      "needed_fact": "Alice is holding a clapperboard with 'DAY 7' written on it, sitting at the same table. This view confirms the activity of the person at the table.",
+      "timeframe": "19:10:00 - 19:10:05",
+      "frames_used": [
+        "19:10:00.00",
+        "19:10:02.00"
+      ]
+    }
+  ],
+  "single_user_answerability": {
+    "Jake": "insufficient because Jake's view is focused on the table and his phone, and while he can see the woman in the red apron moving in the background, the person sitting to his right (Alice) is largely out of frame or obscured, making it impossible to identify her specific activity (holding a clapperboard).",
+    "Alice": "sufficient because Alice's video clearly shows her holding a clapperboard at the table."
+  },
+  "combined_answerability": "sufficient because Jake's view establishes the context of sitting at the table, while Alice's view provides the specific visual detail of holding a clapperboard, which is the correct answer.",
+  "generator_rationale": "The question asks about a specific activity (holding a clapperboard) that is visible in Alice's view but not in Jake's view. Jake is focused on his phone and the table, while Alice is holding a clapperboard. This creates a natural information gap where Jake would need to ask what Alice was doing.",
+  "why_two_users_needed": "Jake's view does not show Alice holding the clapperboard, as she is to his right and out of his direct line of sight. Alice's view clearly shows the clapperboard, providing the necessary evidence to answer the question.",
+  "per_user_evidence_claims": [
+    {
+      "user": "Jake",
+      "claim": "Jake is sitting at a table, looking at his phone. He can see a woman in a red apron moving in the background, but not the person sitting to his right."
+    },
+    {
+      "user": "Alice",
+      "claim": "Alice is holding a clapperboard with 'DAY 7' written on it."
+    }
+  ],
+  "referred_timestamps": [
+    {
+      "user": "Alice",
+      "timestamp_seconds": 2.0,
+      "moment": "Alice is clearly holding a clapperboard with text visible."
+    }
+  ],
+  "review": {
+    "generator_self_check": "The question asks for a concrete object/activity (holding a clapperboard) that is not visible in Jake's view. Jake's view is focused on the table and phone, and while he can see the woman in the red apron, he cannot see Alice holding the clapperboard. This is not a shallow activity question because it asks for a specific object held by the other person, which is a concrete visual detail.",
+    "status": "draft",
+    "speaker_user": "Jake",
+    "evidence_provider_user": "Alice"
+  }
+}
+
+Return exactly one valid JSON object with this exact shape:
+{
+  "review_passed": true,
+  "checks": {
+    "qa_formality": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if the status is FAIL or UNCERTAIN; empty string if PASS",
+      "quality_score": "1/2/3 using the check-specific quality rubric",
+      "quality_flag": "1_weak_or_reject, 2_acceptable, or 3_strong",
+      "quality_reason": "brief reason for the quality score; this does not determine pass/fail status",
+      "semantic_subchecks": {
+        "other_person_activity_query": {
+          "status": "PASS/FAIL/UNCERTAIN",
+          "reason": "whether the question merely asks what another person was doing while the speaker was doing something, instead of asking for a concrete missing detail tied to the speaker's own information need"
+        },
+        "direct_name_leakage": {
+          "status": "PASS/FAIL/UNCERTAIN",
+          "reason": "whether the question directly names a required user or otherwise exposes a participant name that could give away who supplies the answer"
+        }
+      }
+    }
+  },
+  "blocking_failures": [
+    "names of failed checks that should block acceptance"
+  ],
+  "why_generator_asked_this": "brief explanation of why the generator may have asked this",
+  "feedback_to_generator": "specific revision instructions if review_passed is false; use an empty string if it passed"
+}

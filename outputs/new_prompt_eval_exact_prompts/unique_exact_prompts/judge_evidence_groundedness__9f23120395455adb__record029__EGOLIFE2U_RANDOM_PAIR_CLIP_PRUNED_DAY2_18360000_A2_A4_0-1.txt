@@ -1,0 +1,165 @@
+You are the evidence_groundedness judge for EgoLife video-first two-user multiple-choice question generation.
+
+Output contract:
+- Return exactly one valid JSON object and nothing else.
+- Do not include markdown, code fences, comments, explanations, or extra text outside the JSON object.
+- Include every field shown in the requested JSON shape, even when a value is brief.
+
+
+You will see the same raw egocentric videos used by the generator. Judge only evidence_groundedness.
+
+evidence_groundedness asks whether the question-answer item is supported only by the provided videos and metadata:
+- The correct answer, evidence claims, referred timestamps, and per-user claims must be grounded in concrete visible moments or supplied metadata.
+- Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
+- Treat required_users[0] as the asker/speaker and required_users[1] as the evidence provider.
+- The asker/speaker's view should anchor why the question is natural, but it must not reveal the decisive missing detail.
+- It is acceptable if required_users[1]'s video alone can answer because that user is the evidence provider; answerability logs that separately.
+- FAIL if required_users[0]'s video alone already reveals the correct answer.
+- FAIL if the question merely stitches unrelated clips by timestamp, asks what everyone saw/noticed, or makes a generic comparison of views rather than a situated speaker-side memory gap plus supported missing detail.
+- If 2D gaze projection is unavailable, FAIL invented exact gaze-to-object claims; visible object/action claims are still allowed when grounded in the video itself.
+- UNCERTAIN if the videos do not clearly support the anchor, the missing detail, the correct option, or the claimed relation.
+
+evidence_groundedness quality_score rubric:
+- 3 / 3_strong: The videos clearly demonstrate the speaker-side anchor and the evidence-provider missing detail; the answer-relevant object, action, or state is plainly visible, temporally aligned with the claims, and central enough that the relation is easy to verify.
+- 2 / 2_acceptable: The answer is still supported, but the evidence is weaker: the object, action, or state is blurry, brief, partially occluded, peripheral, not the focal point, only visible in a small part of the scene, or the timestamps/claims are somewhat coarse. This can still PASS if the support is sufficient.
+- 1 / 1_weak_or_reject: The visual support is missing, invented, ambiguous, answerable from the speaker alone, based on unrelated timestamp stitching, or too unclear to verify. This should normally be FAIL or UNCERTAIN.
+
+Scoring instructions:
+- Decide PASS/FAIL/UNCERTAIN first using the evidence_groundedness rules. Then assign quality_score using this rubric.
+- The quality_score is for analysis and training signal; it must not override the pass/fail decision.
+- Also return quality_flag and quality_reason.
+
+
+Video set metadata:
+{
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_18360000_A2_A4_0-1",
+  "required_users": [
+    "Alice",
+    "Lucia"
+  ],
+  "role_contract": {
+    "speaker_user": "Alice",
+    "evidence_provider_user": "Lucia",
+    "required_users_order": "required_users[0] is the asker/speaker whose view anchors the question; aim for a question that is not answerable from that view alone. required_users[1] is the evidence provider whose view supplies the missing detail. It is acceptable if the evidence provider alone can answer, as long as that is logged."
+  },
+  "prompt_requirement": "Use the visual media directly. Try to generate a speaker-side question that makes sense from required_users[0]'s own experience, needs both users' videos to answer cleanly, and is resolved by a concrete visible detail from required_users[1].",
+  "clips": [
+    {
+      "user": "Alice",
+      "day": "DAY2",
+      "clip_clock": "18:36:00.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY2_18360000/benchmark_video_pairs/0-1/left_A2_ALICE_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 8.5,
+        "removed_duration_seconds": 21.5,
+        "protection_target_kept_seconds": 8.0
+      }
+    },
+    {
+      "user": "Lucia",
+      "day": "DAY2",
+      "clip_clock": "18:36:00.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY2_18360000/benchmark_video_pairs/0-1/right_A4_LUCIA_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 8.0,
+        "removed_duration_seconds": 22.0,
+        "protection_target_kept_seconds": 8.0
+      }
+    }
+  ]
+}
+
+Generated question-answer item:
+{
+  "qa_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_18360000_A2_A4_0-1",
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_18360000_A2_A4_0-1",
+  "question_type": "neutral",
+  "question": "I saw the guy in the purple shirt standing by the projector, but what was he holding in his hand?",
+  "options": [
+    "A white mug",
+    "A glass of juice",
+    "A white smartphone",
+    "A beer bottle",
+    "A red can"
+  ],
+  "correct": "C",
+  "answer": "A white smartphone",
+  "required_users": [
+    "Alice",
+    "Lucia"
+  ],
+  "evidence": [
+    {
+      "user": "Alice",
+      "needed_fact": "Shows the man in the purple shirt standing near the projector screen, but the view is partially obstructed and distant.",
+      "timeframe": "00:01 - 00:02",
+      "frames_used": [
+        "00:01",
+        "00:02"
+      ]
+    },
+    {
+      "user": "Lucia",
+      "needed_fact": "Provides a clear side view of the man in the purple shirt, showing he is holding a white smartphone in his hand.",
+      "timeframe": "00:01 - 00:02",
+      "frames_used": [
+        "00:01",
+        "00:02"
+      ]
+    }
+  ],
+  "single_user_answerability": {
+    "Alice": "insufficient because the man is distant and the object in his hand is not clearly distinguishable in Alice's view",
+    "Lucia": "sufficient because the side angle clearly shows the white smartphone in the man's hand"
+  },
+  "combined_answerability": "sufficient because Lucia's video provides the clear visual detail needed to identify the object Alice saw but could not clearly identify",
+  "generator_rationale": "Alice sees a man standing near the projector but cannot clearly identify what he is holding. Lucia's view provides the necessary detail to answer this question.",
+  "why_two_users_needed": "Alice's view establishes the presence of the man and the context, but Lucia's view is required to clearly identify the specific object in his hand.",
+  "per_user_evidence_claims": [
+    {
+      "user": "Alice",
+      "claim": "Man in purple shirt is visible near the projector screen"
+    },
+    {
+      "user": "Lucia",
+      "claim": "Man in purple shirt is holding a white smartphone"
+    }
+  ],
+  "referred_timestamps": [
+    {
+      "user": "Lucia",
+      "timestamp_seconds": 1.0,
+      "moment": "Man in purple shirt holding white smartphone clearly visible"
+    }
+  ],
+  "review": {
+    "generator_self_check": "Alice alone cannot clearly see the object in the man's hand due to distance and angle. Lucia's view provides the necessary detail. This is not a shallow activity question but a specific object identification question.",
+    "status": "draft",
+    "speaker_user": "Alice",
+    "evidence_provider_user": "Lucia"
+  }
+}
+
+Return exactly one valid JSON object with this exact shape:
+{
+  "review_passed": true,
+  "checks": {
+    "evidence_groundedness": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if the status is FAIL or UNCERTAIN; empty string if PASS",
+      "quality_score": "1/2/3 using the check-specific quality rubric",
+      "quality_flag": "1_weak_or_reject, 2_acceptable, or 3_strong",
+      "quality_reason": "brief reason for the quality score; this does not determine pass/fail status"
+    }
+  },
+  "blocking_failures": [
+    "names of failed checks that should block acceptance"
+  ],
+  "why_generator_asked_this": "brief explanation of why the generator may have asked this",
+  "feedback_to_generator": "specific revision instructions if review_passed is false; use an empty string if it passed"
+}

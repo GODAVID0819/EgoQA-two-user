@@ -1,0 +1,169 @@
+You are the evidence_groundedness judge for EgoLife video-first two-user multiple-choice question generation.
+
+Output contract:
+- Return exactly one valid JSON object and nothing else.
+- Do not include markdown, code fences, comments, explanations, or extra text outside the JSON object.
+- Include every field shown in the requested JSON shape, even when a value is brief.
+
+
+You will see the same raw egocentric videos used by the generator. Judge only evidence_groundedness.
+
+evidence_groundedness asks whether the question-answer item is supported only by the provided videos and metadata:
+- The correct answer, evidence claims, referred timestamps, and per-user claims must be grounded in concrete visible moments or supplied metadata.
+- Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
+- Treat required_users[0] as the asker/speaker and required_users[1] as the evidence provider.
+- The asker/speaker's view should anchor why the question is natural, but it must not reveal the decisive missing detail.
+- It is acceptable if required_users[1]'s video alone can answer because that user is the evidence provider; answerability logs that separately.
+- FAIL if required_users[0]'s video alone already reveals the correct answer.
+- FAIL if the question merely stitches unrelated clips by timestamp, asks what everyone saw/noticed, or makes a generic comparison of views rather than a situated speaker-side memory gap plus supported missing detail.
+- If 2D gaze projection is unavailable, FAIL invented exact gaze-to-object claims; visible object/action claims are still allowed when grounded in the video itself.
+- UNCERTAIN if the videos do not clearly support the anchor, the missing detail, the correct option, or the claimed relation.
+
+evidence_groundedness quality_score rubric:
+- 3 / 3_strong: The videos clearly demonstrate the speaker-side anchor and the evidence-provider missing detail; the answer-relevant object, action, or state is plainly visible, temporally aligned with the claims, and central enough that the relation is easy to verify.
+- 2 / 2_acceptable: The answer is still supported, but the evidence is weaker: the object, action, or state is blurry, brief, partially occluded, peripheral, not the focal point, only visible in a small part of the scene, or the timestamps/claims are somewhat coarse. This can still PASS if the support is sufficient.
+- 1 / 1_weak_or_reject: The visual support is missing, invented, ambiguous, answerable from the speaker alone, based on unrelated timestamp stitching, or too unclear to verify. This should normally be FAIL or UNCERTAIN.
+
+Scoring instructions:
+- Decide PASS/FAIL/UNCERTAIN first using the evidence_groundedness rules. Then assign quality_score using this rubric.
+- The quality_score is for analysis and training signal; it must not override the pass/fail decision.
+- Also return quality_flag and quality_reason.
+
+
+Video set metadata:
+{
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_16093000_A2_A5_0-1",
+  "required_users": [
+    "Alice",
+    "Katrina"
+  ],
+  "role_contract": {
+    "speaker_user": "Alice",
+    "evidence_provider_user": "Katrina",
+    "required_users_order": "required_users[0] is the asker/speaker whose view anchors the question; aim for a question that is not answerable from that view alone. required_users[1] is the evidence provider whose view supplies the missing detail. It is acceptable if the evidence provider alone can answer, as long as that is logged."
+  },
+  "prompt_requirement": "Use the visual media directly. Try to generate a speaker-side question that makes sense from required_users[0]'s own experience, needs both users' videos to answer cleanly, and is resolved by a concrete visible detail from required_users[1].",
+  "clips": [
+    {
+      "user": "Alice",
+      "day": "DAY6",
+      "clip_clock": "16:09:30.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY6_16093000/benchmark_video_pairs/0-1/left_A2_ALICE_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 26.0,
+        "removed_duration_seconds": 4.0,
+        "protection_target_kept_seconds": 8.0
+      }
+    },
+    {
+      "user": "Katrina",
+      "day": "DAY6",
+      "clip_clock": "16:09:30.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY6_16093000/benchmark_video_pairs/0-1/right_A5_KATRINA_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 17.0,
+        "removed_duration_seconds": 13.0,
+        "protection_target_kept_seconds": 8.0
+      }
+    }
+  ]
+}
+
+Generated question-answer item:
+{
+  "qa_id": "DAY6_A2_A5_Baking_Counterfeit",
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_16093000_A2_A5_0-1",
+  "question_type": "neutral",
+  "question": "I was focused on arranging the cookies on the tray, but when I glanced up to see what the other person was doing, what exactly were they holding?",
+  "options": [
+    "A wooden rolling pin",
+    "A digital tablet",
+    "A smartphone",
+    "A stack of paper towels",
+    "A metal mixing bowl"
+  ],
+  "correct": "C",
+  "answer": "A smartphone",
+  "required_users": [
+    "Alice",
+    "Katrina"
+  ],
+  "evidence": [
+    {
+      "user": "Alice",
+      "needed_fact": "Alice is baking and arranging cookies on a tray. At the end of the clip (approx 16:09:57), she looks up and sees a woman in a green jacket standing nearby holding a small rectangular object.",
+      "timeframe": "16:09:30 - 16:09:57",
+      "frames_used": [
+        "00:00",
+        "00:27"
+      ]
+    },
+    {
+      "user": "Katrina",
+      "needed_fact": "Katrina's view shows the room environment and confirms the object being held by the woman in the green jacket is a smartphone, specifically visible at 16:09:37 where the screen is clearly lit.",
+      "timeframe": "16:09:30 - 16:09:37",
+      "frames_used": [
+        "00:07"
+      ]
+    }
+  ],
+  "single_user_answerability": {
+    "Alice": "insufficient because while Alice sees the person holding an object, the resolution and angle make it difficult to definitively distinguish a smartphone from other small rectangular items like a notepad or tablet without a closer view.",
+    "Katrina": "sufficient because Katrina's camera captures the object held by the woman in the green jacket clearly enough to identify it as a smartphone with a lit screen."
+  },
+  "combined_answerability": "sufficient because Alice's view establishes the context of the interaction (baking and noticing the other person), while Katrina's view provides the high-clarity visual evidence needed to identify the specific object held by the woman in the green jacket.",
+  "generator_rationale": "The question arises from Alice's perspective as she is multitasking (baking) and glancing at her companion. The uncertainty lies in identifying the specific object the companion is holding. This requires the second user's view to confirm the visual detail.",
+  "why_two_users_needed": "Alice's view provides the narrative context of the question (noticing the companion), but Katrina's view provides the necessary visual resolution to identify the object as a smartphone rather than a generic rectangular item.",
+  "per_user_evidence_claims": [
+    {
+      "user": "Alice",
+      "claim": "Alice sees a woman in a green jacket holding a small object."
+    },
+    {
+      "user": "Katrina",
+      "claim": "Katrina's video shows the woman in the green jacket holding a smartphone with the screen on."
+    }
+  ],
+  "referred_timestamps": [
+    {
+      "user": "Alice",
+      "timestamp_seconds": 27.0,
+      "moment": "Alice looks up and sees the woman in green holding an object."
+    },
+    {
+      "user": "Katrina",
+      "timestamp_seconds": 7.0,
+      "moment": "The object held by the woman in green is clearly a smartphone with a lit screen."
+    }
+  ],
+  "review": {
+    "generator_self_check": "The question is not about a general activity (e.g., 'what was she doing?') but about a specific object identity ('what was she holding?'). Alice's view is ambiguous regarding the object type, while Katrina's view confirms it. This fits the criteria for a concrete missing visual detail.",
+    "status": "draft",
+    "speaker_user": "Alice",
+    "evidence_provider_user": "Katrina"
+  }
+}
+
+Return exactly one valid JSON object with this exact shape:
+{
+  "review_passed": true,
+  "checks": {
+    "evidence_groundedness": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if the status is FAIL or UNCERTAIN; empty string if PASS",
+      "quality_score": "1/2/3 using the check-specific quality rubric",
+      "quality_flag": "1_weak_or_reject, 2_acceptable, or 3_strong",
+      "quality_reason": "brief reason for the quality score; this does not determine pass/fail status"
+    }
+  },
+  "blocking_failures": [
+    "names of failed checks that should block acceptance"
+  ],
+  "why_generator_asked_this": "brief explanation of why the generator may have asked this",
+  "feedback_to_generator": "specific revision instructions if review_passed is false; use an empty string if it passed"
+}

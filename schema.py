@@ -123,7 +123,7 @@ def validate_qa_item(item: dict[str, Any], *, strict_review: bool = False) -> li
         asker_user = required_users[0]
         asker_text = str(single.get(asker_user, "")).lower()
         if "insufficient" not in asker_text and "cannot" not in asker_text and "not enough" not in asker_text:
-            errors.append(f"asker/speaker user {asker_user} must be marked insufficient")
+            errors.append(f"asker user {asker_user} must be marked insufficient")
 
     combined = str(item.get("combined_answerability", "")).lower()
     if "sufficient" not in combined and "support" not in combined:

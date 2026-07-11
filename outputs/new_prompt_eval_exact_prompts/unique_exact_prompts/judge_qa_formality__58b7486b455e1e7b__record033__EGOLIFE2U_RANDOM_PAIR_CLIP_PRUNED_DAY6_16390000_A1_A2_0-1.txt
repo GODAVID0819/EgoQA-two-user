@@ -1,0 +1,193 @@
+You are the qa_formality judge for a two-user multiple-choice question generated using egocentric videos.
+
+Output contract:
+- Return exactly one valid JSON object and nothing else.
+- Do not include markdown, code fences, comments, explanations, or extra text outside the JSON object.
+- Include every field shown in the requested JSON shape, even when a value is brief.
+
+
+You will see a generated question-answer item plus deterministic schema/formality results. Judge only qa_formality.
+
+qa_formality asks whether the generated question-answer item is natural and well-formed:
+- The question should sound like a natural first-person or shared-memory question from someone in the situation, not like a dataset observer.
+- The question-answer item must be a valid five-option multiple-choice question: exactly five non-empty, mutually exclusive options, labeled A-E, with exactly one correct answer option; answer exactly matches options[correct].
+- The question_type field, if used, must be commonality, difference, or neutral. If it is commonality or difference, it must match the wording of the question.
+- Run semantic_subchecks.other_person_activity_query and semantic_subchecks.direct_name_leakage explicitly.
+- FAIL this subcheck when the question is essentially "while/when I was doing something, what was the other/named person doing?" and the answer is only that person's concurrent activity.
+- FAIL the other_person_activity_query subcheck for variants such as "what was the other person doing nearby?", "what were they doing on the laptop?", or "what activity were they engaged in?" unless the question asks for a concrete missing object, state, location, outcome, consequence, explanation, or follow-up.
+- FAIL direct_name_leakage when the question directly names a required user or participant, because naming the person can reveal which user's view supplies the answer.
+- Bad direct-name example: "When I left the counter, where did Alice put the mug?" must FAIL because the question names the evidence provider and is simply a shallow concurrent-activity question.
+- Better name-free version: "After I left the counter, where did the mug end up?" may PASS if supported, because it asks for the missing object location without naming a participant.
+- Bad activity example: "When I was washing dishes, what was the other person doing?" with answer "reading a book" must FAIL because it only asks for another person's activity.
+- Better qa_formality examples: "Was the stove left on after I walked away?" or "Which mug was still on the counter after I left?" may PASS if supported, because each asks for a specific missing state/location/object.
+- The examples show the distinction only. Do not require or reward copying their templates.
+- Do not fail merely because the wording contains "while" or mentions another person. Fail only when the semantic relation is a shallow concurrent-activity query rather than a speaker-side information need.
+- If semantic_subchecks.other_person_activity_query is FAIL, set checks.qa_formality.status to FAIL, include "qa_formality" in blocking_failures, and give feedback telling the generator to ask for a concrete missing object/state/location/outcome instead of another person's activity.
+- If semantic_subchecks.direct_name_leakage is FAIL, set checks.qa_formality.status to FAIL, include "qa_formality" in blocking_failures, and give feedback telling the generator to remove participant names from the question.
+- PASS qa_formality only if the deterministic schema branch passes, the question wording and multiple-choice structure are acceptable, and neither semantic subcheck is FAIL.
+
+qa_formality quality_score rubric:
+- 3 / 3_strong: The JSON and multiple-choice structure are clean, the wording is natural and specific, the question preserves first-person or shared-memory perspective without direct names, and it asks for a concrete missing object, state, location, or outcome rather than a shallow activity report.
+- 2 / 2_acceptable: The question-answer item is acceptable but less elegant: wording is mildly generic, stiff, or template-like; options are merely adequate; or the perspective is understandable but not especially natural. It still has no blocking structure, name, or activity-query problems.
+- 1 / 1_weak_or_reject: The question-answer item has a blocking formality or structure issue, directly names a person in the question, uses dataset-observer wording, is invalid as a five-option multiple-choice question, or is mainly a "what was the other person doing" query.
+
+Scoring instructions:
+- Decide PASS/FAIL/UNCERTAIN first using the qa_formality rules. Then assign quality_score using this rubric.
+- The quality_score is for analysis and training signal; it must not override the pass/fail decision.
+- Also return quality_flag and quality_reason.
+
+
+Deterministic schema branch:
+{
+  "status": "PASS",
+  "errors": []
+}
+
+Video set metadata:
+{
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_16390000_A1_A2_0-1",
+  "required_users": [
+    "Jake",
+    "Alice"
+  ],
+  "role_contract": {
+    "speaker_user": "Jake",
+    "evidence_provider_user": "Alice",
+    "required_users_order": "required_users[0] is the asker/speaker whose view anchors the question; aim for a question that is not answerable from that view alone. required_users[1] is the evidence provider whose view supplies the missing detail. It is acceptable if the evidence provider alone can answer, as long as that is logged."
+  },
+  "prompt_requirement": "Use the visual media directly. Try to generate a speaker-side question that makes sense from required_users[0]'s own experience, needs both users' videos to answer cleanly, and is resolved by a concrete visible detail from required_users[1].",
+  "clips": [
+    {
+      "user": "Jake",
+      "day": "DAY6",
+      "clip_clock": "16:39:00.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY6_16390000/benchmark_video_pairs/0-1/left_A1_JAKE_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 8.0,
+        "removed_duration_seconds": 22.0,
+        "protection_target_kept_seconds": 8.0
+      }
+    },
+    {
+      "user": "Alice",
+      "day": "DAY6",
+      "clip_clock": "16:39:00.00",
+      "local_video": "egolife_two_user_qa/outputs/clip_pruned_benchmark_100_floor_resample_2/clip_pruned_pairs/DAY6_16390000/benchmark_video_pairs/0-1/right_A2_ALICE_pruned.mp4",
+      "generator_media_mode": "pruned_video",
+      "pruning_summary": {
+        "applied": true,
+        "kept_duration_seconds": 8.5,
+        "removed_duration_seconds": 21.5,
+        "protection_target_kept_seconds": 8.0
+      }
+    }
+  ]
+}
+
+Generated question-answer item:
+{
+  "qa_id": "DAY6_1639_JAKE_ALICE_SCREEN_CONTENT",
+  "evidence_id": "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_16390000_A1_A2_0-1",
+  "question_type": "neutral",
+  "question": "I remember sitting on the couch and looking toward the TV, but I couldn't quite make out what was on the screen. What was being displayed on the projector?",
+  "options": [
+    "A live sports broadcast with players running",
+    "A movie scene with dark lighting",
+    "A menu screen with a grid of icons",
+    "A news anchor sitting at a desk",
+    "A paused game character in a forest"
+  ],
+  "correct": "C",
+  "answer": "A menu screen with a grid of icons",
+  "required_users": [
+    "Jake",
+    "Alice"
+  ],
+  "evidence": [
+    {
+      "user": "Jake",
+      "needed_fact": "Jake is sitting on the couch facing a wall with a projection screen. The screen is visible in the distance but the resolution is too low to read any text or identify specific imagery.",
+      "timeframe": "16:39:02:05 - 16:39:03:05",
+      "frames_used": [
+        "00:02",
+        "00:03"
+      ]
+    },
+    {
+      "user": "Alice",
+      "needed_fact": "Alice's camera angle provides a clear, high-resolution view of the same projection screen, revealing a distinct menu interface with a grid of icons.",
+      "timeframe": "16:39:03:10 - 16:39:04:10",
+      "frames_used": [
+        "00:01",
+        "00:02"
+      ]
+    }
+  ],
+  "single_user_answerability": {
+    "Jake": "insufficient because the asker/speaker alone only provides a view where the screen is too distant and blurry to identify the content.",
+    "Alice": "sufficient because the evidence provider alone has a clear, close-up view of the screen showing the grid menu."
+  },
+  "combined_answerability": "sufficient because the required users' videos together support exactly one option",
+  "generator_rationale": "This is a natural speaker-side question where Jake establishes the context (watching the TV) and the uncertainty (can't see what's on it). Alice's view resolves the specific visual detail of the screen content.",
+  "why_two_users_needed": "Jake's view anchors the experience but lacks the resolution to identify the screen content. Alice's view supplies the missing visual detail of the specific menu on the projector.",
+  "per_user_evidence_claims": [
+    {
+      "user": "Jake",
+      "claim": "Jake is facing the TV screen but the image is indistinct."
+    },
+    {
+      "user": "Alice",
+      "claim": "Alice's camera clearly shows a grid of icons on the TV screen."
+    }
+  ],
+  "referred_timestamps": [
+    {
+      "user": "Jake",
+      "timestamp_seconds": 2.0,
+      "moment": "Jake sitting on the couch facing the blurry screen"
+    },
+    {
+      "user": "Alice",
+      "timestamp_seconds": 3.0,
+      "moment": "Alice's view showing the clear grid menu on the screen"
+    }
+  ],
+  "review": {
+    "generator_self_check": "The asker alone cannot answer because the screen is blurry in his view. This is not a shallow activity question; it asks for a specific object state (screen content).",
+    "status": "draft",
+    "speaker_user": "Jake",
+    "evidence_provider_user": "Alice"
+  }
+}
+
+Return exactly one valid JSON object with this exact shape:
+{
+  "review_passed": true,
+  "checks": {
+    "qa_formality": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if the status is FAIL or UNCERTAIN; empty string if PASS",
+      "quality_score": "1/2/3 using the check-specific quality rubric",
+      "quality_flag": "1_weak_or_reject, 2_acceptable, or 3_strong",
+      "quality_reason": "brief reason for the quality score; this does not determine pass/fail status",
+      "semantic_subchecks": {
+        "other_person_activity_query": {
+          "status": "PASS/FAIL/UNCERTAIN",
+          "reason": "whether the question merely asks what another person was doing while the speaker was doing something, instead of asking for a concrete missing detail tied to the speaker's own information need"
+        },
+        "direct_name_leakage": {
+          "status": "PASS/FAIL/UNCERTAIN",
+          "reason": "whether the question directly names a required user or otherwise exposes a participant name that could give away who supplies the answer"
+        }
+      }
+    }
+  },
+  "blocking_failures": [
+    "names of failed checks that should block acceptance"
+  ],
+  "why_generator_asked_this": "brief explanation of why the generator may have asked this",
+  "feedback_to_generator": "specific revision instructions if review_passed is false; use an empty string if it passed"
+}
