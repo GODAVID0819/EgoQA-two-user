@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=egolife_neutral50_gem
+#SBATCH --job-name=egolife_neutral50_hyb
 #SBATCH --account=torch_pr_111_tandon_advanced
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:1
+#SBATCH --constraint=h100
 #SBATCH --mem=128G
 #SBATCH --time=12:00:00
 #SBATCH --output=hpc/logs/%x_%j.out
@@ -35,18 +37,21 @@ if [[ -z "${VLM_MODEL_ID:-}" ]]; then
   fi
 fi
 VLM_API_KEY="${VLM_API_KEY:-${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}}"
+MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-4096}"
+JUDGE_BACKEND="${JUDGE_BACKEND:-transformers-local}"
+JUDGE_MODEL_ID="${JUDGE_MODEL_ID:-${QWEN_MODEL_ID}}"
+JUDGE_MAX_NEW_TOKENS="${JUDGE_MAX_NEW_TOKENS:-${MAX_NEW_TOKENS}}"
 GENERATION_MODE="${GENERATION_MODE:-baseline}"
 GENERATOR_DECODE_MODE="${GENERATOR_DECODE_MODE:-greedy}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
-MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-4096}"
-DISABLE_THINKING="${DISABLE_THINKING:-0}"
+DISABLE_THINKING="${DISABLE_THINKING:-1}"
 RESUME_GENERATION="${RESUME_GENERATION:-0}"
 
 SAMPLING_TEMPERATURE="${SAMPLING_TEMPERATURE:-0.7}"
 SAMPLING_TOP_P="${SAMPLING_TOP_P:-0.9}"
 SAMPLING_TOP_K="${SAMPLING_TOP_K:-}"
 
-CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-0}"
+CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-1}"
 CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/hpc/cuda.py}"
 CUDA_KEEPER_THRESHOLD="${CUDA_KEEPER_THRESHOLD:-60}"
 CUDA_KEEPER_GPUS="${CUDA_KEEPER_GPUS:-0}"
@@ -90,6 +95,9 @@ echo "eval_packet_count=${EVAL_PACKET_COUNT}"
 echo "qwen_model_id=${QWEN_MODEL_ID}"
 echo "vlm_backend=${VLM_BACKEND}"
 echo "vlm_model_id=${VLM_MODEL_ID}"
+echo "judge_backend=${JUDGE_BACKEND}"
+echo "judge_model_id=${JUDGE_MODEL_ID}"
+echo "judge_max_new_tokens=${JUDGE_MAX_NEW_TOKENS}"
 if [[ -n "${VLM_API_KEY}" ]]; then
   echo "vlm_api_key=provided"
 fi
@@ -106,7 +114,7 @@ echo "cuda_keeper_threshold=${CUDA_KEEPER_THRESHOLD}"
 echo "cuda_keeper_gpus=${CUDA_KEEPER_GPUS}"
 echo "cuda_keeper_reserve=${CUDA_KEEPER_RESERVE}"
 echo "cuda_keeper_auto_install=${CUDA_KEEPER_AUTO_INSTALL}"
-echo "benchmark_contract=reuse_same_first_50_clip_pruned_packets_neutral_prompt_gemini"
+echo "benchmark_contract=reuse_same_first_50_clip_pruned_packets_neutral_prompt_gemini_generator_qwen_judges"
 echo "media_routing=generator_uses_existing_pruned_videos;judges_and_answerability_use_full_30s_originals"
 python --version
 if command -v nvidia-smi >/dev/null 2>&1; then
@@ -191,6 +199,12 @@ if [[ -n "${VLM_API_KEY}" ]]; then
   api_key_args+=(--api-key "${VLM_API_KEY}")
 fi
 
+judge_args=(
+  --judge-backend "${JUDGE_BACKEND}"
+  --judge-model-id "${JUDGE_MODEL_ID}"
+  --judge-max-new-tokens "${JUDGE_MAX_NEW_TOKENS}"
+)
+
 decode_args=(--generator-decode-mode "${GENERATOR_DECODE_MODE}")
 if [[ "${GENERATOR_DECODE_MODE}" == "sampling" ]]; then
   decode_args+=(--generator-temperature "${SAMPLING_TEMPERATURE}")
@@ -222,6 +236,7 @@ python -m egolife_two_user_qa generate_video_qa_loop \
   "${decode_args[@]}" \
   "${thinking_args[@]}" \
   "${api_key_args[@]}" \
+  "${judge_args[@]}" \
   "${resume_args[@]}"
 
 echo "stage=verify_neutral_generation_traces"

@@ -54,6 +54,7 @@ class StreamingJsonlRows(list[dict[str, Any]]):
 
 QUESTION_TYPES = ("commonality", "difference", "neutral")
 DEFAULT_QUESTION_TYPES = ("commonality", "difference")
+DEFAULT_JUDGE_MODEL_ID = "Qwen/Qwen3.6-27B"
 BLOCKING_JUDGE_CHECKS = (
     "qa_formality",
     "evidence_groundedness",
@@ -1041,7 +1042,7 @@ def run_answerability_eval(
     qa_item: dict[str, Any],
     packet: dict[str, Any],
     runner: Any,
-    backend: str,
+    media_backend: str,
     allow_openai_video_input: bool,
     prompt_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -1050,7 +1051,7 @@ def run_answerability_eval(
         clips = clips_for_users(packet, condition["users"])
         image_paths, video_paths = media_for_clips(
             clips,
-            backend=backend,
+            backend=media_backend,
             allow_openai_video_input=allow_openai_video_input,
             media_role="full",
         )
@@ -1121,7 +1122,7 @@ def run_parallel_review_judges(
     packet: dict[str, Any],
     schema_errors: list[str],
     runner: Any,
-    backend: str,
+    media_backend: str,
     allow_openai_video_input: bool,
     prompt_rows: list[dict[str, Any]],
     full_image_paths: list[str],
@@ -1196,7 +1197,7 @@ def run_parallel_review_judges(
             qa_item=qa_item,
             packet=packet,
             runner=runner,
-            backend=backend,
+            media_backend=media_backend,
             allow_openai_video_input=allow_openai_video_input,
             prompt_rows=answerability_prompt_rows,
         )
@@ -1270,6 +1271,11 @@ def generate_video_qa_loop(
     allow_openai_video_input: bool = False,
     disable_thinking: bool = False,
     api_key: str | None = None,
+    judge_backend: str | None = None,
+    judge_model_id: str | None = None,
+    judge_base_url: str | None = None,
+    judge_api_key: str | None = None,
+    judge_max_new_tokens: int | None = None,
     dry_run: bool = False,
     generation_mode: str = "baseline",
     fixed_question_type_schedule: bool = False,
@@ -1298,8 +1304,10 @@ def generate_video_qa_loop(
         generator_top_p=generator_top_p,
         generator_top_k=generator_top_k,
     )
+    active_backend = "dry-run" if dry_run else backend
+    active_judge_backend = "dry-run" if dry_run else (judge_backend or backend)
     runner = make_runner(
-        "dry-run" if dry_run else backend,
+        active_backend,
         model_id=model_id,
         base_url=base_url,
         max_new_tokens=max_new_tokens,
@@ -1309,6 +1317,29 @@ def generate_video_qa_loop(
         allow_openai_video_input=allow_openai_video_input,
         disable_thinking=disable_thinking,
         api_key=api_key,
+    )
+    judge_runner = runner
+    if active_judge_backend != active_backend or judge_model_id or judge_base_url or judge_api_key or judge_max_new_tokens:
+        effective_judge_model_id = judge_model_id or (
+            DEFAULT_JUDGE_MODEL_ID if active_judge_backend != active_backend else model_id
+        )
+        judge_runner = make_runner(
+            active_judge_backend,
+            model_id=effective_judge_model_id,
+            base_url=judge_base_url or base_url,
+            max_new_tokens=judge_max_new_tokens or max_new_tokens,
+            max_image_pixels=max_image_pixels,
+            dtype=dtype,
+            allow_cpu=allow_cpu,
+            allow_openai_video_input=allow_openai_video_input,
+            disable_thinking=disable_thinking,
+            api_key=judge_api_key if judge_api_key is not None else api_key,
+        )
+    print(
+        "qa_runner_config "
+        f"generator_backend={active_backend} generator_model={runner.model_id} "
+        f"judge_backend={active_judge_backend} judge_model={judge_runner.model_id}",
+        flush=True,
     )
     prompts = StreamingJsonlRows(prompts_path, reset=not resume)
     intermediate_rows = StreamingJsonlRows(intermediate_path, reset=not resume)
@@ -1330,6 +1361,7 @@ def generate_video_qa_loop(
         question_type = row.get("question_type")
         if question_type in counts:
             counts[question_type] += 1
+    judge_media_backend = judge_backend or backend
 
     for packet_index, packet in enumerate(iter_jsonl(evidence_path)):
         if fixed_question_type_schedule and packet_index >= target_count:
@@ -1358,16 +1390,32 @@ def generate_video_qa_loop(
         )
         full_image_paths, full_video_paths = media_for_clips(
             clips,
-            backend=backend,
+            backend=judge_media_backend,
             allow_openai_video_input=allow_openai_video_input,
             media_role="full",
         )
-        prepared_video_uploads = prepare_runner_video_uploads(
-            runner=runner,
-            evidence_id=packet.get("evidence_id"),
-            generator_video_paths=video_paths,
-            full_video_paths=full_video_paths,
-        )
+        if judge_runner is runner:
+            prepared_video_uploads = prepare_runner_video_uploads(
+                runner=runner,
+                evidence_id=packet.get("evidence_id"),
+                generator_video_paths=video_paths,
+                full_video_paths=full_video_paths,
+            )
+        else:
+            prepared_video_uploads = {
+                "generator": prepare_runner_video_uploads(
+                    runner=runner,
+                    evidence_id=packet.get("evidence_id"),
+                    generator_video_paths=video_paths,
+                    full_video_paths=[],
+                ),
+                "judge": prepare_runner_video_uploads(
+                    runner=judge_runner,
+                    evidence_id=packet.get("evidence_id"),
+                    generator_video_paths=[],
+                    full_video_paths=full_video_paths,
+                ),
+            }
         feedback = None
         if dry_run:
             qa = dry_run_qa(packet, question_type, generation_mode=generation_mode)
@@ -1488,7 +1536,7 @@ def generate_video_qa_loop(
                 condition_clips = clips_for_users(packet, condition["users"])
                 cond_images, cond_videos = media_for_clips(
                     condition_clips,
-                    backend=backend,
+                    backend=judge_media_backend,
                     allow_openai_video_input=allow_openai_video_input,
                     media_role="full",
                 )
@@ -1683,6 +1731,7 @@ def generate_video_qa_loop(
             qa["generator_decode"] = decode_config
             qa["required_users"] = packet.get("required_users", qa.get("required_users", []))
             qa["model_id"] = runner.model_id
+            qa["review_model_id"] = judge_runner.model_id
             qa["source_urls"] = packet.get("source_urls", {})
             qa["video_evidence"] = video_evidence_for_packet(packet)
             qa.setdefault("referred_timestamps", [])
@@ -1710,8 +1759,8 @@ def generate_video_qa_loop(
                 qa_item=qa,
                 packet=packet,
                 schema_errors=schema_errors,
-                runner=runner,
-                backend=backend,
+                runner=judge_runner,
+                media_backend=judge_media_backend,
                 allow_openai_video_input=allow_openai_video_input,
                 prompt_rows=prompts,
                 full_image_paths=full_image_paths,
@@ -1823,6 +1872,11 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--allow-openai-video-input", action="store_true")
     parser.add_argument("--disable-thinking", action="store_true")
     parser.add_argument("--api-key", help="Provider API key; Gemini also reads GEMINI_API_KEY or GOOGLE_API_KEY")
+    parser.add_argument("--judge-backend", choices=["transformers-local", "openai-compatible-local", "gemini"])
+    parser.add_argument("--judge-model-id", help=f"Model for review judges/evaluators; defaults to {DEFAULT_JUDGE_MODEL_ID} when judge backend differs")
+    parser.add_argument("--judge-base-url")
+    parser.add_argument("--judge-api-key")
+    parser.add_argument("--judge-max-new-tokens", type=int)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--fixed-question-type-schedule", action="store_true")
     parser.add_argument(
@@ -1862,6 +1916,11 @@ def main(argv: list[str] | None = None) -> int:
         allow_openai_video_input=args.allow_openai_video_input,
         disable_thinking=args.disable_thinking,
         api_key=args.api_key,
+        judge_backend=args.judge_backend,
+        judge_model_id=args.judge_model_id,
+        judge_base_url=args.judge_base_url,
+        judge_api_key=args.judge_api_key,
+        judge_max_new_tokens=args.judge_max_new_tokens,
         dry_run=args.dry_run,
         generation_mode=args.generation_mode,
         fixed_question_type_schedule=args.fixed_question_type_schedule,
