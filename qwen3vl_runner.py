@@ -20,6 +20,7 @@ DEFAULT_MODEL_ID = "Qwen/Qwen3.6-27B"
 DEFAULT_GEMINI_MODEL_ID = "gemini-3.5-flash"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_GEMINI_UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta"
+DEFAULT_GEMINI_503_RETRY_DELAY_SECONDS = 60.0
 DEFAULT_MAX_IMAGE_PIXELS = 262144
 GENERATOR_DECODING_MODES = ("greedy", "sampling")
 DEFAULT_SAMPLING_TEMPERATURE = 0.7
@@ -733,6 +734,8 @@ class GeminiRunner:
         api_key: str | None = None,
         file_poll_interval_seconds: float = 2.0,
         file_poll_timeout_seconds: float = 300.0,
+        service_unavailable_retry_delay_seconds: float = DEFAULT_GEMINI_503_RETRY_DELAY_SECONDS,
+        service_unavailable_max_retries: int | None = None,
     ) -> None:
         self.model_id = model_id or DEFAULT_GEMINI_MODEL_ID
         self.base_url = base_url.rstrip("/")
@@ -742,8 +745,14 @@ class GeminiRunner:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         self.file_poll_interval_seconds = file_poll_interval_seconds
         self.file_poll_timeout_seconds = file_poll_timeout_seconds
+        self.service_unavailable_retry_delay_seconds = float(service_unavailable_retry_delay_seconds)
+        self.service_unavailable_max_retries = service_unavailable_max_retries
         self._file_cache: dict[tuple[str, int, int], dict[str, Any]] = {}
         self._file_cache_lock = threading.Lock()
+        if self.service_unavailable_retry_delay_seconds < 0:
+            raise ValueError("service_unavailable_retry_delay_seconds must be non-negative")
+        if self.service_unavailable_max_retries is not None and self.service_unavailable_max_retries < 0:
+            raise ValueError("service_unavailable_max_retries must be non-negative or None")
         if not self.api_key:
             raise RuntimeError("Gemini backend requires --api-key, GEMINI_API_KEY, or GOOGLE_API_KEY")
 
@@ -768,7 +777,39 @@ class GeminiRunner:
             headers=headers or self._headers(),
             method=method,
         )
-        return read_json_response(req, timeout=self.timeout)
+        retries = 0
+        while True:
+            try:
+                return read_json_response(req, timeout=self.timeout)
+            except Exception as exc:
+                if self._http_status_code(exc) != 503:
+                    raise
+                if (
+                    self.service_unavailable_max_retries is not None
+                    and retries >= self.service_unavailable_max_retries
+                ):
+                    raise
+                retries += 1
+                print(
+                    "gemini_http_503_retry "
+                    f"retry={retries} delay_seconds={self.service_unavailable_retry_delay_seconds:g} "
+                    f"url={url}",
+                    flush=True,
+                )
+                time.sleep(self.service_unavailable_retry_delay_seconds)
+
+    @staticmethod
+    def _http_status_code(exc: BaseException) -> int | None:
+        """Find an HTTP status preserved in a wrapped exception chain."""
+
+        current: BaseException | None = exc
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, urllib.error.HTTPError):
+                return int(current.code)
+            current = current.__cause__ or current.__context__
+        return None
 
     def _file_cache_key(self, path: str | Path) -> tuple[str, int, int]:
         resolved = Path(path).resolve()

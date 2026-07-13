@@ -175,7 +175,7 @@ JUDGE_CHECK_SCHEMA = {
 # - 1 / 1_weak_or_reject: The question-answer item has a blocking formality or structure issue, directly names a person in the question, uses dataset-observer wording, is invalid as a five-option multiple-choice question, or is mainly a "what was the other person doing" query.
 #
 # Scoring instructions:
-# - Decide PASS/FAIL/UNCERTAIN first using the qa_formality rules. Then assign quality_score using this rubric.
+# - Decide PASS/FAIL first using the qa_formality rules. Then assign quality_score using this rubric.
 # - The quality_score is for analysis and training signal; it must not override the pass/fail decision.
 # - Return the score only once, in the top-level final_quality_score field. That field must be the final field in the JSON object.
 # - Also return quality_reason inside the check. Do not return quality_score or quality_flag inside the check.
@@ -184,22 +184,21 @@ JUDGE_CHECK_SCHEMA = {
 # EVIDENCE_GROUNDEDNESS_QUALITY_RUBRIC = """evidence_groundedness quality_score rubric:
 # - 3 / 3_strong: The videos clearly demonstrate the speaker-side anchor and the evidence-provider missing detail; the answer-relevant object, action, or state is plainly visible, temporally aligned with the claims, and central enough that the relation is easy to verify.
 # - 2 / 2_acceptable: The answer is still supported, but the evidence is weaker: the object, action, or state is blurry, brief, partially occluded, peripheral, not the focal point, only visible in a small part of the scene, or the timestamps/claims are somewhat coarse. This can still PASS if the support is sufficient.
-# - 1 / 1_weak_or_reject: The visual support is missing, invented, ambiguous, answerable from the speaker alone, based on unrelated timestamp stitching, or too unclear to verify. This should normally be FAIL or UNCERTAIN.
+# - 1 / 1_weak_or_reject: The visual support is missing, invented, ambiguous, answerable from the speaker alone, based on unrelated timestamp stitching, or too unclear to verify. This should normally be FAIL.
 #
 # Scoring instructions:
-# - Decide PASS/FAIL/UNCERTAIN first using the evidence_groundedness rules. Then assign quality_score using this rubric.
+# - Decide PASS/FAIL first using the evidence_groundedness rules. Then assign quality_score using this rubric.
 # - The quality_score is for analysis and training signal; it must not override the pass/fail decision.
 # - Return the score only once, in the top-level final_quality_score field. That field must be the final field in the JSON object.
 # - Also return quality_reason inside the check. Do not return quality_score or quality_flag inside the check.
 # """
 
 
-DECISION_INSTRUCTIONS = """Binary decision instructions:
-- The first field in the JSON object must be decision, with exactly one value: "P" or "F". Emit the decision field exactly once.
-- Choose "P" only when <check_name> passes the rules below.
-- Choose "F" for a definite violation and also when the available information is too unclear or insufficient to justify passing.
-- Do not emit a separate PASS/FAIL/UNCERTAIN status. The pipeline derives PASS from P and FAIL from F.
-- Make this decision before writing the explanation. Then explain it in checks.<check_name>.reason and provide a fix for F.
+DECISION_INSTRUCTIONS = """PASS/FAIL output encoding:
+- Apply the <check_name> PASS/FAIL rubric below exactly as written.
+- The first field in the JSON object must be decision, emitted exactly once.
+- Encode PASS as decision "P" and FAIL as decision "F".
+- Explain the judgment in checks.<check_name>.reason and provide a fix for a FAIL judgment.
 """
 
 
@@ -697,9 +696,9 @@ qa_formality asks whether the generated question-answer item is natural and well
 - Better qa_formality examples: "Was the stove left on after I walked away?" or "Which mug was still on the counter after I left?" may PASS if supported, because each asks for a specific missing state/location/object.
 - The examples show the distinction only. Do not require or reward copying their templates.
 - Do not fail merely because the wording contains "while" or mentions another person. Fail only when the semantic relation is a shallow concurrent-activity query rather than a speaker-side information need.
-- If semantic_subchecks.other_person_activity_query is FAIL, choose decision F and give feedback telling the generator to ask for a concrete missing object/state/location/outcome instead of another person's activity.
-- If semantic_subchecks.direct_name_leakage is FAIL, choose decision F and give feedback telling the generator to remove participant names from the question.
-- Choose decision P only if the deterministic schema branch passes, the question wording and multiple-choice structure are acceptable, and neither semantic subcheck is FAIL.
+- If semantic_subchecks.other_person_activity_query is FAIL, judge qa_formality as FAIL, include "qa_formality" in blocking_failures, and give feedback telling the generator to ask for a concrete missing object/state/location/outcome instead of another person's activity.
+- If semantic_subchecks.direct_name_leakage is FAIL, judge qa_formality as FAIL, include "qa_formality" in blocking_failures, and give feedback telling the generator to remove participant names from the question.
+- PASS qa_formality only if the deterministic schema branch passes, the question wording and multiple-choice structure are acceptable, and neither semantic subcheck is FAIL.
 
 Deterministic schema branch:
 {json.dumps({"status": schema_status, "errors": schema_errors}, ensure_ascii=False, indent=2)}
@@ -730,10 +729,9 @@ evidence_groundedness asks whether the question-answer item is supported only by
 - Treat required_users[0] as the asker and required_users[1] as the evidence provider.
 - The asker's view should visibly support the contextual anchor described in the item, and the evidence provider's view should visibly support the claimed answer-bearing detail.
 - Do not decide whether either user's video alone is sufficient to select the correct option. Single-user and combined-video sufficiency are evaluated separately by answerability.
-- PASS only when the correct answer and all material evidence, timestamp, and per-user claims are clearly supported by the provided videos or metadata, the asker’s contextual anchor and the evidence provider’s answer-bearing detail form a coherent situated relation, and no claim relies on outside knowledge, invented gaze evidence, or unrelated clip stitching.
+- PASS only when the correct answer and all material evidence, timestamp, and per-user claims are clearly supported by the provided videos or metadata, the asker's contextual anchor and the evidence provider's answer-bearing detail form a coherent situated relation, and no claim relies on outside knowledge, invented gaze evidence, or unrelated clip stitching.
 - FAIL if the question merely stitches unrelated clips by timestamp, or makes a generic comparison of views rather than a situated speaker-side memory gap plus supported missing detail.
 - If 2D gaze projection is unavailable, FAIL invented exact gaze-to-object claims; visible object/action claims are still allowed when grounded in the video itself.
-- Choose decision F if the videos do not clearly support the anchor, the missing detail, the correct option, or the claimed relation; explain that the evidence is unclear or insufficient.
 
 Video set metadata:
 {video_packet_brief(packet)}

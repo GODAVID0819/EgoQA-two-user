@@ -3,7 +3,7 @@
 This analyzer deliberately keeps three concerns separate:
 
 1. basic run statistics (items, generations, attempts, acceptance);
-2. final-attempt PASS/FAIL/UNCERTAIN statistics for all three judges;
+2. final-attempt PASS/FAIL statistics for all three judges;
 3. raw first-decision P/F logits and independently recalculated binary entropy for the
    two model judges. Legacy 1/2/3 run artifacts remain readable.
 
@@ -145,7 +145,7 @@ def status_of(check: Any) -> str:
     if not isinstance(check, dict):
         return "MISSING"
     status = str(check.get("status") or "MISSING").strip().upper()
-    return status if status in {"PASS", "FAIL", "UNCERTAIN"} else status
+    return status if status in {"PASS", "FAIL"} else "MISSING"
 
 
 def recompute_entropy(uncertainty: Any) -> dict[str, Any]:
@@ -342,7 +342,7 @@ def analyze_run(label: str, path: Path) -> dict[str, Any]:
                 "all_three_judges_pass": all(
                     check_statuses[name] == "PASS" for name in JUDGE_NAMES
                 ),
-                "failed_or_uncertain_judges": "|".join(
+                "nonpassing_judges": "|".join(
                     name for name in JUDGE_NAMES if check_statuses[name] != "PASS"
                 ),
             }
@@ -465,7 +465,6 @@ def summarize_judges(item_rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "counts": dict(counts),
             "pass_count": counts.get("PASS", 0),
             "fail_count": counts.get("FAIL", 0),
-            "uncertain_count": counts.get("UNCERTAIN", 0),
             "missing_count": counts.get("MISSING", 0),
             "pass_rate_over_all_items": counts.get("PASS", 0) / total_items,
         }
@@ -476,7 +475,7 @@ def summarize_judges(item_rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         ),
         "failure_combination_counts": dict(
             Counter(
-                str(row["failed_or_uncertain_judges"] or "none") for row in item_rows
+                str(row["nonpassing_judges"] or "none") for row in item_rows
             ).most_common()
         ),
     }
@@ -594,8 +593,8 @@ def run_summary_markdown(runs: Sequence[dict[str, Any]]) -> str:
             "",
             "Each evidence packet contributes only its final attempt to this table.",
             "",
-            "| Run | Judge | PASS | FAIL | UNCERTAIN | MISSING | PASS rate |",
-            "|---|---|---:|---:|---:|---:|---:|",
+            "| Run | Judge | PASS | FAIL | MISSING | PASS rate |",
+            "|---|---|---:|---:|---:|---:|",
         ]
     )
     for run in runs:
@@ -603,8 +602,8 @@ def run_summary_markdown(runs: Sequence[dict[str, Any]]) -> str:
             judge = run["judge_summary"][judge_name]
             lines.append(
                 f"| {run['label']} | {judge_name} | {judge['pass_count']} | "
-                f"{judge['fail_count']} | {judge['uncertain_count']} | "
-                f"{judge['missing_count']} | {display_number(judge['pass_rate_over_all_items'])} |"
+                f"{judge['fail_count']} | {judge['missing_count']} | "
+                f"{display_number(judge['pass_rate_over_all_items'])} |"
             )
     lines.extend(["", "## Joint final-attempt outcomes", ""])
     for run in runs:

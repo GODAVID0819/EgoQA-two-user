@@ -24,8 +24,8 @@ extracts the logits/log probabilities for `P` and `F`, before the model writes
 its explanation. Python derives the structured status from that decision and
 stores binary entropy under `check.decision_uncertainty`.
 `normalized_entropy` divides by `log(2)`. Entropy is diagnostic and does not
-alter acceptance or retry behavior. Cases that previously used UNCERTAIN now
-choose F and explain that the evidence is unclear or insufficient.
+alter acceptance or retry behavior. The active judge contract is binary
+PASS/FAIL; P/F is only its token-level output encoding for entropy capture.
 
 Each answerability condition keeps `choice` as its first JSON field. When the
 model directly chooses A-E, the pipeline captures all five choice weights and

@@ -4,6 +4,7 @@ from egolife_two_user_qa.analyze_entropy_trials import recompute_entropy
 from egolife_two_user_qa.prompts import (
     build_answerability_prompt,
     build_evidence_groundedness_judge_prompt,
+    build_qa_formality_judge_prompt,
 )
 from egolife_two_user_qa.qwen3vl_runner import (
     choice_logprobs_from_top_candidates,
@@ -176,11 +177,22 @@ def test_unclear_evidence_is_binary_f_with_explanation() -> None:
     assert check["decision_uncertainty"]["normalized_entropy"] > 0.9
 
 
-def test_judge_prompt_puts_decision_before_explanation_without_quality_rubric() -> None:
+def test_judge_prompt_preserves_pass_fail_rubric_with_p_f_encoding() -> None:
     prompt = build_evidence_groundedness_judge_prompt({}, {})
+    formality_prompt = build_qa_formality_judge_prompt({}, {})
     output_contract = prompt[prompt.rfind("Return exactly one valid JSON object") :]
 
-    assert 'first field in the JSON object must be decision' in prompt
+    assert "Apply the evidence_groundedness PASS/FAIL rubric below exactly as written" in prompt
+    assert 'Encode PASS as decision "P" and FAIL as decision "F"' in prompt
+    assert "exists only to expose the decision-token logits for external entropy analysis" in prompt
+    assert "It does not change the rubric, rejection criteria, or acceptance gate" in prompt
+    assert "PASS only when the correct answer and all material evidence" in prompt
+    assert "Choose F when" not in prompt
+    assert "default to F" not in prompt
+    assert "judge qa_formality as FAIL" in formality_prompt
+    assert "PASS qa_formality only if" in formality_prompt
+    assert "choose decision F" not in formality_prompt
+    assert "Choose decision P" not in formality_prompt
     assert output_contract.index('"decision"') < output_contract.index('"checks"')
     assert '"status"' not in output_contract
     assert "quality_score rubric" not in prompt
