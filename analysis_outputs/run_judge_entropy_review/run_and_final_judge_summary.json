@@ -1,0 +1,158 @@
+{
+  "greedy": {
+    "source_path": "C:\\Users\\haoya\\Downloads\\qa_mcq.intermediate_greedy_new.jsonl",
+    "basic_summary": {
+      "total_items": 50,
+      "accepted_count": 21,
+      "rejected_count": 29,
+      "acceptance_rate": 0.42,
+      "rejection_rate": 0.58,
+      "total_attempts": 123,
+      "total_candidate_generations": 123,
+      "average_attempts_per_item": 2.46,
+      "median_attempts_per_item": 3.0,
+      "minimum_attempts": 1,
+      "maximum_attempts": 3,
+      "accepted_on_first_attempt_count": 9,
+      "accepted_on_first_attempt_rate": 0.18,
+      "attempt_count_distribution": {
+        "1": 9,
+        "2": 9,
+        "3": 32
+      },
+      "question_type_distribution": {
+        "neutral": 50
+      },
+      "status_distribution": {
+        "rejected": 29,
+        "accepted": 21
+      }
+    },
+    "final_attempt_judges": {
+      "qa_formality": {
+        "counts": {
+          "PASS": 40,
+          "FAIL": 10
+        },
+        "pass_count": 40,
+        "fail_count": 10,
+        "uncertain_count": 0,
+        "missing_count": 0,
+        "pass_rate_over_all_items": 0.8
+      },
+      "evidence_groundedness": {
+        "counts": {
+          "PASS": 38,
+          "FAIL": 12
+        },
+        "pass_count": 38,
+        "fail_count": 12,
+        "uncertain_count": 0,
+        "missing_count": 0,
+        "pass_rate_over_all_items": 0.76
+      },
+      "answerability": {
+        "counts": {
+          "FAIL": 22,
+          "PASS": 28
+        },
+        "pass_count": 28,
+        "fail_count": 22,
+        "uncertain_count": 0,
+        "missing_count": 0,
+        "pass_rate_over_all_items": 0.56
+      },
+      "joint": {
+        "all_three_pass_count": 21,
+        "all_three_pass_rate": 0.42,
+        "failure_combination_counts": {
+          "none": 21,
+          "answerability": 8,
+          "evidence_groundedness|answerability": 7,
+          "qa_formality|answerability": 6,
+          "evidence_groundedness": 4,
+          "qa_formality": 3,
+          "qa_formality|evidence_groundedness|answerability": 1
+        }
+      }
+    }
+  },
+  "sampling": {
+    "source_path": "C:\\Users\\haoya\\Downloads\\qa_mcq.intermediate_sampling_new.jsonl",
+    "basic_summary": {
+      "total_items": 50,
+      "accepted_count": 22,
+      "rejected_count": 28,
+      "acceptance_rate": 0.44,
+      "rejection_rate": 0.56,
+      "total_attempts": 121,
+      "total_candidate_generations": 121,
+      "average_attempts_per_item": 2.42,
+      "median_attempts_per_item": 3.0,
+      "minimum_attempts": 1,
+      "maximum_attempts": 3,
+      "accepted_on_first_attempt_count": 12,
+      "accepted_on_first_attempt_rate": 0.24,
+      "attempt_count_distribution": {
+        "1": 12,
+        "2": 5,
+        "3": 33
+      },
+      "question_type_distribution": {
+        "neutral": 50
+      },
+      "status_distribution": {
+        "rejected": 28,
+        "accepted": 22
+      }
+    },
+    "final_attempt_judges": {
+      "qa_formality": {
+        "counts": {
+          "PASS": 42,
+          "FAIL": 8
+        },
+        "pass_count": 42,
+        "fail_count": 8,
+        "uncertain_count": 0,
+        "missing_count": 0,
+        "pass_rate_over_all_items": 0.84
+      },
+      "evidence_groundedness": {
+        "counts": {
+          "FAIL": 15,
+          "PASS": 35
+        },
+        "pass_count": 35,
+        "fail_count": 15,
+        "uncertain_count": 0,
+        "missing_count": 0,
+        "pass_rate_over_all_items": 0.7
+      },
+      "answerability": {
+        "counts": {
+          "FAIL": 22,
+          "PASS": 28
+        },
+        "pass_count": 28,
+        "fail_count": 22,
+        "uncertain_count": 0,
+        "missing_count": 0,
+        "pass_rate_over_all_items": 0.56
+      },
+      "joint": {
+        "all_three_pass_count": 22,
+        "all_three_pass_rate": 0.44,
+        "failure_combination_counts": {
+          "none": 22,
+          "evidence_groundedness|answerability": 9,
+          "answerability": 8,
+          "qa_formality|evidence_groundedness|answerability": 3,
+          "evidence_groundedness": 3,
+          "qa_formality": 3,
+          "qa_formality|answerability": 2
+        }
+      }
+    }
+  }
+}

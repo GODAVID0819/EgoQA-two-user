@@ -43,15 +43,17 @@ VIDEO_FIRST_JUDGE_CHECKS = {
     "evidence_groundedness",
     "answerability",
 }
-QUALITY_SCORED_JUDGE_CHECKS = {
+DECISION_ENTROPY_JUDGE_CHECKS = {
     "qa_formality",
     "evidence_groundedness",
 }
-QUALITY_FLAGS = {
-    1: "1_weak_or_reject",
-    2: "2_acceptable",
-    3: "3_strong",
-}
+# Archived inactive scoring schema:
+# QUALITY_SCORED_JUDGE_CHECKS = {"qa_formality", "evidence_groundedness"}
+# QUALITY_FLAGS = {
+#     1: "1_weak_or_reject",
+#     2: "2_acceptable",
+#     3: "3_strong",
+# }
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
@@ -171,19 +173,43 @@ def validate_qa_item(item: dict[str, Any], *, strict_review: bool = False) -> li
                         continue
                     if str(check_value.get("status", "")).upper() != "PASS":
                         errors.append(f"judge check {check_name} must be PASS in strict mode")
-                    if check_name in QUALITY_SCORED_JUDGE_CHECKS:
-                        score = check_value.get("quality_score")
-                        if not isinstance(score, int) or score not in {1, 2, 3}:
+                    # Archived inactive strict scoring validation:
+                    # if check_name in QUALITY_SCORED_JUDGE_CHECKS:
+                    #     require quality_score in {1, 2, 3}, its quality_flag and
+                    #     quality_reason, plus available 1/2/3 quality_uncertainty.
+                    if check_name in DECISION_ENTROPY_JUDGE_CHECKS:
+                        decision = str(check_value.get("decision") or "").upper()
+                        if decision not in {"P", "F"}:
                             errors.append(
-                                f"judge check {check_name} must include quality_score 1, 2, or 3"
+                                f"judge check {check_name} must include derived decision P or F"
                             )
-                            continue
-                        if check_value.get("quality_flag") != QUALITY_FLAGS[score]:
+                        expected_decision = (
+                            "P"
+                            if str(check_value.get("status") or "").upper() == "PASS"
+                            else "F"
+                        )
+                        if decision in {"P", "F"} and decision != expected_decision:
                             errors.append(
-                                f"judge check {check_name} must include quality_flag {QUALITY_FLAGS[score]}"
+                                f"judge check {check_name} decision must match its effective status"
                             )
-                        if not str(check_value.get("quality_reason") or "").strip():
-                            errors.append(f"judge check {check_name} must include quality_reason")
+                        uncertainty = check_value.get("decision_uncertainty")
+                        if not isinstance(uncertainty, dict) or uncertainty.get("available") is not True:
+                            errors.append(
+                                f"judge check {check_name} must include available P/F decision entropy"
+                            )
+                        else:
+                            probabilities = uncertainty.get("probabilities")
+                            if not isinstance(probabilities, dict) or any(
+                                choice not in probabilities for choice in ("P", "F")
+                            ):
+                                errors.append(
+                                    f"judge check {check_name} must include probabilities for P and F"
+                                )
+                            normalized_entropy = uncertainty.get("normalized_entropy")
+                            if not isinstance(normalized_entropy, (int, float)) or not 0.0 <= float(normalized_entropy) <= 1.0:
+                                errors.append(
+                                    f"judge check {check_name} must include normalized_entropy in [0, 1]"
+                                )
 
         answerability = review.get("answerability")
         if not isinstance(answerability, dict):

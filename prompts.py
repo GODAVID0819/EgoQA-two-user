@@ -161,36 +161,45 @@ These are taste examples, not templates. Do not copy their wording, objects, or 
 
 
 JUDGE_CHECK_SCHEMA = {
-    "status": "PASS/FAIL/UNCERTAIN",
     "reason": "short evidence-grounded explanation",
-    "fix": "specific repair instruction if the status is FAIL or UNCERTAIN; empty string if PASS",
-    "quality_score": "1/2/3 using the check-specific quality rubric",
-    "quality_flag": "1_weak_or_reject, 2_acceptable, or 3_strong",
-    "quality_reason": "brief reason for the quality score; this does not determine pass/fail status",
+    "fix": "specific repair instruction if decision is F; empty string if decision is P",
 }
 
 
-QA_FORMALITY_QUALITY_RUBRIC = """qa_formality quality_score rubric:
-- 3 / 3_strong: The JSON and multiple-choice structure are clean, the wording is natural and specific, the question preserves first-person or shared-memory perspective without direct names, and it asks for a concrete missing object, state, location, or outcome rather than a shallow activity report.
-- 2 / 2_acceptable: The question-answer item is acceptable but less elegant: wording is mildly generic, stiff, or template-like; options are merely adequate; or the perspective is understandable but not especially natural. It still has no blocking structure, name, or activity-query problems.
-- 1 / 1_weak_or_reject: The question-answer item has a blocking formality or structure issue, directly names a person in the question, uses dataset-observer wording, is invalid as a five-option multiple-choice question, or is mainly a "what was the other person doing" query.
+# Archived inactive 1/2/3 quality rubrics. The active judges now make P/F their
+# first generated decision so its logits measure the evidence-level judgment.
+#
+# QA_FORMALITY_QUALITY_RUBRIC = """qa_formality quality_score rubric:
+# - 3 / 3_strong: The JSON and multiple-choice structure are clean, the wording is natural and specific, the question preserves first-person or shared-memory perspective without direct names, and it asks for a concrete missing object, state, location, or outcome rather than a shallow activity report.
+# - 2 / 2_acceptable: The question-answer item is acceptable but less elegant: wording is mildly generic, stiff, or template-like; options are merely adequate; or the perspective is understandable but not especially natural. It still has no blocking structure, name, or activity-query problems.
+# - 1 / 1_weak_or_reject: The question-answer item has a blocking formality or structure issue, directly names a person in the question, uses dataset-observer wording, is invalid as a five-option multiple-choice question, or is mainly a "what was the other person doing" query.
+#
+# Scoring instructions:
+# - Decide PASS/FAIL/UNCERTAIN first using the qa_formality rules. Then assign quality_score using this rubric.
+# - The quality_score is for analysis and training signal; it must not override the pass/fail decision.
+# - Return the score only once, in the top-level final_quality_score field. That field must be the final field in the JSON object.
+# - Also return quality_reason inside the check. Do not return quality_score or quality_flag inside the check.
+# """
+#
+# EVIDENCE_GROUNDEDNESS_QUALITY_RUBRIC = """evidence_groundedness quality_score rubric:
+# - 3 / 3_strong: The videos clearly demonstrate the speaker-side anchor and the evidence-provider missing detail; the answer-relevant object, action, or state is plainly visible, temporally aligned with the claims, and central enough that the relation is easy to verify.
+# - 2 / 2_acceptable: The answer is still supported, but the evidence is weaker: the object, action, or state is blurry, brief, partially occluded, peripheral, not the focal point, only visible in a small part of the scene, or the timestamps/claims are somewhat coarse. This can still PASS if the support is sufficient.
+# - 1 / 1_weak_or_reject: The visual support is missing, invented, ambiguous, answerable from the speaker alone, based on unrelated timestamp stitching, or too unclear to verify. This should normally be FAIL or UNCERTAIN.
+#
+# Scoring instructions:
+# - Decide PASS/FAIL/UNCERTAIN first using the evidence_groundedness rules. Then assign quality_score using this rubric.
+# - The quality_score is for analysis and training signal; it must not override the pass/fail decision.
+# - Return the score only once, in the top-level final_quality_score field. That field must be the final field in the JSON object.
+# - Also return quality_reason inside the check. Do not return quality_score or quality_flag inside the check.
+# """
 
-Scoring instructions:
-- Decide PASS/FAIL/UNCERTAIN first using the qa_formality rules. Then assign quality_score using this rubric.
-- The quality_score is for analysis and training signal; it must not override the pass/fail decision.
-- Also return quality_flag and quality_reason.
-"""
 
-
-EVIDENCE_GROUNDEDNESS_QUALITY_RUBRIC = """evidence_groundedness quality_score rubric:
-- 3 / 3_strong: The videos clearly demonstrate the speaker-side anchor and the evidence-provider missing detail; the answer-relevant object, action, or state is plainly visible, temporally aligned with the claims, and central enough that the relation is easy to verify.
-- 2 / 2_acceptable: The answer is still supported, but the evidence is weaker: the object, action, or state is blurry, brief, partially occluded, peripheral, not the focal point, only visible in a small part of the scene, or the timestamps/claims are somewhat coarse. This can still PASS if the support is sufficient.
-- 1 / 1_weak_or_reject: The visual support is missing, invented, ambiguous, answerable from the speaker alone, based on unrelated timestamp stitching, or too unclear to verify. This should normally be FAIL or UNCERTAIN.
-
-Scoring instructions:
-- Decide PASS/FAIL/UNCERTAIN first using the evidence_groundedness rules. Then assign quality_score using this rubric.
-- The quality_score is for analysis and training signal; it must not override the pass/fail decision.
-- Also return quality_flag and quality_reason.
+DECISION_INSTRUCTIONS = """Binary decision instructions:
+- The first field in the JSON object must be decision, with exactly one value: "P" or "F". Emit the decision field exactly once.
+- Choose "P" only when <check_name> passes the rules below.
+- Choose "F" for a definite violation and also when the available information is too unclear or insufficient to justify passing.
+- Do not emit a separate PASS/FAIL/UNCERTAIN status. The pipeline derives PASS from P and FAIL from F.
+- Make this decision before writing the explanation. Then explain it in checks.<check_name>.reason and provide a fix for F.
 """
 
 
@@ -198,7 +207,7 @@ QA_FORMALITY_CHECK_SCHEMA = {
     **JUDGE_CHECK_SCHEMA,
     "semantic_subchecks": {
         "other_person_activity_query": {
-            "status": "PASS/FAIL/UNCERTAIN",
+            "status": "PASS/FAIL",
             "reason": (
                 "whether the question merely asks what another person was doing while the speaker "
                 "was doing something, instead of asking for a concrete missing detail tied to the "
@@ -206,7 +215,7 @@ QA_FORMALITY_CHECK_SCHEMA = {
             ),
         },
         "direct_name_leakage": {
-            "status": "PASS/FAIL/UNCERTAIN",
+            "status": "PASS/FAIL",
             "reason": (
                 "whether the question directly names a required user or otherwise exposes a "
                 "participant name that could give away who supplies the answer"
@@ -217,6 +226,7 @@ QA_FORMALITY_CHECK_SCHEMA = {
 
 
 JUDGE_SCHEMA = {
+    "decision": "P/F",
     "review_passed": True,
     "checks": {
         "qa_formality": QA_FORMALITY_CHECK_SCHEMA,
@@ -231,6 +241,7 @@ JUDGE_SCHEMA = {
 def judge_schema_for_check(check_name: str) -> dict[str, Any]:
     check_schema = QA_FORMALITY_CHECK_SCHEMA if check_name == "qa_formality" else JUDGE_CHECK_SCHEMA
     return {
+        "decision": "P/F",
         "review_passed": True,
         "checks": {
             check_name: check_schema,
@@ -670,6 +681,8 @@ def build_qa_formality_judge_prompt(
 
 You will see a generated question-answer item plus deterministic schema/formality results. Judge only qa_formality.
 
+{DECISION_INSTRUCTIONS.replace("<check_name>", "qa_formality")}
+
 qa_formality asks whether the generated question-answer item is natural and well-formed:
 - The question should sound like a natural first-person or shared-memory question from someone in the situation, not like a dataset observer.
 - The question-answer item must be a valid five-option multiple-choice question: exactly five non-empty, mutually exclusive options, labeled A-E, with exactly one correct answer option; answer exactly matches options[correct].
@@ -684,11 +697,9 @@ qa_formality asks whether the generated question-answer item is natural and well
 - Better qa_formality examples: "Was the stove left on after I walked away?" or "Which mug was still on the counter after I left?" may PASS if supported, because each asks for a specific missing state/location/object.
 - The examples show the distinction only. Do not require or reward copying their templates.
 - Do not fail merely because the wording contains "while" or mentions another person. Fail only when the semantic relation is a shallow concurrent-activity query rather than a speaker-side information need.
-- If semantic_subchecks.other_person_activity_query is FAIL, set checks.qa_formality.status to FAIL, include "qa_formality" in blocking_failures, and give feedback telling the generator to ask for a concrete missing object/state/location/outcome instead of another person's activity.
-- If semantic_subchecks.direct_name_leakage is FAIL, set checks.qa_formality.status to FAIL, include "qa_formality" in blocking_failures, and give feedback telling the generator to remove participant names from the question.
-- PASS qa_formality only if the deterministic schema branch passes, the question wording and multiple-choice structure are acceptable, and neither semantic subcheck is FAIL.
-
-{QA_FORMALITY_QUALITY_RUBRIC}
+- If semantic_subchecks.other_person_activity_query is FAIL, choose decision F and give feedback telling the generator to ask for a concrete missing object/state/location/outcome instead of another person's activity.
+- If semantic_subchecks.direct_name_leakage is FAIL, choose decision F and give feedback telling the generator to remove participant names from the question.
+- Choose decision P only if the deterministic schema branch passes, the question wording and multiple-choice structure are acceptable, and neither semantic subcheck is FAIL.
 
 Deterministic schema branch:
 {json.dumps({"status": schema_status, "errors": schema_errors}, ensure_ascii=False, indent=2)}
@@ -711,6 +722,8 @@ def build_evidence_groundedness_judge_prompt(qa_item: dict[str, Any], packet: di
 
 You will see the same raw egocentric videos used by the generator. Judge only evidence_groundedness.
 
+{DECISION_INSTRUCTIONS.replace("<check_name>", "evidence_groundedness")}
+
 evidence_groundedness asks whether the question-answer item is supported only by the provided videos and metadata:
 - The correct answer, evidence claims, referred timestamps, and per-user claims must be grounded in concrete visible moments or supplied metadata.
 - Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
@@ -720,9 +733,7 @@ evidence_groundedness asks whether the question-answer item is supported only by
 - PASS only when the correct answer and all material evidence, timestamp, and per-user claims are clearly supported by the provided videos or metadata, the asker’s contextual anchor and the evidence provider’s answer-bearing detail form a coherent situated relation, and no claim relies on outside knowledge, invented gaze evidence, or unrelated clip stitching.
 - FAIL if the question merely stitches unrelated clips by timestamp, or makes a generic comparison of views rather than a situated speaker-side memory gap plus supported missing detail.
 - If 2D gaze projection is unavailable, FAIL invented exact gaze-to-object claims; visible object/action claims are still allowed when grounded in the video itself.
-- UNCERTAIN if the videos do not clearly support the anchor, the missing detail, the correct option, or the claimed relation.
-
-{EVIDENCE_GROUNDEDNESS_QUALITY_RUBRIC}
+- Choose decision F if the videos do not clearly support the anchor, the missing detail, the correct option, or the claimed relation; explain that the evidence is unclear or insufficient.
 
 Video set metadata:
 {video_packet_brief(packet)}
@@ -754,6 +765,7 @@ Options:
 {options}
 
 Rules:
+- The first field in the JSON object must be choice. Emit the choice field exactly once, before writing any explanation.
 - Choose A, B, C, D, or E only if the provided videos are sufficient.
 - If the condition does not contain enough evidence, set choice to "insufficient".
 - Do not guess from common sense or from the answer options.

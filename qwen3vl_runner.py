@@ -6,6 +6,7 @@ import base64
 import json
 import mimetypes
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -23,6 +24,99 @@ DEFAULT_MAX_IMAGE_PIXELS = 262144
 GENERATOR_DECODING_MODES = ("greedy", "sampling")
 DEFAULT_SAMPLING_TEMPERATURE = 0.7
 DEFAULT_SAMPLING_TOP_P = 0.9
+# Archived inactive score-token defaults:
+# DEFAULT_CHOICE_FIELD = "final_quality_score"
+# DEFAULT_SCORE_CHOICES = ("1", "2", "3")
+DEFAULT_CHOICE_FIELD = "decision"
+DEFAULT_DECISION_CHOICES = ("P", "F")
+
+
+def locate_choice_token(
+    token_texts: list[str],
+    *,
+    field_name: str = DEFAULT_CHOICE_FIELD,
+    choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
+) -> dict[str, Any] | None:
+    """Locate a JSON choice value and the token piece containing it.
+
+    Token APIs expose pieces rather than character offsets.  Returning the
+    exact alternative token spellings lets each backend look up P/F at the same
+    decoding step, including tokenizers that fold JSON punctuation or leading
+    whitespace into a choice token.
+    """
+
+    text = "".join(token_texts)
+    choice_pattern = "|".join(re.escape(choice) for choice in choices)
+    pattern = re.compile(
+        rf'["\']{re.escape(field_name)}["\']\s*:\s*["\']?({choice_pattern})["\']?'
+        r'(?![A-Za-z0-9_/])'
+    )
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return None
+    match = matches[0]
+    choice = match.group(1)
+    choice_start = match.start(1)
+    cursor = 0
+    for index, piece in enumerate(token_texts):
+        piece_end = cursor + len(piece)
+        if cursor <= choice_start < piece_end:
+            offset = choice_start - cursor
+            alternatives = {
+                candidate: piece[:offset] + candidate + piece[offset + len(choice) :]
+                for candidate in choices
+            }
+            return {
+                "token_index": index,
+                "generated_choice": choice,
+                "token_piece": piece,
+                "alternative_token_pieces": alternatives,
+            }
+        cursor = piece_end
+    return None
+
+
+def choice_logprobs_from_top_candidates(
+    token_texts: list[str],
+    top_candidates: list[list[dict[str, Any]]],
+    *,
+    field_name: str = DEFAULT_CHOICE_FIELD,
+    choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
+) -> dict[str, Any]:
+    """Extract log probabilities for all choices from an API top-k response."""
+
+    located = locate_choice_token(
+        token_texts,
+        field_name=field_name,
+        choices=choices,
+    )
+    if located is None:
+        return {"available": False, "reason": f"could not locate JSON field {field_name!r}"}
+    index = int(located["token_index"])
+    if index >= len(top_candidates):
+        return {"available": False, "reason": "choice token has no matching logprob step"}
+    candidates = top_candidates[index]
+    by_token = {
+        str(candidate.get("token")): float(candidate["logprob"])
+        for candidate in candidates
+        if candidate.get("token") is not None and candidate.get("logprob") is not None
+    }
+    expected = located["alternative_token_pieces"]
+    missing = [choice for choice in choices if expected[choice] not in by_token]
+    if missing:
+        return {
+            "available": False,
+            "reason": "top-logprobs response omitted choice token(s): " + ", ".join(missing),
+            "generated_choice": located["generated_choice"],
+            "token_index": index,
+        }
+    return {
+        "available": True,
+        "choice_logprobs": {choice: by_token[expected[choice]] for choice in choices},
+        "weight_type": "log_probability",
+        "generated_choice": located["generated_choice"],
+        "token_index": index,
+    }
 
 
 class Generator(Protocol):
@@ -284,6 +378,49 @@ class Qwen3VLTransformersRunner:
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
     ) -> str:
+        result = self._generate(
+            prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            decoding_mode=decoding_mode,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+        )
+        return str(result["text"])
+
+    def generate_with_choice_logits(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        *,
+        field_name: str = DEFAULT_CHOICE_FIELD,
+        choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
+    ) -> dict[str, Any]:
+        """Generate text and capture exact local logits at a JSON choice token."""
+
+        return self._generate(
+            prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            choice_field=field_name,
+            choices=choices,
+        )
+
+    def _generate(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
+        *,
+        choice_field: str | None = None,
+        choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
+    ) -> dict[str, Any]:
         image_paths = image_paths or []
         video_paths = video_paths or []
         content: list[dict[str, Any]] = [
@@ -350,6 +487,39 @@ class Qwen3VLTransformersRunner:
             top_p=top_p,
             top_k=top_k,
         )
+        capture = None
+        if choice_field:
+            tokenizer = getattr(self.processor, "tokenizer", self.processor)
+            token_ids: set[int] = set()
+            whitespace_prefixes = ["", " ", "  ", "   ", "    ", "\n", "\n  ", "\n    ", "\t"]
+            json_prefixes = ["", '"', ":", ':"', ': "', '{"', '{ "']
+            json_suffixes = ["", '"', '",', '"}', '"\n']
+            for whitespace in whitespace_prefixes:
+                for json_prefix in json_prefixes:
+                    for json_suffix in json_suffixes:
+                        for choice in choices:
+                            encoded = tokenizer.encode(
+                                whitespace + json_prefix + choice + json_suffix,
+                                add_special_tokens=False,
+                            )
+                            if len(encoded) == 1:
+                                token_ids.add(int(encoded[0]))
+
+            class ChoiceLogitCapture:
+                def __init__(self, ids: list[int]) -> None:
+                    self.ids = ids
+                    self.steps: list[Any] = []
+
+                def __call__(self, input_ids: Any, scores: Any) -> Any:
+                    # Advanced indexing creates a tiny tensor; retaining it does
+                    # not retain the full vocabulary logits for every step.
+                    self.steps.append(scores[0, self.ids].detach())
+                    return scores
+
+            capture = ChoiceLogitCapture(sorted(token_ids))
+            from transformers import LogitsProcessorList
+
+            generate_kwargs["logits_processor"] = LogitsProcessorList([capture])
         with self.torch.inference_mode():
             generated = self.model.generate(
                 **inputs,
@@ -366,11 +536,64 @@ class Qwen3VLTransformersRunner:
             out_ids[len(in_ids) :]
             for in_ids, out_ids in zip(inputs.input_ids, generated)
         ]
-        return self.processor.batch_decode(
+        decoded = self.processor.batch_decode(
             trimmed,
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False,
         )[0].strip()
+        result: dict[str, Any] = {"text": decoded}
+        if not choice_field or capture is None:
+            return result
+
+        tokenizer = getattr(self.processor, "tokenizer", self.processor)
+        trimmed_token_ids = [int(token_id) for token_id in trimmed[0].tolist()]
+        token_texts = [
+            tokenizer.decode(
+                [token_id],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+            for token_id in trimmed_token_ids
+        ]
+        located = locate_choice_token(token_texts, field_name=choice_field, choices=choices)
+        if located is None:
+            result["choice_logits"] = {
+                "available": False,
+                "reason": f"could not locate JSON field {choice_field!r}",
+            }
+            return result
+        index = int(located["token_index"])
+        if index >= len(capture.steps):
+            result["choice_logits"] = {
+                "available": False,
+                "reason": "choice token has no captured logits step",
+            }
+            return result
+        id_to_position = {token_id: position for position, token_id in enumerate(capture.ids)}
+        alternative_ids: dict[str, int] = {}
+        for choice, piece in located["alternative_token_pieces"].items():
+            encoded = tokenizer.encode(piece, add_special_tokens=False)
+            if len(encoded) != 1 or int(encoded[0]) not in id_to_position:
+                result["choice_logits"] = {
+                    "available": False,
+                    "reason": f"choice {choice!r} is not a captured single token at the decision step",
+                    "generated_choice": located["generated_choice"],
+                    "token_index": index,
+                }
+                return result
+            alternative_ids[choice] = int(encoded[0])
+        selected = capture.steps[index].float().cpu().tolist()
+        result["choice_logits"] = {
+            "available": True,
+            "choice_logits": {
+                choice: float(selected[id_to_position[token_id]])
+                for choice, token_id in alternative_ids.items()
+            },
+            "weight_type": "logit",
+            "generated_choice": located["generated_choice"],
+            "token_index": index,
+        }
+        return result
 
 
 class OpenAICompatibleLocalRunner:
@@ -403,6 +626,62 @@ class OpenAICompatibleLocalRunner:
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
     ) -> str:
+        data = self._generate_response(
+            prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            decoding_mode=decoding_mode,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        return data["choices"][0]["message"]["content"].strip()
+
+    def generate_with_choice_logits(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        *,
+        field_name: str = DEFAULT_CHOICE_FIELD,
+        choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
+    ) -> dict[str, Any]:
+        data = self._generate_response(
+            prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            include_logprobs=True,
+        )
+        choice = data["choices"][0]
+        text = str(choice["message"]["content"]).strip()
+        content_logprobs = ((choice.get("logprobs") or {}).get("content") or [])
+        token_texts = [str(item.get("token") or "") for item in content_logprobs]
+        top_candidates = []
+        for item in content_logprobs:
+            rows = list(item.get("top_logprobs") or [])
+            if item.get("token") is not None and item.get("logprob") is not None:
+                rows.append({"token": item["token"], "logprob": item["logprob"]})
+            top_candidates.append(rows)
+        return {
+            "text": text,
+            "choice_logits": choice_logprobs_from_top_candidates(
+                token_texts,
+                top_candidates,
+                field_name=field_name,
+                choices=choices,
+            ),
+        }
+
+    def _generate_response(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        *,
+        include_logprobs: bool = False,
+    ) -> dict[str, Any]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for path in image_paths or []:
             content.append({"type": "image_url", "image_url": {"url": image_to_data_url(path)}})
@@ -423,6 +702,9 @@ class OpenAICompatibleLocalRunner:
         }
         if decoding_mode == "sampling":
             payload["top_p"] = top_p
+        if include_logprobs:
+            payload["logprobs"] = True
+            payload["top_logprobs"] = 20
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
@@ -434,7 +716,7 @@ class OpenAICompatibleLocalRunner:
         )
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return data["choices"][0]["message"]["content"].strip()
+        return data
 
 
 class GeminiRunner:
@@ -600,6 +882,49 @@ class GeminiRunner:
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
     ) -> str:
+        result = self._generate(
+            prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            decoding_mode=decoding_mode,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+        )
+        return str(result["text"])
+
+    def generate_with_choice_logits(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        *,
+        field_name: str = DEFAULT_CHOICE_FIELD,
+        choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
+    ) -> dict[str, Any]:
+        return self._generate(
+            prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            include_logprobs=True,
+            choice_field=field_name,
+            choices=choices,
+        )
+
+    def _generate(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
+        *,
+        include_logprobs: bool = False,
+        choice_field: str = DEFAULT_CHOICE_FIELD,
+        choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
+    ) -> dict[str, Any]:
         if decoding_mode not in GENERATOR_DECODING_MODES:
             raise ValueError(f"unknown decoding_mode: {decoding_mode}")
         image_paths = image_paths or []
@@ -622,6 +947,9 @@ class GeminiRunner:
             generation_config["topP"] = top_p
             if top_k is not None:
                 generation_config["topK"] = top_k
+        if include_logprobs:
+            generation_config["responseLogprobs"] = True
+            generation_config["logprobs"] = 20
         payload = {
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": generation_config,
@@ -643,7 +971,37 @@ class GeminiRunner:
             f"gemini_generate_done model={self.model_id} seconds={time.time() - start:.1f} output_chars={len(text)}",
             flush=True,
         )
-        return text
+        result: dict[str, Any] = {"text": text}
+        if include_logprobs:
+            logprobs_result = candidates[0].get("logprobsResult") or {}
+            chosen = list(logprobs_result.get("chosenCandidates") or [])
+            top = list(logprobs_result.get("topCandidates") or [])
+            token_texts = [str(item.get("token") or "") for item in chosen]
+            top_candidates = []
+            for index, row in enumerate(top):
+                candidate_rows = [
+                    {
+                        "token": item.get("token"),
+                        "logprob": item.get("logProbability"),
+                    }
+                    for item in row.get("candidates") or []
+                    if isinstance(item, dict)
+                ]
+                if index < len(chosen):
+                    candidate_rows.append(
+                        {
+                            "token": chosen[index].get("token"),
+                            "logprob": chosen[index].get("logProbability"),
+                        }
+                    )
+                top_candidates.append(candidate_rows)
+            result["choice_logits"] = choice_logprobs_from_top_candidates(
+                token_texts,
+                top_candidates,
+                field_name=choice_field,
+                choices=choices,
+            )
+        return result
 
 
 class DryRunRunner:

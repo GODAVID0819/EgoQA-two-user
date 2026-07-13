@@ -18,6 +18,35 @@ old deterministic schema checks are not a separate pre-judger gate anymore; they
 are stored as `checks.qa_formality.schema_branch` and merged with the model
 qa_formality branch.
 
+The two model judges emit `decision` as the first JSON field, with `P` for PASS
+and `F` for FAIL. At that first answer-bearing decoding step the pipeline
+extracts the logits/log probabilities for `P` and `F`, before the model writes
+its explanation. Python derives the structured status from that decision and
+stores binary entropy under `check.decision_uncertainty`.
+`normalized_entropy` divides by `log(2)`. Entropy is diagnostic and does not
+alter acceptance or retry behavior. Cases that previously used UNCERTAIN now
+choose F and explain that the evidence is unclear or insufficient.
+
+Each answerability condition keeps `choice` as its first JSON field. When the
+model directly chooses A-E, the pipeline captures all five choice weights and
+stores entropy under `evaluation.choice_uncertainty`, normalized by `log(5)`.
+An `insufficient` response has no A-E entropy and is marked unavailable. This
+metadata is diagnostic only; `answerability_gate()` continues to use only the
+parsed choice under the existing single-user/subset/combined rules.
+
+Only the post-run analyzer computes `selection_sort_key` for evaluation and
+review prioritization. Sorting it ascending implements
+`P low H > P high H > F high H > F low H` without hard-coding an arbitrary
+boundary between high and low entropy. The generation loop never reads or
+stores this key, so it cannot affect model output, acceptance, or retries.
+
+<!-- Archived inactive 1/2/3 scoring pipeline:
+The rubric judges emitted `final_quality_score`, extracted weights for tokens
+`1`, `2`, and `3`, stored `quality_score`, `quality_flag`, `quality_reason`, and
+`quality_uncertainty`, and summarized them under `quality_uncertainty_summary`.
+The score and entropy did not override the independent PASS/FAIL gate.
+-->
+
 # EgoLife Video-First QA Judger 设计说明
 
 这份 note 记录为什么要把 EgoLife two-user QA 的 judger 拆成多个 blocking dimensions。它的目标不是替代 answerability test，而是在更早阶段发现坏问题，并给 generator 提供可执行的修改反馈。

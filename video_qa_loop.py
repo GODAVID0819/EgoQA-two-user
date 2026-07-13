@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import itertools
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ from .prompts import (
     build_video_generation_prompt,
 )
 from .qwen3vl_runner import (
+    DEFAULT_CHOICE_FIELD,
+    DEFAULT_DECISION_CHOICES,
     DEFAULT_MODEL_ID,
     DEFAULT_SAMPLING_TEMPERATURE,
     DEFAULT_SAMPLING_TOP_P,
@@ -60,15 +63,17 @@ BLOCKING_JUDGE_CHECKS = (
     "evidence_groundedness",
     "answerability",
 )
-QUALITY_SCORED_JUDGE_CHECKS = {
+DECISION_ENTROPY_JUDGE_CHECKS = {
     "qa_formality",
     "evidence_groundedness",
 }
-QUALITY_FLAGS = {
-    1: "1_weak_or_reject",
-    2: "2_acceptable",
-    3: "3_strong",
-}
+# Archived inactive scoring constants:
+# QUALITY_SCORED_JUDGE_CHECKS = {"qa_formality", "evidence_groundedness"}
+# QUALITY_FLAGS = {
+#     1: "1_weak_or_reject",
+#     2: "2_acceptable",
+#     3: "3_strong",
+# }
 TEMPORAL_REASONING_MODE = "temporal_reasoning"
 
 
@@ -674,31 +679,161 @@ def schema_formality_branch(schema_errors: list[str]) -> dict[str, Any]:
     }
 
 
-def normalize_quality_fields(check: dict[str, Any], check_name: str) -> dict[str, Any]:
-    """Ensure non-answerability judge checks always carry comparable quality metadata."""
+# Archived inactive scoring pipeline:
+#
+# def quality_uncertainty_from_choice_logits(signal):
+#     raw = signal.get("choice_logits") or signal.get("choice_logprobs")
+#     weights = {str(score): float(raw[str(score)]) for score in (1, 2, 3)}
+#     probabilities = softmax(weights)
+#     entropy_nats = -sum(p * log(p) for p in probabilities.values())
+#     return {
+#         "choice_set": [1, 2, 3],
+#         "probabilities": probabilities,
+#         "normalized_entropy": entropy_nats / log(3),
+#         "argmax_score": argmax(probabilities),
+#         "generated_score": signal.get("generated_choice"),
+#     }
+#
+# def normalize_quality_fields(check, check_name, *, choice_signal=None, emitted_score=None):
+#     uncertainty = quality_uncertainty_from_choice_logits(choice_signal)
+#     score = uncertainty["argmax_score"] if uncertainty["available"] else emitted_score
+#     check["quality_score"] = clamp(score, 1, 3)
+#     check["quality_flag"] = QUALITY_FLAGS[check["quality_score"]]
+#     check["quality_score_source"] = "choice_logits_argmax" or a fallback source
+#     check["quality_uncertainty"] = uncertainty
+#     check["quality_reason"] = the model reason or a score-derived fallback
+#     return check
 
-    if check_name not in QUALITY_SCORED_JUDGE_CHECKS:
+
+def decision_uncertainty_from_choice_logits(signal: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize first-decision P/F logits and compute binary entropy."""
+
+    if not isinstance(signal, dict):
+        return {"available": False, "reason": "runner returned no choice-logit signal"}
+    generated = str(signal.get("generated_choice") or "").upper()
+    if signal.get("available") is not True:
+        return {
+            "available": False,
+            "reason": str(signal.get("reason") or "choice logits unavailable"),
+            **({"generated_decision": generated} if generated in {"P", "F"} else {}),
+        }
+    raw = signal.get("choice_logits") or signal.get("choice_logprobs")
+    if not isinstance(raw, dict) or any(proxy not in raw for proxy in ("P", "F")):
+        return {"available": False, "reason": "runner did not return both P and F weights"}
+    weights = {proxy: float(raw[proxy]) for proxy in ("P", "F")}
+    if not all(math.isfinite(value) for value in weights.values()):
+        return {"available": False, "reason": "choice weights contain non-finite values"}
+    max_weight = max(weights.values())
+    exp_weights = {proxy: math.exp(value - max_weight) for proxy, value in weights.items()}
+    denominator = sum(exp_weights.values())
+    probabilities = {proxy: value / denominator for proxy, value in exp_weights.items()}
+    entropy_nats = -sum(
+        probability * math.log(probability)
+        for probability in probabilities.values()
+        if probability > 0.0
+    )
+    normalized_entropy = entropy_nats / math.log(2.0)
+    return {
+        "available": True,
+        "choice_set": ["P", "F"],
+        "decision_mapping": {"P": "PASS", "F": "FAIL"},
+        "weight_type": str(signal.get("weight_type") or "logit_or_log_probability"),
+        "log_weights": {proxy: round(value, 8) for proxy, value in weights.items()},
+        "probabilities": {proxy: round(value, 8) for proxy, value in probabilities.items()},
+        "entropy_nats": round(entropy_nats, 8),
+        "entropy_bits": round(entropy_nats / math.log(2.0), 8),
+        "normalized_entropy": round(normalized_entropy, 8),
+        "argmax_decision": max(probabilities, key=probabilities.get),
+        "generated_decision": generated if generated in {"P", "F"} else None,
+        "token_index": signal.get("token_index"),
+        "distribution_scope": "softmax restricted to first-decision tokens P and F",
+    }
+
+
+def answerability_uncertainty_from_choice_logits(
+    signal: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Normalize direct A-E answer logits without affecting the answerability gate."""
+
+    choices = tuple(OPTION_LETTERS)
+    if not isinstance(signal, dict):
+        return {"available": False, "reason": "runner returned no choice-logit signal"}
+    generated = str(signal.get("generated_choice") or "").upper()
+    if signal.get("available") is not True:
+        return {
+            "available": False,
+            "reason": str(signal.get("reason") or "choice logits unavailable"),
+            **({"generated_choice": generated} if generated in choices else {}),
+        }
+    raw = signal.get("choice_logits") or signal.get("choice_logprobs")
+    if not isinstance(raw, dict) or any(choice not in raw for choice in choices):
+        return {"available": False, "reason": "runner did not return all A-E weights"}
+    weights = {choice: float(raw[choice]) for choice in choices}
+    if not all(math.isfinite(value) for value in weights.values()):
+        return {"available": False, "reason": "choice weights contain non-finite values"}
+    max_weight = max(weights.values())
+    exp_weights = {choice: math.exp(value - max_weight) for choice, value in weights.items()}
+    denominator = sum(exp_weights.values())
+    probabilities = {choice: value / denominator for choice, value in exp_weights.items()}
+    entropy_nats = -sum(
+        probability * math.log(probability)
+        for probability in probabilities.values()
+        if probability > 0.0
+    )
+    return {
+        "available": True,
+        "choice_set": list(choices),
+        "weight_type": str(signal.get("weight_type") or "logit_or_log_probability"),
+        "log_weights": {choice: round(value, 8) for choice, value in weights.items()},
+        "probabilities": {
+            choice: round(value, 8) for choice, value in probabilities.items()
+        },
+        "entropy_nats": round(entropy_nats, 8),
+        "entropy_bits": round(entropy_nats / math.log(2.0), 8),
+        "normalized_entropy": round(entropy_nats / math.log(float(len(choices))), 8),
+        "argmax_choice": max(probabilities, key=probabilities.get),
+        "generated_choice": generated if generated in choices else None,
+        "token_index": signal.get("token_index"),
+        "distribution_scope": "softmax restricted to direct answer tokens A, B, C, D, and E",
+        "note": "diagnostic only; insufficient responses have no A-E entropy",
+    }
+
+
+def attach_decision_uncertainty(
+    check: dict[str, Any],
+    check_name: str,
+    *,
+    choice_signal: dict[str, Any] | None = None,
+    emitted_decision: Any = None,
+) -> dict[str, Any]:
+    """Attach entropy metadata without overriding the effective gate status."""
+
+    if check_name not in DECISION_ENTROPY_JUDGE_CHECKS:
         return check
-    raw_score = check.get("quality_score")
-    try:
-        score = int(raw_score)
-    except (TypeError, ValueError):
-        score = 2 if str(check.get("status", "")).upper() == "PASS" else 1
-    score = min(3, max(1, score))
-    check["quality_score"] = score
-    check["quality_flag"] = QUALITY_FLAGS[score]
-    if not str(check.get("quality_reason") or "").strip():
-        if score == 3:
-            check["quality_reason"] = f"{check_name} judged the question-answer item as strong on its rubric"
-        elif score == 2:
-            check["quality_reason"] = f"{check_name} judged the question-answer item as acceptable but not especially strong"
-        else:
-            check["quality_reason"] = f"{check_name} found a weak or rejecting issue"
+    existing = check.get("decision_uncertainty")
+    uncertainty = (
+        existing
+        if choice_signal is None and isinstance(existing, dict)
+        else decision_uncertainty_from_choice_logits(choice_signal)
+    )
+    check["decision_uncertainty"] = uncertainty
+    decision = str(
+        emitted_decision
+        or check.get("decision")
+        or uncertainty.get("generated_decision")
+        or ""
+    ).upper()
+    status = str(check.get("status") or "").upper()
+    expected_decision = "P" if status == "PASS" else "F" if status == "FAIL" else ""
+    check["decision"] = decision if decision in {"P", "F"} else None
+    check["decision_matches_effective_status"] = bool(
+        decision and expected_decision and decision == expected_decision
+    )
     return check
 
 
 def failed_single_judge(check_name: str, reason: str, *, raw_output: str | None = None) -> dict[str, Any]:
-    failed_check = normalize_quality_fields(
+    failed_check = attach_decision_uncertainty(
         {
             "status": "FAIL",
             "reason": reason,
@@ -707,6 +842,7 @@ def failed_single_judge(check_name: str, reason: str, *, raw_output: str | None 
         check_name,
     )
     judge = {
+        "decision": "F",
         "review_passed": False,
         "checks": {
             check_name: failed_check
@@ -740,7 +876,23 @@ def run_model_judge_branch(
         f"images={len(image_paths)} videos={len(video_paths)}",
         flush=True,
     )
-    raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
+    generate_with_choice_logits = getattr(runner, "generate_with_choice_logits", None)
+    if callable(generate_with_choice_logits):
+        generation = generate_with_choice_logits(
+            prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            field_name=DEFAULT_CHOICE_FIELD,
+            choices=DEFAULT_DECISION_CHOICES,
+        )
+        raw = str(generation.get("text") or "")
+        choice_signal = generation.get("choice_logits")
+    else:
+        raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
+        choice_signal = {
+            "available": False,
+            "reason": f"runner {type(runner).__name__} does not expose choice logits",
+        }
     print(
         "qa_stage_done "
         f"stage={stage} evidence_id={evidence_id} "
@@ -752,6 +904,7 @@ def run_model_judge_branch(
         judge = extract_json_object(raw)
     except Exception as exc:
         judge = failed_single_judge(check_name, f"{check_name} judge output was not valid JSON: {exc}")
+    judge["choice_logit_signal"] = choice_signal
     judge["raw_output"] = raw
     return judge
 
@@ -759,8 +912,40 @@ def run_model_judge_branch(
 def check_from_single_judge(judge: dict[str, Any], check_name: str) -> dict[str, Any]:
     checks = judge.get("checks")
     if isinstance(checks, dict) and isinstance(checks.get(check_name), dict):
-        return normalize_quality_fields(dict(checks[check_name]), check_name)
-    return normalize_quality_fields(
+        first_field = next(iter(judge), None)
+        if first_field != "decision":
+            return attach_decision_uncertainty(
+                {
+                    "status": "FAIL",
+                    "reason": f"{check_name} judge did not return decision as the first JSON field",
+                    "fix": "Return decision first so its logits precede every explanation field.",
+                },
+                check_name,
+                choice_signal={
+                    "available": False,
+                    "reason": "decision was not the first generated JSON field",
+                },
+            )
+        decision = str(judge.get("decision") or "").strip().upper()
+        if decision not in {"P", "F"}:
+            return attach_decision_uncertainty(
+                {
+                    "status": "FAIL",
+                    "reason": f"{check_name} judge did not return decision P or F",
+                    "fix": "Return decision as the first JSON field with value P or F.",
+                },
+                check_name,
+                choice_signal=judge.get("choice_logit_signal"),
+            )
+        check = dict(checks[check_name])
+        check["status"] = "PASS" if decision == "P" else "FAIL"
+        return attach_decision_uncertainty(
+            check,
+            check_name,
+            choice_signal=judge.get("choice_logit_signal"),
+            emitted_decision=decision,
+        )
+    return attach_decision_uncertainty(
         {
             "status": "FAIL",
             "reason": f"{check_name} judge did not return checks.{check_name}",
@@ -785,7 +970,6 @@ def merge_parallel_judges(
         other_activity = semantic_subchecks.get("other_person_activity_query")
         if isinstance(other_activity, dict) and str(other_activity.get("status", "")).upper() == "FAIL":
             qa_formality_check["status"] = "FAIL"
-            qa_formality_check["quality_score"] = 1
             reason = str(other_activity.get("reason") or "")
             qa_formality_check["reason"] = (
                 str(qa_formality_check.get("reason") or "")
@@ -800,7 +984,6 @@ def merge_parallel_judges(
         direct_name = semantic_subchecks.get("direct_name_leakage")
         if isinstance(direct_name, dict) and str(direct_name.get("status", "")).upper() == "FAIL":
             qa_formality_check["status"] = "FAIL"
-            qa_formality_check["quality_score"] = 1
             reason = str(direct_name.get("reason") or "")
             qa_formality_check["reason"] = (
                 str(qa_formality_check.get("reason") or "")
@@ -814,7 +997,6 @@ def merge_parallel_judges(
             )
     if schema_branch["status"] != "PASS":
         qa_formality_check["status"] = "FAIL"
-        qa_formality_check["quality_score"] = 1
         qa_formality_check["reason"] = (
             schema_branch["reason"]
             + "; model qa_formality branch: "
@@ -826,7 +1008,7 @@ def merge_parallel_judges(
         )
     qa_formality_check["schema_branch"] = schema_branch
     qa_formality_check["model_branch"] = model_qa_formality_check
-    qa_formality_check = normalize_quality_fields(qa_formality_check, "qa_formality")
+    qa_formality_check = attach_decision_uncertainty(qa_formality_check, "qa_formality")
 
     evidence_check = check_from_single_judge(evidence_groundedness_judge, "evidence_groundedness")
     answerability_check = answerability_check_from_gate(answerability)
@@ -850,6 +1032,26 @@ def merge_parallel_judges(
             "evidence_groundedness": evidence_groundedness_judge,
             "answerability": answerability,
         },
+    }
+
+    entropy_by_check = {}
+    unavailable_entropy_checks = []
+    for check_name in sorted(DECISION_ENTROPY_JUDGE_CHECKS):
+        uncertainty = combined["checks"][check_name].get("decision_uncertainty") or {}
+        if uncertainty.get("available") is True:
+            entropy_by_check[check_name] = float(uncertainty["normalized_entropy"])
+        else:
+            unavailable_entropy_checks.append(check_name)
+    entropy_values = list(entropy_by_check.values())
+    combined["decision_uncertainty_summary"] = {
+        "available": not unavailable_entropy_checks,
+        "normalized_entropy_by_check": entropy_by_check,
+        "mean_normalized_entropy": (
+            round(sum(entropy_values) / len(entropy_values), 8) if entropy_values else None
+        ),
+        "max_normalized_entropy": round(max(entropy_values), 8) if entropy_values else None,
+        "unavailable_checks": unavailable_entropy_checks,
+        "note": "diagnostic only; this does not override PASS/FAIL gates",
     }
 
     feedback = []
@@ -1082,7 +1284,23 @@ def run_answerability_eval(
             f"images={len(image_paths)} videos={len(video_paths)}",
             flush=True,
         )
-        raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
+        generate_with_choice_logits = getattr(runner, "generate_with_choice_logits", None)
+        if callable(generate_with_choice_logits):
+            generation = generate_with_choice_logits(
+                prompt,
+                image_paths=image_paths,
+                video_paths=video_paths,
+                field_name="choice",
+                choices=tuple(OPTION_LETTERS),
+            )
+            raw = str(generation.get("text") or "")
+            choice_signal = generation.get("choice_logits")
+        else:
+            raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
+            choice_signal = {
+                "available": False,
+                "reason": f"runner {type(runner).__name__} does not expose choice logits",
+            }
         print(
             "qa_stage_done "
             f"stage=answerability qa_id={qa_item.get('qa_id')} "
@@ -1098,10 +1316,24 @@ def run_answerability_eval(
                 "evidence_used": "",
                 "insufficient_reason": f"parse_failed: {exc}",
             }
+        choice_text = str(answer.get("choice") or "").strip().lower()
+        if choice_text == "insufficient":
+            choice_uncertainty = {
+                "available": False,
+                "reason": "choice was insufficient; direct A-E entropy is not applicable",
+            }
+        elif next(iter(answer), None) != "choice":
+            choice_uncertainty = {
+                "available": False,
+                "reason": "choice was not the first generated JSON field",
+            }
+        else:
+            choice_uncertainty = answerability_uncertainty_from_choice_logits(choice_signal)
         evaluations.append(
             {
                 **condition,
                 **answer,
+                "choice_uncertainty": choice_uncertainty,
                 "raw_output": raw,
                 "condition_media": condition_media_for_clips(
                     condition=condition,
