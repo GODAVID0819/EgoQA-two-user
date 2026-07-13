@@ -89,54 +89,42 @@ echo "max_new_tokens=${MAX_NEW_TOKENS}"
 echo "disable_thinking=${DISABLE_THINKING}"
 echo "resume_generation=${RESUME_GENERATION}"
 echo "media_routing=generator_uses_existing_pruned_videos;judges_and_answerability_use_full_30s_originals"
-echo "judge_contract=existing_PASS_FAIL_rubrics_encoded_as_first_P_F_field"
-echo "entropy_contract=P_F_logits_are_external_diagnostics_only"
+echo "judge_contract=historical_status_based_PASS_FAIL_rubrics"
+echo "entropy_contract=PASS_FAIL_status_logits_are_external_diagnostics_only"
 echo "entropy_effect_on_gates=none"
 python --version
 nvidia-smi || true
 
-echo "stage=preflight_pf_schema_and_entropy"
+echo "stage=preflight_pass_fail_status_entropy"
 python - <<'PY'
 import math
 
-from egolife_two_user_qa.prompts import (
-    build_evidence_groundedness_judge_prompt,
-    build_qa_formality_judge_prompt,
+from egolife_two_user_qa.qwen3vl_runner import (
+    DEFAULT_CHOICE_FIELD,
+    DEFAULT_DECISION_CHOICES,
+    Qwen3VLTransformersRunner,
 )
-from egolife_two_user_qa.qwen3vl_runner import Qwen3VLTransformersRunner
 from egolife_two_user_qa.video_qa_loop import decision_uncertainty_from_choice_logits
 
 if not hasattr(Qwen3VLTransformersRunner, "generate_with_choice_logits"):
     raise SystemExit("Qwen runner lacks generate_with_choice_logits; sync the current code")
-
-for prompt in (
-    build_qa_formality_judge_prompt({}, {}),
-    build_evidence_groundedness_judge_prompt({}, {}),
-):
-    required = (
-        "PASS/FAIL output encoding",
-        'Encode PASS as decision "P" and FAIL as decision "F"',
-        "exists only to expose the decision-token logits for external entropy analysis",
-        "It does not change the rubric, rejection criteria, or acceptance gate",
+if DEFAULT_CHOICE_FIELD != "status" or DEFAULT_DECISION_CHOICES != ("PASS", "FAIL"):
+    raise SystemExit(
+        "judge entropy must capture checks.<judge>.status logits for literal PASS and FAIL"
     )
-    missing = [text for text in required if text not in prompt]
-    if missing:
-        raise SystemExit(f"P/F prompt contract is missing: {missing}")
-    if "Choose F when" in prompt or "default to F" in prompt:
-        raise SystemExit("P/F prompt contains behavior-changing rejection instructions")
 
 binary = decision_uncertainty_from_choice_logits(
     {
         "available": True,
-        "choice_logits": {"P": 0.0, "F": 0.0},
-        "generated_choice": "P",
+        "choice_logits": {"PASS": 0.0, "FAIL": 0.0},
+        "generated_choice": "PASS",
     }
 )
 if binary.get("available") is not True:
-    raise SystemExit(f"P/F entropy preflight unavailable: {binary}")
+    raise SystemExit(f"PASS/FAIL entropy preflight unavailable: {binary}")
 if not math.isclose(float(binary["entropy_nats"]), math.log(2.0), rel_tol=1e-7):
-    raise SystemExit(f"uniform P/F entropy should equal ln(2): {binary}")
-print("pf_schema_and_entropy_preflight=ok")
+    raise SystemExit(f"uniform PASS/FAIL entropy should equal ln(2): {binary}")
+print("pass_fail_status_entropy_preflight=ok")
 PY
 
 if [[ ! -s "${EVIDENCE_PATH}" ]]; then

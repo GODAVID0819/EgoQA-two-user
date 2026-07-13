@@ -4,7 +4,7 @@ This analyzer deliberately keeps three concerns separate:
 
 1. basic run statistics (items, generations, attempts, acceptance);
 2. final-attempt PASS/FAIL statistics for all three judges;
-3. raw first-decision P/F logits and independently recalculated binary entropy for the
+3. raw PASS/FAIL status logits and independently recalculated binary entropy for the
    two model judges. Legacy 1/2/3 run artifacts remain readable.
 
 Only the Python standard library is required.
@@ -157,11 +157,15 @@ def recompute_entropy(uncertainty: Any) -> dict[str, Any]:
         "raw_weights": None,
         "probabilities_recalculated": None,
         "weight_type": None,
+        "raw_weight_pass": None,
+        "raw_weight_fail": None,
         "raw_weight_p": None,
         "raw_weight_f": None,
         "raw_weight_1": None,
         "raw_weight_2": None,
         "raw_weight_3": None,
+        "probability_pass": None,
+        "probability_fail": None,
         "probability_p": None,
         "probability_f": None,
         "probability_1": None,
@@ -180,7 +184,7 @@ def recompute_entropy(uncertainty: Any) -> dict[str, Any]:
         "generated_choice": None,
         "generated_matches_recalculated_argmax": None,
         "selection_sort_key": None,
-        "selection_order": "P low H > P high H > F high H > F low H",
+        "selection_order": "PASS low H > PASS high H > FAIL high H > FAIL low H",
     }
     if not isinstance(uncertainty, dict):
         return base
@@ -193,9 +197,12 @@ def recompute_entropy(uncertainty: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         base["entropy_unavailable_reason"] = "missing log_weights"
         return base
-    if all(proxy in raw for proxy in ("P", "F")):
+    if all(status in raw for status in ("PASS", "FAIL")):
+        labels = ("PASS", "FAIL")
+        entropy_mode = "status_pass_fail"
+    elif all(proxy in raw for proxy in ("P", "F")):
         labels = ("P", "F")
-        entropy_mode = "first_decision"
+        entropy_mode = "legacy_proxy_p_f"
     elif all(choice in raw for choice in ("A", "B", "C", "D", "E")):
         labels = ("A", "B", "C", "D", "E")
         entropy_mode = "answerability_choice"
@@ -204,7 +211,7 @@ def recompute_entropy(uncertainty: Any) -> dict[str, Any]:
         entropy_mode = "legacy_quality_score"
     else:
         base["entropy_unavailable_reason"] = (
-            "log_weights contains neither P/F, A-E, nor legacy 1/2/3"
+            "log_weights contains neither PASS/FAIL, legacy P/F, A-E, nor legacy 1/2/3"
         )
         return base
     try:
@@ -246,10 +253,14 @@ def recompute_entropy(uncertainty: Any) -> dict[str, Any]:
         ),
     )
     selection_sort_key = None
-    if generated_choice in {"P", "F"} and entropy_mode == "first_decision":
+    generated_status = {"P": "PASS", "F": "FAIL"}.get(generated_choice, generated_choice)
+    if generated_status in {"PASS", "FAIL"} and entropy_mode in {
+        "status_pass_fail",
+        "legacy_proxy_p_f",
+    }:
         selection_sort_key = [
-            0 if generated_choice == "P" else 1,
-            normalized_entropy if generated_choice == "P" else -normalized_entropy,
+            0 if generated_status == "PASS" else 1,
+            normalized_entropy if generated_status == "PASS" else -normalized_entropy,
         ]
 
     return {
@@ -260,11 +271,15 @@ def recompute_entropy(uncertainty: Any) -> dict[str, Any]:
         "raw_weights": logits,
         "probabilities_recalculated": probabilities,
         "weight_type": uncertainty.get("weight_type"),
+        "raw_weight_pass": logits.get("PASS"),
+        "raw_weight_fail": logits.get("FAIL"),
         "raw_weight_p": logits.get("P"),
         "raw_weight_f": logits.get("F"),
         "raw_weight_1": logits.get("1"),
         "raw_weight_2": logits.get("2"),
         "raw_weight_3": logits.get("3"),
+        "probability_pass": probabilities.get("PASS"),
+        "probability_fail": probabilities.get("FAIL"),
         "probability_p": probabilities.get("P"),
         "probability_f": probabilities.get("F"),
         "probability_1": probabilities.get("1"),
@@ -293,7 +308,7 @@ def recompute_entropy(uncertainty: Any) -> dict[str, Any]:
             generated_choice == argmax_choice if generated_choice is not None else None
         ),
         "selection_sort_key": selection_sort_key,
-        "selection_order": "P low H > P high H > F high H > F low H",
+        "selection_order": "PASS low H > PASS high H > FAIL high H > FAIL low H",
     }
 
 
@@ -621,7 +636,7 @@ def entropy_markdown(runs: Sequence[dict[str, Any]]) -> str:
     lines = [
         "# Final-Attempt Entropy Review",
         "",
-        "`qa_formality` and `evidence_groundedness` use first-decision P/F entropy. "
+        "`qa_formality` and `evidence_groundedness` use PASS/FAIL status entropy. "
         "Answerability uses per-condition A-E choice entropy when it emits a direct option; "
         "`insufficient` rows are marked unavailable.",
         "",
@@ -747,7 +762,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     entropy_report = {
         "calculation": {
             "probabilities": (
-                "softmax over stored raw weights for first P/F decisions or direct A-E "
+                "softmax over stored raw weights for PASS/FAIL statuses or direct A-E "
                 "answerability choices"
             ),
             "entropy_nats": "-sum(p_i * ln(p_i))",

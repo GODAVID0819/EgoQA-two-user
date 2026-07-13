@@ -28,8 +28,8 @@ DEFAULT_SAMPLING_TOP_P = 0.9
 # Archived inactive score-token defaults:
 # DEFAULT_CHOICE_FIELD = "final_quality_score"
 # DEFAULT_SCORE_CHOICES = ("1", "2", "3")
-DEFAULT_CHOICE_FIELD = "decision"
-DEFAULT_DECISION_CHOICES = ("P", "F")
+DEFAULT_CHOICE_FIELD = "status"
+DEFAULT_DECISION_CHOICES = ("PASS", "FAIL")
 
 
 def locate_choice_token(
@@ -41,7 +41,7 @@ def locate_choice_token(
     """Locate a JSON choice value and the token piece containing it.
 
     Token APIs expose pieces rather than character offsets.  Returning the
-    exact alternative token spellings lets each backend look up P/F at the same
+    exact alternative token spellings lets each backend look up PASS/FAIL at the same
     decoding step, including tokenizers that fold JSON punctuation or leading
     whitespace into a choice token.
     """
@@ -577,7 +577,7 @@ class Qwen3VLTransformersRunner:
             if len(encoded) != 1 or int(encoded[0]) not in id_to_position:
                 result["choice_logits"] = {
                     "available": False,
-                    "reason": f"choice {choice!r} is not a captured single token at the decision step",
+                    "reason": f"choice {choice!r} is not a captured single token at the status step",
                     "generated_choice": located["generated_choice"],
                     "token_index": index,
                 }

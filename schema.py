@@ -178,32 +178,18 @@ def validate_qa_item(item: dict[str, Any], *, strict_review: bool = False) -> li
                     #     require quality_score in {1, 2, 3}, its quality_flag and
                     #     quality_reason, plus available 1/2/3 quality_uncertainty.
                     if check_name in DECISION_ENTROPY_JUDGE_CHECKS:
-                        decision = str(check_value.get("decision") or "").upper()
-                        if decision not in {"P", "F"}:
-                            errors.append(
-                                f"judge check {check_name} must include derived decision P or F"
-                            )
-                        expected_decision = (
-                            "P"
-                            if str(check_value.get("status") or "").upper() == "PASS"
-                            else "F"
-                        )
-                        if decision in {"P", "F"} and decision != expected_decision:
-                            errors.append(
-                                f"judge check {check_name} decision must match its effective status"
-                            )
                         uncertainty = check_value.get("decision_uncertainty")
                         if not isinstance(uncertainty, dict) or uncertainty.get("available") is not True:
                             errors.append(
-                                f"judge check {check_name} must include available P/F decision entropy"
+                                f"judge check {check_name} must include available PASS/FAIL status entropy"
                             )
                         else:
                             probabilities = uncertainty.get("probabilities")
                             if not isinstance(probabilities, dict) or any(
-                                choice not in probabilities for choice in ("P", "F")
+                                choice not in probabilities for choice in ("PASS", "FAIL")
                             ):
                                 errors.append(
-                                    f"judge check {check_name} must include probabilities for P and F"
+                                    f"judge check {check_name} must include probabilities for PASS and FAIL"
                                 )
                             normalized_entropy = uncertainty.get("normalized_entropy")
                             if not isinstance(normalized_entropy, (int, float)) or not 0.0 <= float(normalized_entropy) <= 1.0:

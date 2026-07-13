@@ -114,7 +114,7 @@ echo "benchmark_contract=reuse_existing_clip_pruned_packets_compare_greedy_vs_sa
 echo "generator_arms=sampling,greedy"
 echo "review_decode_mode=greedy"
 echo "media_routing=generator_uses_existing_pruned_videos;judges_and_answerability_use_full_30s_originals"
-echo "entropy_contract=first_P_F_for_formality_and_groundedness;first_A_E_for_direct_answerability_choices"
+echo "entropy_contract=PASS_FAIL_status_for_formality_and_groundedness;A_E_for_direct_answerability_choices"
 echo "entropy_effect_on_gates=none"
 python --version
 nvidia-smi || true
@@ -123,7 +123,11 @@ echo "stage=preflight_entropy_helpers"
 python - <<'PY'
 import math
 
-from egolife_two_user_qa.qwen3vl_runner import Qwen3VLTransformersRunner
+from egolife_two_user_qa.qwen3vl_runner import (
+    DEFAULT_CHOICE_FIELD,
+    DEFAULT_DECISION_CHOICES,
+    Qwen3VLTransformersRunner,
+)
 from egolife_two_user_qa.video_qa_loop import (
     answerability_uncertainty_from_choice_logits,
     decision_uncertainty_from_choice_logits,
@@ -131,18 +135,22 @@ from egolife_two_user_qa.video_qa_loop import (
 
 if not hasattr(Qwen3VLTransformersRunner, "generate_with_choice_logits"):
     raise SystemExit("Qwen runner lacks generate_with_choice_logits; sync the current code")
+if DEFAULT_CHOICE_FIELD != "status" or DEFAULT_DECISION_CHOICES != ("PASS", "FAIL"):
+    raise SystemExit(
+        "judge entropy must capture checks.<judge>.status logits for literal PASS and FAIL"
+    )
 
 binary = decision_uncertainty_from_choice_logits(
     {
         "available": True,
-        "choice_logits": {"P": 0.0, "F": 0.0},
-        "generated_choice": "P",
+        "choice_logits": {"PASS": 0.0, "FAIL": 0.0},
+        "generated_choice": "PASS",
     }
 )
 if binary.get("available") is not True:
-    raise SystemExit(f"P/F entropy preflight unavailable: {binary}")
+    raise SystemExit(f"PASS/FAIL entropy preflight unavailable: {binary}")
 if not math.isclose(float(binary["entropy_nats"]), math.log(2.0), rel_tol=1e-7):
-    raise SystemExit(f"uniform P/F entropy should equal ln(2): {binary}")
+    raise SystemExit(f"uniform PASS/FAIL entropy should equal ln(2): {binary}")
 
 answer = answerability_uncertainty_from_choice_logits(
     {
@@ -367,10 +375,10 @@ for mode in ("greedy", "sampling"):
     for judge in ("qa_formality", "evidence_groundedness"):
         item = summary.get(judge) or {}
         if int(item.get("available_count") or 0) <= 0:
-            raise SystemExit(f"{mode} has no available {judge} P/F entropy")
+            raise SystemExit(f"{mode} has no available {judge} PASS/FAIL entropy")
         modes = item.get("entropy_mode_counts") or {}
-        if int(modes.get("first_decision") or 0) <= 0:
-            raise SystemExit(f"{mode} {judge} report lacks first-decision entropy rows")
+        if int(modes.get("status_pass_fail") or 0) <= 0:
+            raise SystemExit(f"{mode} {judge} report lacks PASS/FAIL status entropy rows")
 
     answerability = summary.get("answerability") or {}
     if int(answerability.get("row_count") or 0) <= 0:

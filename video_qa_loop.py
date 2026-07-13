@@ -706,8 +706,9 @@ def schema_formality_branch(schema_errors: list[str]) -> dict[str, Any]:
 
 
 def decision_uncertainty_from_choice_logits(signal: dict[str, Any] | None) -> dict[str, Any]:
-    """Normalize first-decision P/F logits and compute binary entropy."""
+    """Normalize the judge's PASS/FAIL status logits and compute binary entropy."""
 
+    statuses = ("PASS", "FAIL")
     if not isinstance(signal, dict):
         return {"available": False, "reason": "runner returned no choice-logit signal"}
     generated = str(signal.get("generated_choice") or "").upper()
@@ -715,18 +716,18 @@ def decision_uncertainty_from_choice_logits(signal: dict[str, Any] | None) -> di
         return {
             "available": False,
             "reason": str(signal.get("reason") or "choice logits unavailable"),
-            **({"generated_decision": generated} if generated in {"P", "F"} else {}),
+            **({"generated_decision": generated} if generated in statuses else {}),
         }
     raw = signal.get("choice_logits") or signal.get("choice_logprobs")
-    if not isinstance(raw, dict) or any(proxy not in raw for proxy in ("P", "F")):
-        return {"available": False, "reason": "runner did not return both P and F weights"}
-    weights = {proxy: float(raw[proxy]) for proxy in ("P", "F")}
+    if not isinstance(raw, dict) or any(status not in raw for status in statuses):
+        return {"available": False, "reason": "runner did not return both PASS and FAIL weights"}
+    weights = {status: float(raw[status]) for status in statuses}
     if not all(math.isfinite(value) for value in weights.values()):
         return {"available": False, "reason": "choice weights contain non-finite values"}
     max_weight = max(weights.values())
-    exp_weights = {proxy: math.exp(value - max_weight) for proxy, value in weights.items()}
+    exp_weights = {status: math.exp(value - max_weight) for status, value in weights.items()}
     denominator = sum(exp_weights.values())
-    probabilities = {proxy: value / denominator for proxy, value in exp_weights.items()}
+    probabilities = {status: value / denominator for status, value in exp_weights.items()}
     entropy_nats = -sum(
         probability * math.log(probability)
         for probability in probabilities.values()
@@ -735,18 +736,17 @@ def decision_uncertainty_from_choice_logits(signal: dict[str, Any] | None) -> di
     normalized_entropy = entropy_nats / math.log(2.0)
     return {
         "available": True,
-        "choice_set": ["P", "F"],
-        "decision_mapping": {"P": "PASS", "F": "FAIL"},
+        "choice_set": list(statuses),
         "weight_type": str(signal.get("weight_type") or "logit_or_log_probability"),
-        "log_weights": {proxy: round(value, 8) for proxy, value in weights.items()},
-        "probabilities": {proxy: round(value, 8) for proxy, value in probabilities.items()},
+        "log_weights": {status: round(value, 8) for status, value in weights.items()},
+        "probabilities": {status: round(value, 8) for status, value in probabilities.items()},
         "entropy_nats": round(entropy_nats, 8),
         "entropy_bits": round(entropy_nats / math.log(2.0), 8),
         "normalized_entropy": round(normalized_entropy, 8),
         "argmax_decision": max(probabilities, key=probabilities.get),
-        "generated_decision": generated if generated in {"P", "F"} else None,
+        "generated_decision": generated if generated in statuses else None,
         "token_index": signal.get("token_index"),
-        "distribution_scope": "softmax restricted to first-decision tokens P and F",
+        "distribution_scope": "softmax restricted to the judge status tokens PASS and FAIL",
     }
 
 
@@ -804,7 +804,7 @@ def attach_decision_uncertainty(
     check_name: str,
     *,
     choice_signal: dict[str, Any] | None = None,
-    emitted_decision: Any = None,
+    emitted_status: Any = None,
 ) -> dict[str, Any]:
     """Attach entropy metadata without overriding the effective gate status."""
 
@@ -817,17 +817,16 @@ def attach_decision_uncertainty(
         else decision_uncertainty_from_choice_logits(choice_signal)
     )
     check["decision_uncertainty"] = uncertainty
-    decision = str(
-        emitted_decision
-        or check.get("decision")
+    generated_status = str(
+        emitted_status
         or uncertainty.get("generated_decision")
         or ""
     ).upper()
-    status = str(check.get("status") or "").upper()
-    expected_decision = "P" if status == "PASS" else "F" if status == "FAIL" else ""
-    check["decision"] = decision if decision in {"P", "F"} else None
-    check["decision_matches_effective_status"] = bool(
-        decision and expected_decision and decision == expected_decision
+    effective_status = str(check.get("status") or "").upper()
+    check["status_matches_effective_status"] = bool(
+        generated_status in {"PASS", "FAIL"}
+        and effective_status in {"PASS", "FAIL"}
+        and generated_status == effective_status
     )
     return check
 
@@ -842,7 +841,6 @@ def failed_single_judge(check_name: str, reason: str, *, raw_output: str | None 
         check_name,
     )
     judge = {
-        "decision": "F",
         "review_passed": False,
         "checks": {
             check_name: failed_check
@@ -912,38 +910,24 @@ def run_model_judge_branch(
 def check_from_single_judge(judge: dict[str, Any], check_name: str) -> dict[str, Any]:
     checks = judge.get("checks")
     if isinstance(checks, dict) and isinstance(checks.get(check_name), dict):
-        first_field = next(iter(judge), None)
-        if first_field != "decision":
+        check = dict(checks[check_name])
+        status = str(check.get("status") or "").strip().upper()
+        if status not in {"PASS", "FAIL"}:
             return attach_decision_uncertainty(
                 {
                     "status": "FAIL",
-                    "reason": f"{check_name} judge did not return decision as the first JSON field",
-                    "fix": "Return decision first so its logits precede every explanation field.",
-                },
-                check_name,
-                choice_signal={
-                    "available": False,
-                    "reason": "decision was not the first generated JSON field",
-                },
-            )
-        decision = str(judge.get("decision") or "").strip().upper()
-        if decision not in {"P", "F"}:
-            return attach_decision_uncertainty(
-                {
-                    "status": "FAIL",
-                    "reason": f"{check_name} judge did not return decision P or F",
-                    "fix": "Return decision as the first JSON field with value P or F.",
+                    "reason": f"{check_name} judge did not return status PASS or FAIL",
+                    "fix": f"Return checks.{check_name}.status as PASS or FAIL.",
                 },
                 check_name,
                 choice_signal=judge.get("choice_logit_signal"),
             )
-        check = dict(checks[check_name])
-        check["status"] = "PASS" if decision == "P" else "FAIL"
+        check["status"] = status
         return attach_decision_uncertainty(
             check,
             check_name,
             choice_signal=judge.get("choice_logit_signal"),
-            emitted_decision=decision,
+            emitted_status=status,
         )
     return attach_decision_uncertainty(
         {

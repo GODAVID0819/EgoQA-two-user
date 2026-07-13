@@ -18,17 +18,17 @@ old deterministic schema checks are not a separate pre-judger gate anymore; they
 are stored as `checks.qa_formality.schema_branch` and merged with the model
 qa_formality branch.
 
-The two model judges emit `decision` as the first JSON field, with `P` for PASS
-and `F` for FAIL. At that first answer-bearing decoding step the pipeline
-extracts the logits/log probabilities for `P` and `F`, before the model writes
-its explanation. Python derives the structured status from that decision and
-stores binary entropy under `check.decision_uncertainty`.
+The two model judges use the historical structured contract in which
+`checks.<judge>.status` is `PASS` or `FAIL`. At that answer-bearing decoding
+step the pipeline extracts the logits/log probabilities for the literal
+`PASS` and `FAIL` tokens and stores binary entropy under
+`check.decision_uncertainty`.
 `normalized_entropy` divides by `log(2)`. Entropy is diagnostic and does not
 alter acceptance or retry behavior. The active judge contract is binary
-PASS/FAIL; P/F is only its token-level output encoding for entropy capture.
+PASS/FAIL; there is no proxy P/F output field.
 
-Each answerability condition keeps `choice` as its first JSON field. When the
-model directly chooses A-E, the pipeline captures all five choice weights and
+Each answerability condition uses `choice` as its answer-bearing JSON field.
+When the model directly chooses A-E, the pipeline captures all five choice weights and
 stores entropy under `evaluation.choice_uncertainty`, normalized by `log(5)`.
 An `insufficient` response has no A-E entropy and is marked unavailable. This
 metadata is diagnostic only; `answerability_gate()` continues to use only the
@@ -36,7 +36,7 @@ parsed choice under the existing single-user/subset/combined rules.
 
 Only the post-run analyzer computes `selection_sort_key` for evaluation and
 review prioritization. Sorting it ascending implements
-`P low H > P high H > F high H > F low H` without hard-coding an arbitrary
+`PASS low H > PASS high H > FAIL high H > FAIL low H` without hard-coding an arbitrary
 boundary between high and low entropy. The generation loop never reads or
 stores this key, so it cannot affect model output, acceptance, or retries.
 

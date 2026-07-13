@@ -10,6 +10,7 @@ from egolife_two_user_qa.qwen3vl_runner import (
     choice_logprobs_from_top_candidates,
     locate_choice_token,
 )
+from egolife_two_user_qa.schema import validate_qa_item
 from egolife_two_user_qa.video_qa_loop import (
     answerability_gate,
     answerability_uncertainty_from_choice_logits,
@@ -21,24 +22,27 @@ from egolife_two_user_qa.video_qa_loop import (
 )
 
 
-def test_locate_first_decision_token_preserves_json_punctuation() -> None:
-    pieces = ['{\n  "decision"', ":", ' "P"', ',\n  "checks": {}\n}']
+def test_locate_status_token_preserves_json_punctuation() -> None:
+    pieces = ['{"review_passed":true,"checks":{"evidence_groundedness":{"status":', ' "PASS"', '}}}']
 
     located = locate_choice_token(pieces)
 
     assert located is not None
-    assert located["token_index"] == 2
-    assert located["generated_choice"] == "P"
-    assert located["alternative_token_pieces"] == {"P": ' "P"', "F": ' "F"'}
+    assert located["token_index"] == 1
+    assert located["generated_choice"] == "PASS"
+    assert located["alternative_token_pieces"] == {
+        "PASS": ' "PASS"',
+        "FAIL": ' "FAIL"',
+    }
 
 
-def test_api_top_candidates_extract_both_first_decision_logprobs() -> None:
-    pieces = ['{"decision":', ' "P"', ',"checks":{}}']
+def test_api_top_candidates_extract_both_status_logprobs() -> None:
+    pieces = ['{"checks":{"evidence_groundedness":{"status":', ' "PASS"', '}}}']
     candidates = [
         [],
         [
-            {"token": ' "P"', "logprob": -0.2},
-            {"token": ' "F"', "logprob": -2.0},
+            {"token": ' "PASS"', "logprob": -0.2},
+            {"token": ' "FAIL"', "logprob": -2.0},
         ],
         [],
     ]
@@ -46,28 +50,28 @@ def test_api_top_candidates_extract_both_first_decision_logprobs() -> None:
     signal = choice_logprobs_from_top_candidates(pieces, candidates)
 
     assert signal["available"] is True
-    assert signal["choice_logprobs"] == {"P": -0.2, "F": -2.0}
+    assert signal["choice_logprobs"] == {"PASS": -0.2, "FAIL": -2.0}
 
 
 def test_locate_choice_token_rejects_schema_placeholder() -> None:
-    assert locate_choice_token(['{"decision": "P/F"}']) is None
+    assert locate_choice_token(['{"status": "PASS/FAIL"}']) is None
 
 
-def test_locate_choice_token_uses_first_decision_if_text_repeats_it() -> None:
+def test_locate_choice_token_uses_first_status_if_text_repeats_it() -> None:
     located = locate_choice_token(
-        ['{"decision":"P","reason":"do not repeat \\"decision\\": \\"F\\""}']
+        ['{"status":"PASS","reason":"do not repeat \\"status\\": \\"FAIL\\""}']
     )
 
     assert located is not None
-    assert located["generated_choice"] == "P"
+    assert located["generated_choice"] == "PASS"
 
 
-def test_entropy_is_normalized_over_only_p_and_f() -> None:
+def test_entropy_is_normalized_over_only_pass_and_fail() -> None:
     uncertainty = decision_uncertainty_from_choice_logits(
         {
             "available": True,
-            "choice_logits": {"P": 0.0, "F": 0.0},
-            "generated_choice": "P",
+            "choice_logits": {"PASS": 0.0, "FAIL": 0.0},
+            "generated_choice": "PASS",
             "token_index": 12,
         }
     )
@@ -75,7 +79,8 @@ def test_entropy_is_normalized_over_only_p_and_f() -> None:
     assert uncertainty["available"] is True
     assert math.isclose(uncertainty["entropy_nats"], math.log(2.0), rel_tol=1e-7)
     assert uncertainty["normalized_entropy"] == 1.0
-    assert uncertainty["generated_decision"] == "P"
+    assert uncertainty["generated_decision"] == "PASS"
+    assert uncertainty["choice_set"] == ["PASS", "FAIL"]
     assert "selection_sort_key" not in uncertainty
 
 
@@ -103,70 +108,72 @@ def test_answerability_entropy_is_normalized_over_a_through_e() -> None:
     assert analysis["selection_sort_key"] is None
 
 
-def test_first_decision_derives_status_without_argmax_override() -> None:
+def test_emitted_status_controls_gate_without_argmax_override() -> None:
     judge = {
-        "decision": "P",
+        "review_passed": True,
         "checks": {
             "evidence_groundedness": {
+                "status": "PASS",
                 "reason": "clear support",
                 "fix": "",
+                "quality_score": 3,
             }
         },
         "choice_logit_signal": {
             "available": True,
-            "choice_logits": {"P": -1.0, "F": 2.0},
-            "generated_choice": "P",
+            "choice_logits": {"PASS": -1.0, "FAIL": 2.0},
+            "generated_choice": "PASS",
             "token_index": 5,
         },
     }
 
     check = check_from_single_judge(judge, "evidence_groundedness")
 
-    assert check["decision"] == "P"
     assert check["status"] == "PASS"
-    assert check["decision_uncertainty"]["argmax_decision"] == "F"
-    assert check["decision_uncertainty"]["generated_decision"] == "P"
-    assert check["decision_matches_effective_status"] is True
-    assert "quality_score" not in check
+    assert check["decision_uncertainty"]["argmax_decision"] == "FAIL"
+    assert check["decision_uncertainty"]["generated_decision"] == "PASS"
+    assert check["status_matches_effective_status"] is True
+    assert check["quality_score"] == 3
 
 
-def test_nonfirst_decision_is_rejected_as_invalid_entropy_measurement() -> None:
+def test_nested_status_does_not_need_to_be_first_json_field() -> None:
     judge = {
         "review_passed": True,
-        "decision": "P",
         "checks": {
             "evidence_groundedness": {
+                "status": "PASS",
                 "reason": "clear support",
                 "fix": "",
             }
         },
         "choice_logit_signal": {
             "available": True,
-            "choice_logits": {"P": 2.0, "F": -2.0},
-            "generated_choice": "P",
+            "choice_logits": {"PASS": 2.0, "FAIL": -2.0},
+            "generated_choice": "PASS",
+            "token_index": 8,
         },
     }
 
     check = check_from_single_judge(judge, "evidence_groundedness")
 
-    assert check["status"] == "FAIL"
-    assert check["decision_uncertainty"]["available"] is False
-    assert "first JSON field" in check["reason"]
+    assert check["status"] == "PASS"
+    assert check["decision_uncertainty"]["available"] is True
+    assert check["decision_uncertainty"]["token_index"] == 8
 
 
-def test_unclear_evidence_is_binary_f_with_explanation() -> None:
+def test_fail_status_with_high_entropy_keeps_fail_gate() -> None:
     judge = {
-        "decision": "F",
         "checks": {
             "evidence_groundedness": {
+                "status": "FAIL",
                 "reason": "The video is too unclear to establish the claimed object.",
                 "fix": "Use clearer visual evidence.",
             }
         },
         "choice_logit_signal": {
             "available": True,
-            "choice_logits": {"P": -0.1, "F": 0.1},
-            "generated_choice": "F",
+            "choice_logits": {"PASS": -0.1, "FAIL": 0.1},
+            "generated_choice": "FAIL",
         },
     }
 
@@ -177,26 +184,76 @@ def test_unclear_evidence_is_binary_f_with_explanation() -> None:
     assert check["decision_uncertainty"]["normalized_entropy"] > 0.9
 
 
-def test_judge_prompt_preserves_pass_fail_rubric_with_p_f_encoding() -> None:
+def test_strict_schema_accepts_pass_fail_status_entropy_without_proxy_decision() -> None:
+    uncertainty = {
+        "available": True,
+        "probabilities": {"PASS": 0.9, "FAIL": 0.1},
+        "normalized_entropy": 0.47,
+    }
+    item = {
+        "qa_id": "q1",
+        "question": "What did we put on the table?",
+        "options": ["A plate", "A cup", "A book", "A key", "A bag"],
+        "correct": "A",
+        "answer": "A plate",
+        "required_users": ["u1", "u2"],
+        "evidence": {},
+        "single_user_answerability": {
+            "u1": "insufficient evidence",
+            "u2": "insufficient evidence",
+        },
+        "combined_answerability": "sufficient support",
+        "model_id": "test-model",
+        "source_urls": [],
+        "question_type": "neutral",
+        "generator_rationale": "test",
+        "why_two_users_needed": "test",
+        "per_user_evidence_claims": {},
+        "attempt_count": 1,
+        "video_evidence": [{}],
+        "referred_timestamps": [],
+        "human_audit": {},
+        "generation_trace": [{}],
+        "review": {
+            "review_passed": True,
+            "status": "passed",
+            "judger": {
+                "gate": {"passed": True},
+                "checks": {
+                    "qa_formality": {
+                        "status": "PASS",
+                        "decision_uncertainty": uncertainty,
+                    },
+                    "evidence_groundedness": {
+                        "status": "PASS",
+                        "decision_uncertainty": uncertainty,
+                    },
+                    "answerability": {"status": "PASS"},
+                },
+            },
+            "answerability": {"gate": {"passed": True}, "evaluations": []},
+            "schema_validation": {"passed": True},
+        },
+    }
+
+    assert validate_qa_item(item, strict_review=True) == []
+
+
+def test_judge_prompt_restores_historical_status_based_contract() -> None:
     prompt = build_evidence_groundedness_judge_prompt({}, {})
     formality_prompt = build_qa_formality_judge_prompt({}, {})
     output_contract = prompt[prompt.rfind("Return exactly one valid JSON object") :]
 
-    assert "Apply the evidence_groundedness PASS/FAIL rubric below exactly as written" in prompt
-    assert 'Encode PASS as decision "P" and FAIL as decision "F"' in prompt
-    assert "exists only to expose the decision-token logits for external entropy analysis" in prompt
-    assert "It does not change the rubric, rejection criteria, or acceptance gate" in prompt
+    assert '"status": "PASS/FAIL"' in output_contract
+    assert '"decision"' not in output_contract
+    assert 'Encode PASS as decision "P" and FAIL as decision "F"' not in prompt
+    assert "first field in the JSON object must be decision" not in prompt
+    assert "UNCERTAIN" not in prompt
     assert "PASS only when the correct answer and all material evidence" in prompt
-    assert "Choose F when" not in prompt
-    assert "default to F" not in prompt
-    assert "judge qa_formality as FAIL" in formality_prompt
+    assert "evidence_groundedness quality_score rubric" in prompt
+    assert "set checks.qa_formality.status to FAIL" in formality_prompt
     assert "PASS qa_formality only if" in formality_prompt
-    assert "choose decision F" not in formality_prompt
-    assert "Choose decision P" not in formality_prompt
-    assert output_contract.index('"decision"') < output_contract.index('"checks"')
-    assert '"status"' not in output_contract
-    assert "quality_score rubric" not in prompt
-    assert "final_quality_score" not in prompt
+    assert "qa_formality quality_score rubric" in formality_prompt
 
 
 def test_answerability_prompt_puts_choice_before_explanation() -> None:
@@ -206,11 +263,11 @@ def test_answerability_prompt_puts_choice_before_explanation() -> None:
     )
     output_contract = prompt[prompt.rfind("Return exactly one valid JSON object") :]
 
-    assert "first field in the JSON object must be choice" in prompt
+    assert "first field in the JSON object must be choice" not in prompt
     assert output_contract.index('"choice"') < output_contract.index('"answer_text"')
 
 
-def test_judge_branch_requests_and_attaches_first_p_f_entropy() -> None:
+def test_judge_branch_requests_and_attaches_pass_fail_status_entropy() -> None:
     class Runner:
         requested_field = None
         requested_choices = None
@@ -220,16 +277,16 @@ def test_judge_branch_requests_and_attaches_first_p_f_entropy() -> None:
             self.requested_choices = kwargs.get("choices")
             return {
                 "text": (
-                    '{"decision": "P", "review_passed": true, "checks": '
-                    '{"evidence_groundedness": {"reason": "visible", "fix": ""}}, '
+                    '{"review_passed": true, "checks": '
+                    '{"evidence_groundedness": {"status": "PASS", "reason": "visible", "fix": ""}}, '
                     '"blocking_failures": [], "why_generator_asked_this": "", '
                     '"feedback_to_generator": ""}'
                 ),
                 "choice_logits": {
                     "available": True,
-                    "choice_logits": {"P": 1.0, "F": -3.0},
+                    "choice_logits": {"PASS": 1.0, "FAIL": -3.0},
                     "weight_type": "logit",
-                    "generated_choice": "P",
+                    "generated_choice": "PASS",
                     "token_index": 2,
                 },
             }
@@ -247,12 +304,12 @@ def test_judge_branch_requests_and_attaches_first_p_f_entropy() -> None:
     )
     check = check_from_single_judge(judge, "evidence_groundedness")
 
-    assert runner.requested_field == "decision"
-    assert runner.requested_choices == ("P", "F")
+    assert runner.requested_field == "status"
+    assert runner.requested_choices == ("PASS", "FAIL")
     assert check["status"] == "PASS"
     assert check["decision_uncertainty"]["available"] is True
-    assert check["decision_uncertainty"]["generated_decision"] == "P"
-    assert check["decision_matches_effective_status"] is True
+    assert check["decision_uncertainty"]["generated_decision"] == "PASS"
+    assert check["status_matches_effective_status"] is True
 
 
 def test_answerability_conditions_capture_greedy_a_e_entropy_without_changing_gate() -> None:
@@ -313,13 +370,13 @@ def test_answerability_conditions_capture_greedy_a_e_entropy_without_changing_ga
     assert answerability_gate(qa_item, without_uncertainty) == result["gate"]
 
 
-def test_parallel_merge_keeps_existing_gate_behavior_with_p_f_summary() -> None:
+def test_parallel_merge_keeps_existing_gate_behavior_with_pass_fail_summary() -> None:
     def branch(check_name: str) -> dict:
         return {
-            "decision": "P",
             "review_passed": True,
             "checks": {
                 check_name: {
+                    "status": "PASS",
                     "reason": "passed",
                     "fix": "",
                 }
@@ -327,8 +384,8 @@ def test_parallel_merge_keeps_existing_gate_behavior_with_p_f_summary() -> None:
             "blocking_failures": [],
             "choice_logit_signal": {
                 "available": True,
-                "choice_logits": {"P": 2.0, "F": -2.0},
-                "generated_choice": "P",
+                "choice_logits": {"PASS": 2.0, "FAIL": -2.0},
+                "generated_choice": "PASS",
             },
         }
 
@@ -348,10 +405,10 @@ def test_parallel_merge_keeps_existing_gate_behavior_with_p_f_summary() -> None:
 
 def test_postrun_selection_sort_key_implements_requested_ordering() -> None:
     cases = [
-        ("P_low_H", "P", {"P": 5.0, "F": -5.0}),
-        ("P_high_H", "P", {"P": 0.1, "F": 0.0}),
-        ("F_high_H", "F", {"P": 0.0, "F": 0.1}),
-        ("F_low_H", "F", {"P": -5.0, "F": 5.0}),
+        ("PASS_low_H", "PASS", {"PASS": 5.0, "FAIL": -5.0}),
+        ("PASS_high_H", "PASS", {"PASS": 0.1, "FAIL": 0.0}),
+        ("FAIL_high_H", "FAIL", {"PASS": 0.0, "FAIL": 0.1}),
+        ("FAIL_low_H", "FAIL", {"PASS": -5.0, "FAIL": 5.0}),
     ]
     ranked = []
     for label, decision, logits in cases:
@@ -370,8 +427,8 @@ def test_postrun_selection_sort_key_implements_requested_ordering() -> None:
         ranked.append((analysis["selection_sort_key"], label))
 
     assert [label for _, label in sorted(ranked)] == [
-        "P_low_H",
-        "P_high_H",
-        "F_high_H",
-        "F_low_H",
+        "PASS_low_H",
+        "PASS_high_H",
+        "FAIL_high_H",
+        "FAIL_low_H",
     ]
