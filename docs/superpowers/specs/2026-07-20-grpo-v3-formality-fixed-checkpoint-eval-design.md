@@ -6,21 +6,21 @@
 
 本评估回答唯一问题：
 
-> 在相同输入、相同 16 个随机种子、相同解码参数和相同 `qa_formality` judger 下，Probe 的中间及最终 checkpoint 是否比训练前 parent adapter 获得更高的连续 PASS 置信度 reward？
+> 在相同输入、相同 16 个随机种子、相同解码参数和相同 `qa_formality` judger 下，Probe 的最终 checkpoint 40 是否比训练前 parent adapter 获得更高的连续 PASS 置信度 reward？
 
 本评估不重新训练，不修改原 Probe 结果，不引入其他 reward，不解锁更大规模训练，也不证明 groundedness、answerability 或综合 QA 质量改善。
 
 ## 2. 评估范围
 
-评估以下 9 个 adapter：
+远程清单确认 `--save_total_limit 1` 最终只保留了 checkpoint 40，因此评估以下 2 个 adapter：
 
 - step 0：Probe 使用的 parent adapter；
-- step 5、10、15、20、25、30、35、40：`formality_probe_14377903` 保存的 checkpoint。
+- step 40：`formality_probe_14377903` 保存的最终 checkpoint。
 
 每个 adapter 使用同一条 Probe native-video evidence 和同一组 16 个固定随机种子。每个“checkpoint × seed”生成一个候选，共得到：
 
 \[
-9\times16=144
+2\times16=32
 \]
 
 条独立候选记录。
@@ -39,7 +39,7 @@
 
 ## 3. 执行架构
 
-采用一个 Slurm 作业顺序评估 9 个 checkpoint。8B reviewer 只启动一次；policy 在 GPU 上按 step 顺序加载、评估并释放，避免 9 次 reviewer 初始化和不同作业环境造成额外差异。
+采用一个 Slurm 作业顺序评估 step 0 与 step 40。8B reviewer 只启动一次；policy 在同一 GPU 和依赖环境中切换两个 LoRA adapter，避免不同作业环境造成额外差异。
 
 执行顺序为：
 
@@ -49,9 +49,9 @@
 → 启动 reviewer 并通过 /v1/models 与最小文本请求
 → 加载 step 0 adapter
 → 按 16 个固定种子生成、评分并落盘
-→ 释放 policy 和显存
-→ 依次评估 step 5～40
-→ 检查结果严格为 144 条
+→ 切换为 step 40 adapter
+→ 使用相同 16 个种子生成、评分并落盘
+→ 检查结果严格为 32 条
 → 生成配对统计、三态结论和 manifest
 ```
 
@@ -91,28 +91,20 @@ r=-1
 
 ## 6. 指标
 
-对每个 checkpoint 输出：
+对 step 0 和 step 40 分别输出：
 
 - 候选数，必须为 16；
 - 总 reward 均值和标准差；
 - 可判定 reward 均值；
 - 不可判定数量和比例；
-- 相对于 step 0 的逐 seed 配对差均值；
-- 相对于 step 0 的胜、平、负 seed 数量。
+- step 40 相对于 step 0 的逐 seed 配对差均值；
+- step 40 相对于 step 0 的胜、平、负 seed 数量。
 
 主端点为：
 
 \[
 \Delta R=R_{40}-R_0
 \]
-
-对 9 个 checkpoint 的总 reward 均值相对于训练 step 做带截距最小二乘拟合：
-
-\[
-R_s=\alpha+\beta s
-\]
-
-并报告全程斜率 \(\beta\)。
 
 对 step 40 与 step 0 的 16 个逐 seed reward 差执行配对 bootstrap。bootstrap 使用固定分析 seed 和固定重采样次数，输出均值差的 95% percentile 置信区间，确保重复分析得到相同结果。
 
@@ -125,7 +117,7 @@ R_s=\alpha+\beta s
 必须同时满足：
 
 \[
-\Delta R>0,\qquad \beta>0
+\Delta R>0
 \]
 
 - step 40 不可判定率不高于 step 0；
@@ -136,7 +128,6 @@ R_s=\alpha+\beta s
 满足任一条件：
 
 - \(\Delta R\le0\)；
-- \(\beta\le0\)；
 - step 40 不可判定率高于 step 0。
 
 仅可判定候选均值上升不能覆盖上述失败条件。
@@ -146,7 +137,6 @@ R_s=\alpha+\beta s
 满足：
 
 - \(\Delta R>0\)；
-- \(\beta>0\)；
 - 不可判定率没有上升；
 - 但配对 bootstrap 95% 置信区间下界不大于 0。
 
@@ -160,17 +150,17 @@ Slurm 作业退出码只表示执行完整性，不表示研究假设是否成�
 
 - storage preflight 通过；
 - reviewer readiness 通过；
-- 9 个 adapter 均完整并成功加载；
-- 144 个候选全部生成和评分；
+- 2 个 adapter 均完整并成功加载；
+- 32 个候选全部生成和评分；
 - reward 全部为有限值；
-- 结果键严格覆盖 9×16 笛卡尔积；
+- 结果键严格覆盖 2×16 笛卡尔积；
 - 只出现 `qa_formality_confidence` reward；
 - 没有基础设施 mask；
 - summary 和 manifest 成功写入。
 
 `experiment_conclusion=not_improved` 是合法实验结果，不导致非零退出码。
 
-模型加载失败、reviewer 失败、reward 缺失或非有限、结果不足 144 条、重复键、checkpoint 清单不完整等属于基础设施失败，必须返回非零退出码；不得生成伪 reward 或把缺失候选当作低 reward 继续汇总。
+模型加载失败、reviewer 失败、reward 缺失或非有限、结果不足 32 条、重复键、checkpoint 清单不完整等属于基础设施失败，必须返回非零退出码；不得生成伪 reward 或把缺失候选当作低 reward 继续汇总。
 
 ## 9. 存储安全
 
@@ -200,11 +190,11 @@ gpu_metrics.csv
 dependencies.txt
 ```
 
-`fixed_eval_results.jsonl` 严格为 144 行。每行至少保存：schema version、checkpoint label、checkpoint step、adapter path、seed、evidence ID、视频路径、解码配置、原始 completion、reward、是否不可判定、reward record 和 judge trace。
+`fixed_eval_results.jsonl` 严格为 32 行。每行至少保存：schema version、checkpoint label、checkpoint step、adapter path、seed、evidence ID、视频路径、解码配置、原始 completion、reward、是否不可判定、reward record 和 judge trace。
 
-`fixed_eval_summary.json` 保存逐 checkpoint 统计、step 0→40 配对结果、全局 slope、bootstrap 区间及三态结论。
+`fixed_eval_summary.json` 保存 step 0 和 step 40 的统计、逐 seed 配对结果、bootstrap 区间及三态结论。
 
-`checkpoint_inventory.json` 保存 9 个 adapter 的绝对路径、必要文件存在性和 adapter 配置摘要。
+`checkpoint_inventory.json` 保存 2 个 adapter 的绝对路径、必要文件存在性和 adapter 配置摘要。
 
 `resolved_config.json` 保存模型路径、数据路径及 SHA-256、明确的 16 个 seed、temperature、生成长度、reward revision、reviewer 配置和依赖边界。
 
@@ -220,23 +210,22 @@ seed_count
 storage_preflight_status
 ```
 
-只有基础设施验收通过且 144 行完整时，才更新 `latest_formality_fixed_eval_output.txt`。指针表示“评估完整结束”，不表示结论一定为 `improved`。
+只有基础设施验收通过且 32 行完整时，才更新 `latest_formality_fixed_eval_output.txt`。指针表示“评估完整结束”，不表示结论一定为 `improved`。
 
 ## 11. 测试策略
 
 实现严格采用测试先行。自动测试至少覆盖：
 
-- 9 个 checkpoint 复用同一组 16 个 seed；
-- 结果键必须严格覆盖 9×16；
+- step 0 和 step 40 复用同一组 16 个 seed；
+- 结果键必须严格覆盖 2×16；
 - 重复键、缺失键和非有限 reward 被拒绝；
 - 不可判定候选保留在总 reward 中；
 - 仅可判定均值只作为敏感性指标；
 - `improved`、`not_improved`、`inconclusive` 三种结论；
-- slope 计算使用 checkpoint step，而不是数组下标；
 - 配对 bootstrap 在固定分析 seed 下可复现；
 - step 40 不可判定率上升时不能判为 improved；
 - manifest 将运行状态和实验结论分开；
-- Slurm 包含完整 scratch-first 环境、预检、144 行断言和失败硬停止；
+- Slurm 包含完整 scratch-first 环境、预检、32 行断言和失败硬停止；
 - Bash 静态语法检查通过。
 
 本地测试只能证明纯逻辑、静态配置和脚本语法，不能宣称 Torch GPU、真实视频生成或 reviewer runtime 已通过。
@@ -256,8 +245,7 @@ storage_preflight_status
 
 - 远程静态预检通过；
 - Slurm 作业完成且 `run_status=passed`；
-- `fixed_eval_results.jsonl` 严格 144 行；
-- 9 个 checkpoint 各 16 行；
+- `fixed_eval_results.jsonl` 严格 32 行；
+- step 0 和 step 40 各 16 行；
 - summary、manifest 和 reviewer 日志完整；
 - 最终报告明确区分基础设施状态和 `improved`、`not_improved` 或 `inconclusive` 实验结论。
-
