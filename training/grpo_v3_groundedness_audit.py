@@ -7,7 +7,9 @@ import csv
 import json
 import re
 import shlex
+import shutil
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -16,6 +18,15 @@ from training.grpo_v3_json_format import validate_completion_json
 
 SCHEMA_VERSION = "grpo_v3_groundedness_audit_v1"
 HUMAN_CHOICES = {"PASS", "FAIL", "UNCERTAIN"}
+HUMAN_FIELDS = (
+    "human_groundedness",
+    "human_combined_answerability",
+    "human_speaker_leakage",
+    "human_provider_answerability",
+    "human_qa_formality",
+    "human_shallow_activity",
+)
+MANUAL_AUXILIARY_FIELDS = ("claim_visible", "answer_supported", "reviewer_agreement", "notes")
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -244,7 +255,17 @@ def build_review_rows(cases: Iterable[dict[str, Any]]) -> list[dict[str, str]]:
             "case_id": str(case["case_id"]),
             "evidence_id": str(case["evidence_id"]),
             "reviewer_groundedness": str(case["reviewer_groundedness"]),
+            "reviewer_combined_answerability": str(case.get("reviewer_combined_answerability") or ""),
+            "reviewer_speaker_leakage": str(case.get("reviewer_speaker_leakage") or ""),
+            "reviewer_provider_answerability": str(case.get("reviewer_provider_answerability") or ""),
+            "reviewer_qa_formality": str(case.get("reviewer_qa_formality") or ""),
+            "reviewer_shallow_activity": str(case.get("reviewer_shallow_activity") or ""),
             "human_groundedness": "",
+            "human_combined_answerability": "",
+            "human_speaker_leakage": "",
+            "human_provider_answerability": "",
+            "human_qa_formality": "",
+            "human_shallow_activity": "",
             "claim_visible": "",
             "answer_supported": "",
             "reviewer_agreement": "",
@@ -252,6 +273,28 @@ def build_review_rows(cases: Iterable[dict[str, Any]]) -> list[dict[str, str]]:
         }
         for case in cases
     ]
+
+
+def merge_existing_reviews(
+    new_rows: list[dict[str, str]], old_rows: list[dict[str, Any]]
+) -> list[dict[str, str]]:
+    new_by_id = {str(row.get("case_id") or ""): row for row in new_rows}
+    old_by_id = {str(row.get("case_id") or ""): row for row in old_rows}
+    if set(new_by_id) != set(old_by_id):
+        added = sorted(set(new_by_id) - set(old_by_id))
+        missing = sorted(set(old_by_id) - set(new_by_id))
+        raise ValueError(f"case_id 集合不一致：新增={added}；旧表多出={missing}")
+    standard_fields = set().union(*(row.keys() for row in new_rows)) if new_rows else set()
+    preserved_fields = set(HUMAN_FIELDS) | set(MANUAL_AUXILIARY_FIELDS)
+    merged: list[dict[str, str]] = []
+    for new_row in new_rows:
+        old_row = old_by_id[str(new_row["case_id"])]
+        result = dict(new_row)
+        for key, value in old_row.items():
+            if key in preserved_fields or key not in standard_fields:
+                result[str(key)] = str(value or "")
+        merged.append(result)
+    return merged
 
 
 def summarize_reviews(
@@ -303,8 +346,13 @@ def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]) if rows else [])
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -354,8 +402,16 @@ def export_audit(trace: Path, output_dir: Path, *, pass_count: int, fail_count: 
     csv_path = output_dir / "groundedness_audit_review.csv"
     guide_path = output_dir / "groundedness_audit_guide_cn.md"
     clips_script = output_dir / "extract_audit_clips.sh"
+    review_rows = build_review_rows(cases)
+    backup_path: Path | None = None
+    if csv_path.exists():
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            review_rows = merge_existing_reviews(review_rows, list(csv.DictReader(handle)))
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup_path = csv_path.with_name(f"{csv_path.stem}.backup_{timestamp}{csv_path.suffix}")
+        shutil.copy2(csv_path, backup_path)
     _write_jsonl(cases_path, cases)
-    _write_csv(csv_path, build_review_rows(cases))
+    _write_csv(csv_path, review_rows)
     guide_path.write_text(_markdown(cases), encoding="utf-8")
     commands = ["#!/usr/bin/env bash", "set -euo pipefail", 'OUT_DIR="${1:-groundedness_audit_clips}"', 'mkdir -p "${OUT_DIR}"']
     for case in cases:
@@ -368,7 +424,14 @@ def export_audit(trace: Path, output_dir: Path, *, pass_count: int, fail_count: 
                 f'"${{OUT_DIR}}/{output_name}"'
             )
     clips_script.write_text("\n".join(commands) + "\n", encoding="utf-8", newline="\n")
-    result = {"cases": len(cases), "cases_path": str(cases_path), "review_csv": str(csv_path), "guide": str(guide_path), "extract_clips_script": str(clips_script)}
+    result = {
+        "cases": len(cases),
+        "cases_path": str(cases_path),
+        "review_csv": str(csv_path),
+        "review_csv_backup": str(backup_path) if backup_path else None,
+        "guide": str(guide_path),
+        "extract_clips_script": str(clips_script),
+    }
     (output_dir / "groundedness_audit_export.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     return result
 

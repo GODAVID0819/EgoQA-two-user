@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import csv
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from training.grpo_v3_groundedness_audit import (
     build_review_rows,
+    export_audit,
+    merge_existing_reviews,
     select_audit_cases,
     summarize_reviews,
 )
@@ -169,6 +175,16 @@ class GroundednessAuditTests(unittest.TestCase):
             fail_count=12,
         )
         reviews = build_review_rows(cases)
+        self.assertIn("reviewer_combined_answerability", reviews[0])
+        self.assertIn("human_combined_answerability", reviews[0])
+        self.assertIn("reviewer_speaker_leakage", reviews[0])
+        self.assertIn("human_speaker_leakage", reviews[0])
+        self.assertIn("reviewer_provider_answerability", reviews[0])
+        self.assertIn("human_provider_answerability", reviews[0])
+        self.assertIn("reviewer_qa_formality", reviews[0])
+        self.assertIn("human_qa_formality", reviews[0])
+        self.assertIn("reviewer_shallow_activity", reviews[0])
+        self.assertIn("human_shallow_activity", reviews[0])
         for index, row in enumerate(reviews[:20]):
             row["human_groundedness"] = row["reviewer_groundedness"] if index < 17 else "UNCERTAIN"
             row["claim_visible"] = "yes"
@@ -183,6 +199,67 @@ class GroundednessAuditTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "至少完成 20"):
             summarize_reviews(reviews[:19], approved_for_weight_change=True)
+
+    def test_merge_existing_reviews_preserves_human_and_unknown_columns(self) -> None:
+        cases = select_audit_cases(
+            [_trace(i, "PASS" if i < 12 else "FAIL") for i in range(24)],
+            pass_count=12,
+            fail_count=12,
+        )
+        new_rows = build_review_rows(cases)
+        old_rows = [dict(row) for row in new_rows]
+        old_rows[0]["human_groundedness"] = "PASS"
+        old_rows[0]["notes"] = "已经看过视频"
+        old_rows[0]["custom_note"] = "保留"
+
+        merged = merge_existing_reviews(new_rows, old_rows)
+
+        self.assertEqual(merged[0]["human_groundedness"], "PASS")
+        self.assertEqual(merged[0]["notes"], "已经看过视频")
+        self.assertEqual(merged[0]["human_speaker_leakage"], "")
+        self.assertEqual(merged[0]["custom_note"], "保留")
+
+    def test_merge_existing_reviews_rejects_case_id_mismatch(self) -> None:
+        cases = select_audit_cases(
+            [_trace(i, "PASS" if i < 12 else "FAIL") for i in range(24)],
+            pass_count=12,
+            fail_count=12,
+        )
+        new_rows = build_review_rows(cases)
+        old_rows = [dict(row) for row in new_rows[:-1]]
+        with self.assertRaisesRegex(ValueError, "case_id 集合不一致"):
+            merge_existing_reviews(new_rows, old_rows)
+
+    def test_export_backs_up_and_preserves_existing_review_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trace_path = root / "reward_trace.jsonl"
+            trace_path.write_text(
+                "".join(
+                    json.dumps(_trace(index, "PASS" if index == 0 else "FAIL"), ensure_ascii=False) + "\n"
+                    for index in range(2)
+                ),
+                encoding="utf-8",
+            )
+            output_dir = root / "audit"
+            export_audit(trace_path, output_dir, pass_count=1, fail_count=1)
+            csv_path = output_dir / "groundedness_audit_review.csv"
+            with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            rows[0]["human_groundedness"] = "PASS"
+            rows[0]["notes"] = "保留填写内容"
+            with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+
+            export_audit(trace_path, output_dir, pass_count=1, fail_count=1)
+
+            with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                preserved = list(csv.DictReader(handle))
+            self.assertEqual(preserved[0]["human_groundedness"], "PASS")
+            self.assertEqual(preserved[0]["notes"], "保留填写内容")
+            self.assertEqual(len(list(output_dir.glob("groundedness_audit_review.backup_*.csv"))), 1)
 
 
 if __name__ == "__main__":
