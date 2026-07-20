@@ -281,6 +281,40 @@ class GroundednessAuditTests(unittest.TestCase):
         self.assertIn("提问者证据", guide)
         self.assertIn("Reward components", guide)
 
+    def test_summary_reports_multisignal_agreement_and_human_answerability_gate(self) -> None:
+        cases = select_audit_cases(
+            [_trace(i, "PASS" if i < 20 else "FAIL") for i in range(40)],
+            pass_count=12,
+            fail_count=12,
+        )
+        reviews = build_review_rows(cases)
+        for row in reviews[:20]:
+            row["human_groundedness"] = row["reviewer_groundedness"]
+            row["human_combined_answerability"] = "PASS"
+            row["human_speaker_leakage"] = "NO_LEAK"
+            row["human_provider_answerability"] = "ANSWERABLE"
+            row["human_qa_formality"] = "PASS"
+            row["human_shallow_activity"] = "PASS"
+        reviews[0]["human_speaker_leakage"] = "LEAK"
+        reviews[1]["human_speaker_leakage"] = "UNCERTAIN"
+        reviews[2]["human_combined_answerability"] = "FAIL"
+        reviews[0]["human_qa_formality"] = "MAYBE"
+
+        summary = summarize_reviews(reviews, approved_for_weight_change=False)
+
+        self.assertEqual(summary["schema_version"], "grpo_v3_multisignal_audit_v2")
+        self.assertEqual(summary["signals"]["speaker_leakage"]["completed"], 20)
+        self.assertEqual(summary["signals"]["speaker_leakage"]["counts"]["LEAK"], 1)
+        self.assertEqual(summary["signals"]["speaker_leakage"]["counts"]["NO_LEAK"], 18)
+        self.assertEqual(summary["signals"]["qa_formality"]["completed"], 19)
+        self.assertEqual(summary["signals"]["shallow_activity"]["agreement_count"], 20)
+        self.assertEqual(summary["human_answerability_gate"]["derivable_count"], 20)
+        self.assertEqual(summary["human_answerability_gate"]["passed"], 17)
+        self.assertEqual(summary["human_answerability_gate"]["failed"], 2)
+        self.assertEqual(summary["human_answerability_gate"]["uncertain"], 1)
+        self.assertTrue(any(item["field"] == "human_qa_formality" for item in summary["invalid_values"]))
+        self.assertFalse(summary["approved_for_weight_change"])
+
 
 if __name__ == "__main__":
     unittest.main()

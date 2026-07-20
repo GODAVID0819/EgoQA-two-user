@@ -16,7 +16,7 @@ from typing import Any, Iterable
 from training.grpo_v3_json_format import validate_completion_json
 
 
-SCHEMA_VERSION = "grpo_v3_groundedness_audit_v1"
+SCHEMA_VERSION = "grpo_v3_multisignal_audit_v2"
 HUMAN_CHOICES = {"PASS", "FAIL", "UNCERTAIN"}
 HUMAN_FIELDS = (
     "human_groundedness",
@@ -27,6 +27,28 @@ HUMAN_FIELDS = (
     "human_shallow_activity",
 )
 MANUAL_AUXILIARY_FIELDS = ("claim_visible", "answer_supported", "reviewer_agreement", "notes")
+SIGNAL_SPECS = {
+    "groundedness": ("human_groundedness", "reviewer_groundedness", {"PASS", "FAIL", "UNCERTAIN"}, {}),
+    "combined_answerability": (
+        "human_combined_answerability", "reviewer_combined_answerability", {"PASS", "FAIL", "UNCERTAIN"}, {}
+    ),
+    "speaker_leakage": (
+        "human_speaker_leakage", "reviewer_speaker_leakage", {"LEAK", "NO_LEAK", "UNCERTAIN"}, {}
+    ),
+    "provider_answerability": (
+        "human_provider_answerability",
+        "reviewer_provider_answerability",
+        {"ANSWERABLE", "NOT_ANSWERABLE", "UNCERTAIN"},
+        {},
+    ),
+    "qa_formality": ("human_qa_formality", "reviewer_qa_formality", {"PASS", "FAIL", "UNCERTAIN"}, {}),
+    "shallow_activity": (
+        "human_shallow_activity",
+        "reviewer_shallow_activity",
+        {"PASS", "FAIL", "UNCERTAIN"},
+        {"NO_SHALLOW": "PASS", "SHALLOW": "FAIL"},
+    ),
+}
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -300,8 +322,9 @@ def merge_existing_reviews(
 def summarize_reviews(
     rows: Iterable[dict[str, Any]], *, approved_for_weight_change: bool
 ) -> dict[str, Any]:
+    all_rows = [dict(row) for row in rows]
     completed = [
-        dict(row) for row in rows
+        dict(row) for row in all_rows
         if str(row.get("human_groundedness") or "").strip().upper() in HUMAN_CHOICES
     ]
     if len(completed) < 20:
@@ -323,6 +346,64 @@ def summarize_reviews(
             "agreement_count": agree,
             "agreement_rate": agree / len(subset) if subset else None,
         }
+    invalid_values: list[dict[str, str]] = []
+    missing_fields: list[dict[str, Any]] = []
+    signals: dict[str, dict[str, Any]] = {}
+    for name, (human_field, reviewer_field, choices, reviewer_mapping) in SIGNAL_SPECS.items():
+        valid_rows: list[tuple[dict[str, Any], str]] = []
+        counts: Counter[str] = Counter()
+        comparable = 0
+        signal_agreements = 0
+        for row in all_rows:
+            human_value = str(row.get(human_field) or "").strip().upper()
+            if not human_value:
+                continue
+            if human_value not in choices:
+                invalid_values.append({
+                    "case_id": str(row.get("case_id") or ""),
+                    "field": human_field,
+                    "value": human_value,
+                })
+                continue
+            valid_rows.append((row, human_value))
+            counts[human_value] += 1
+            reviewer_value = str(row.get(reviewer_field) or "").strip().upper()
+            reviewer_value = reviewer_mapping.get(reviewer_value, reviewer_value)
+            if reviewer_value in choices:
+                comparable += 1
+                if reviewer_value == human_value:
+                    signal_agreements += 1
+        signals[name] = {
+            "completed": len(valid_rows),
+            "missing": len(all_rows) - len(valid_rows),
+            "counts": {choice: counts[choice] for choice in sorted(choices)},
+            "reviewer_comparable_count": comparable,
+            "agreement_count": signal_agreements,
+            "agreement_rate": signal_agreements / comparable if comparable else None,
+        }
+    for row in all_rows:
+        missing = [field for field in HUMAN_FIELDS if not str(row.get(field) or "").strip()]
+        if missing:
+            missing_fields.append({"case_id": str(row.get("case_id") or ""), "fields": missing})
+
+    gate_counts: Counter[str] = Counter()
+    groundedness_vs_combined: Counter[str] = Counter()
+    groundedness_vs_speaker: Counter[str] = Counter()
+    for row in all_rows:
+        combined = str(row.get("human_combined_answerability") or "").strip().upper()
+        speaker = str(row.get("human_speaker_leakage") or "").strip().upper()
+        groundedness = str(row.get("human_groundedness") or "").strip().upper()
+        if combined in HUMAN_CHOICES and speaker in {"LEAK", "NO_LEAK", "UNCERTAIN"}:
+            if combined == "FAIL" or speaker == "LEAK":
+                gate_counts["FAIL"] += 1
+            elif combined == "PASS" and speaker == "NO_LEAK":
+                gate_counts["PASS"] += 1
+            else:
+                gate_counts["UNCERTAIN"] += 1
+        if groundedness in HUMAN_CHOICES and combined in HUMAN_CHOICES:
+            groundedness_vs_combined[f"{groundedness}|{combined}"] += 1
+        if groundedness in HUMAN_CHOICES and speaker in {"LEAK", "NO_LEAK", "UNCERTAIN"}:
+            groundedness_vs_speaker[f"{groundedness}|{speaker}"] += 1
     return {
         "schema_version": SCHEMA_VERSION,
         "completed_count": len(completed),
@@ -333,6 +414,19 @@ def summarize_reviews(
         "uncertain_count": uncertain,
         "uncertain_rate": uncertain / len(completed),
         "by_reviewer_status": by_status,
+        "signals": signals,
+        "human_answerability_gate": {
+            "derivable_count": sum(gate_counts.values()),
+            "passed": gate_counts["PASS"],
+            "failed": gate_counts["FAIL"],
+            "uncertain": gate_counts["UNCERTAIN"],
+        },
+        "cross_signal": {
+            "groundedness_vs_combined_answerability": dict(sorted(groundedness_vs_combined.items())),
+            "groundedness_vs_speaker_leakage": dict(sorted(groundedness_vs_speaker.items())),
+        },
+        "invalid_values": invalid_values,
+        "missing_fields": missing_fields,
         "approved_for_weight_change": bool(approved_for_weight_change),
     }
 
