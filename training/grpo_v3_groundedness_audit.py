@@ -359,25 +359,41 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def _markdown(cases: list[dict[str, Any]]) -> str:
     lines = [
-        "# Groundedness 人工审计指南",
+        "# GRPO v3 多信号人工审计指南",
         "",
-        "只判断视频是否支持 evidence claim 与正确答案；不要把问题自然度、shallow activity 或 JSON 格式混入 groundedness。",
+        "本审计同时复核 groundedness、combined answerability、speaker leakage、provider-only answerability、QA formality 与 shallow activity。各信号必须分别判断，不得用一个总体印象代替。",
         "",
-        "填写 `groundedness_audit_review.csv`：`human_groundedness` 只能是 PASS、FAIL、UNCERTAIN。",
+        "操作顺序：先阅读 QA 和观看两段视频，先独立判断，再阅读 reviewer 结论，最后填写 CSV。这样可以减少 reviewer 对人工判断的锚定。",
+        "",
+        "## CSV 人工字段",
+        "",
+        "| 字段 | 允许值 | 含义 |",
+        "|---|---|---|",
+        "| `human_groundedness` | PASS / FAIL / UNCERTAIN | claims 与正确答案是否有视频依据 |",
+        "| `human_combined_answerability` | PASS / FAIL / UNCERTAIN | 两段视频合并后是否唯一支持正确项 |",
+        "| `human_speaker_leakage` | LEAK / NO_LEAK / UNCERTAIN | speaker 单独是否已经能答对 |",
+        "| `human_provider_answerability` | ANSWERABLE / NOT_ANSWERABLE / UNCERTAIN | provider 单独是否能答对；ANSWERABLE 本身不算失败 |",
+        "| `human_qa_formality` | PASS / FAIL / UNCERTAIN | 问题自然度与五选项结构是否合格 |",
+        "| `human_shallow_activity` | PASS / FAIL / UNCERTAIN | PASS 表示不是浅层活动问题，FAIL 表示问题过浅 |",
+        "",
+        "人工 answerability gate 仅在 combined=PASS 且 speaker=NO_LEAK 时通过；provider 单独可回答是允许的诊断现象。JSON format 只展示机器结果。",
         "",
     ]
     for index, case in enumerate(cases, start=1):
         lines.extend([
-            f"## {index}. {case['case_id']}（reviewer={case['reviewer_groundedness']}）",
+            f"## {index}. {case['case_id']}",
             "",
             f"- evidence：`{case['evidence_id']}`；类型：`{case['question_type']}`；reward：`{case['reward']}`；格式：`{case['format_status']}`",
+            f"- 角色：speaker=`{case.get('speaker_user') or '未记录'}`；provider=`{case.get('provider_user') or '未记录'}`",
             f"- 问题：{case['question']}",
             f"- 选项：{json.dumps(case['options'], ensure_ascii=False)}",
             f"- 正确项：`{case['correct']}`；答案：{case['answer']}",
             f"- evidence claims：{json.dumps(case['evidence_claims'], ensure_ascii=False)}",
             f"- timestamps：{json.dumps(case['referred_timestamps'], ensure_ascii=False)}",
-            f"- reviewer 理由：{case['reviewer_reason']}",
-            f"- reviewer 建议：{case['reviewer_fix']}",
+            "",
+            "### A. 先独立观看与判断",
+            "",
+            "先不要阅读下方 reviewer 结论。分别判断：claim 是否可见、合并视频能否唯一作答、speaker 是否泄漏答案、provider 是否能单独作答。",
             "",
         ])
         for video_index, window in enumerate(case["video_windows"], start=1):
@@ -392,6 +408,41 @@ def _markdown(cases: list[dict[str, Any]]) -> str:
                 f"- 截取审计副本：`ffmpeg -y -ss {start} -i {video} -t {end - start:.3f} -c:v libx264 -preset veryfast -crf 23 -an {case['case_id']}_u{video_index}.mp4`",
                 "",
             ])
+        lines.extend([
+            "### B. Reviewer 信号（完成独立判断后再看）",
+            "",
+            f"- Groundedness：`{case.get('reviewer_groundedness') or '未记录'}`",
+            f"  - 理由：{case.get('reviewer_reason') or '未记录'}",
+            f"  - 建议：{case.get('reviewer_fix') or '未记录'}",
+            f"- Combined answerability：`{case.get('reviewer_combined_answerability') or '未记录'}`",
+            f"- Speaker leakage：`{case.get('reviewer_speaker_leakage') or '未记录'}`",
+            f"- Provider-only answerability：`{case.get('reviewer_provider_answerability') or '未记录'}`",
+            f"- Answerability gate：`{case.get('reviewer_answerability_gate_passed') if case.get('reviewer_answerability_gate_passed') is not None else '未记录'}`；理由：{case.get('reviewer_answerability_gate_reason') or '未记录'}",
+            f"- QA formality：`{case.get('reviewer_qa_formality') or '未记录'}`；理由：{case.get('reviewer_qa_formality_reason') or '未记录'}；建议：{case.get('reviewer_qa_formality_fix') or '未记录'}",
+            f"- Shallow activity：`{case.get('reviewer_shallow_activity') or '未记录'}`",
+            f"- Reward components：`{json.dumps(case.get('reward_components') or {}, ensure_ascii=False)}`",
+            "",
+            "Answerability 条件明细：",
+            "",
+        ])
+        evaluations = case.get("answerability_evaluations") or []
+        if not evaluations:
+            lines.extend(["- 未记录", ""])
+        for evaluation in evaluations:
+            lines.extend([
+                f"- `{evaluation.get('condition_id') or '未记录'}`；用户：`{json.dumps(evaluation.get('users') or [], ensure_ascii=False)}`；选择：`{evaluation.get('choice') or '未记录'}`",
+                f"  - answer text：{evaluation.get('answer_text') or '未记录'}",
+                f"  - evidence：{evaluation.get('evidence_used') or '未记录'}",
+                f"  - insufficient reason：{evaluation.get('insufficient_reason') or '无'}",
+                f"  - normalized entropy：`{evaluation.get('normalized_entropy') if evaluation.get('normalized_entropy') is not None else '未记录'}`",
+            ])
+        lines.extend([
+            "",
+            "### C. 填写 CSV",
+            "",
+            "依次填写 `human_groundedness`、`human_combined_answerability`、`human_speaker_leakage`、`human_provider_answerability`、`human_qa_formality`、`human_shallow_activity`，并在 `notes` 中写明用户、时间和支持或反驳依据。",
+            "",
+        ])
     return "\n".join(lines) + "\n"
 
 

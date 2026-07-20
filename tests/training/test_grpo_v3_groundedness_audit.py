@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from training.grpo_v3_groundedness_audit import (
+    _markdown,
     build_review_rows,
     export_audit,
     merge_existing_reviews,
@@ -260,6 +261,25 @@ class GroundednessAuditTests(unittest.TestCase):
             self.assertEqual(preserved[0]["human_groundedness"], "PASS")
             self.assertEqual(preserved[0]["notes"], "保留填写内容")
             self.assertEqual(len(list(output_dir.glob("groundedness_audit_review.backup_*.csv"))), 1)
+
+    def test_markdown_explains_and_renders_all_audit_signals(self) -> None:
+        cases = select_audit_cases(
+            [_trace(0, "PASS"), _trace(1, "FAIL")],
+            pass_count=1,
+            fail_count=1,
+        )
+        guide = _markdown(cases)
+
+        self.assertIn("先独立判断，再阅读 reviewer", guide)
+        self.assertIn("human_combined_answerability", guide)
+        self.assertIn("human_speaker_leakage", guide)
+        self.assertIn("human_provider_answerability", guide)
+        self.assertIn("human_qa_formality", guide)
+        self.assertIn("human_shallow_activity", guide)
+        self.assertIn("Speaker leakage", guide)
+        self.assertIn("Combined answerability", guide)
+        self.assertIn("提问者证据", guide)
+        self.assertIn("Reward components", guide)
 
 
 if __name__ == "__main__":
