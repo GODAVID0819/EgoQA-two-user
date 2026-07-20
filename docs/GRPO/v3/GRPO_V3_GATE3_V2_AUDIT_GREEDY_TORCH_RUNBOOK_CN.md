@@ -231,7 +231,7 @@ ls -lh "${AUDIT_DIR}"
 bash "${AUDIT_DIR}/extract_audit_clips.sh" "${AUDIT_DIR}/clips"
 
 find "${AUDIT_DIR}/clips" -type f -name '*.mp4' | wc -l
-tar -C "${AUDIT_DIR}" -czf "${AUDIT_DIR}/groundedness_audit_pack.tar.gz" \
+tar -C "${AUDIT_DIR}" -czf "${AUDIT_DIR}/groundedness_multisignal_audit_pack.tar.gz" \
   groundedness_audit_cases.jsonl \
   groundedness_audit_review.csv \
   groundedness_audit_guide_cn.md \
@@ -254,7 +254,7 @@ sftp xl6775@torch-login-b-2
 ```text
 lcd C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user/outputs/grpo_v3
 cd /scratch/xl6775/projects/EgoQA-two-user/outputs/grpo_v3/groundedness_audit
-get groundedness_audit_pack.tar.gz
+get groundedness_multisignal_audit_pack.tar.gz
 bye
 ```
 
