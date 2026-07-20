@@ -690,10 +690,10 @@ Expected: `OK`，并记录实际测试数；不能沿用历史 `Ran 70 tests` �
 
 ```powershell
 python -m compileall training tests/training
-python -m training.grpo_v3_preflight --source-only --output tmp/grpo_v3_formality_source_preflight.json
+python -c "from training.grpo_v3_preflight import validate_repo_reward_sources; print(validate_repo_reward_sources())"
 ```
 
-Expected: compileall 退出码 0；preflight `status=passed`。
+Expected: compileall 退出码 0；源码 preflight 返回 `status=passed`。正式数据 schema preflight 在 Torch runbook 中使用 Gate 0 的真实 `train_native_video.jsonl` 执行。
 
 - [ ] **Step 4：重新运行真实旧 trace 回放并硬断言**
 
