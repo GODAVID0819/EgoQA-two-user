@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import math
 import socket
+import threading
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,6 +26,7 @@ from training.grpo_v3_answer_scorer import (
 
 
 LOOPBACK_HOST = "127.0.0.1"
+LOGGER = logging.getLogger(__name__)
 
 
 def parse_score_response(payload: Mapping[str, Any]) -> ScoreResponse:
@@ -140,7 +143,7 @@ class AnswerScorerClient:
         return parse_score_response(payload)
 
 
-def _handler_for(scorer: Any) -> type[BaseHTTPRequestHandler]:
+def _handler_for(scorer: Any, score_lock: threading.Lock) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def _json(self, status: int, payload: Mapping[str, Any]) -> None:
             body = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -164,6 +167,7 @@ def _handler_for(scorer: Any) -> type[BaseHTTPRequestHandler]:
                     and all(readiness["checks"].values())
                 )
             except Exception:
+                LOGGER.exception("answer scorer health readiness check failed")
                 readiness = {"status": "unhealthy", "checks": {}, "trainable_parameter_count": None}
                 healthy = False
             if not healthy:
@@ -181,7 +185,10 @@ def _handler_for(scorer: Any) -> type[BaseHTTPRequestHandler]:
                     raise ValueError("score service expects request and audit_material")
                 request = ScoreRequest.from_payload(payload["request"])
                 audit_material = PromptAuditMaterial.from_payload(payload["audit_material"])
-                response = scorer.score(request, audit_material=audit_material)
+                # ThreadingHTTPServer 可并发处理网络请求，但单个 GPU scorer 不可重入。
+                # 仅串行化模型评分；JSON 解析、健康检查和响应写回不占用该锁。
+                with score_lock:
+                    response = scorer.score(request, audit_material=audit_material)
                 if set(response) != set(LABELS):
                     raise RuntimeError("scorer returned incomplete labels")
                 response = response.to_payload()
@@ -189,8 +196,10 @@ def _handler_for(scorer: Any) -> type[BaseHTTPRequestHandler]:
                 parse_score_response(response)
                 self._json(200, response)
             except (ValueError, TypeError, json.JSONDecodeError) as error:
+                LOGGER.exception("answer scorer rejected an invalid score request")
                 self._json(400, {"error": type(error).__name__})
             except Exception as error:
+                LOGGER.exception("answer scorer score request failed")
                 self._json(500, {"error": type(error).__name__})
 
         def log_message(self, format: str, *args: Any) -> None:
@@ -207,7 +216,8 @@ def create_server(
 ) -> ThreadingHTTPServer:
     if host != LOOPBACK_HOST:
         raise ValueError("answer scorer service may only bind to 127.0.0.1")
-    return ThreadingHTTPServer((host, int(port)), _handler_for(scorer))
+    score_lock = threading.Lock()
+    return ThreadingHTTPServer((host, int(port)), _handler_for(scorer, score_lock))
 
 
 def build_parser() -> argparse.ArgumentParser:

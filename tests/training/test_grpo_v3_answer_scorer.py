@@ -420,6 +420,53 @@ class StubScorer:
         )
 
 
+class ConcurrentScorer(StubScorer):
+    def __init__(self):
+        super().__init__()
+        self.guard = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+        self.call_count = 0
+        self.first_entered = threading.Event()
+        self.second_entered = threading.Event()
+        self.release_first = threading.Event()
+
+    def score(self, request, *, audit_material=None):
+        with self.guard:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            self.call_count += 1
+            call_number = self.call_count
+        try:
+            if call_number == 1:
+                self.first_entered.set()
+                if not self.release_first.wait(timeout=2):
+                    raise RuntimeError("test release timed out")
+            else:
+                self.second_entered.set()
+            return super().score(request, audit_material=audit_material)
+        finally:
+            with self.guard:
+                self.active -= 1
+
+
+class FailingScorer(StubScorer):
+    def __init__(self, *, fail_health=False, fail_score=False):
+        super().__init__()
+        self.fail_health = fail_health
+        self.fail_score = fail_score
+
+    def readiness(self):
+        if self.fail_health:
+            raise RuntimeError("health root cause at C:/secret/model")
+        return super().readiness()
+
+    def score(self, request, *, audit_material=None):
+        if self.fail_score:
+            raise RuntimeError("gpu score root cause with private prompt")
+        return super().score(request, audit_material=audit_material)
+
+
 class AnswerScorerServiceTests(unittest.TestCase):
     def setUp(self):
         self.server = create_server(StubScorer(), host=LOOPBACK_HOST, port=0)
@@ -473,8 +520,7 @@ class AnswerScorerServiceTests(unittest.TestCase):
                 thread.join(timeout=2)
 
     def test_client_strictly_rejects_missing_extra_or_nonfinite_scores(self):
-        valid = {
-            "scores": {
+        valid_scores = {
                 label: {
                     "label": label,
                     "token_ids": [1],
@@ -482,17 +528,107 @@ class AnswerScorerServiceTests(unittest.TestCase):
                     "sequence_logprob": -1.0,
                 }
                 for label in LABELS
-            }
         }
+        valid = {
+            "scores": valid_scores,
+            "prompt_audit": {
+                "prompt_sha256": hashlib.sha256(b"").hexdigest(),
+                "passed": True,
+                "rules": ["generator_field_marker_scan", "excluded_value_scan"],
+                "hits": [],
+            },
+            "rendered_prompt": "",
+        }
+        self.assertEqual(set(parse_score_response(valid)), set(LABELS))
         invalid = [
-            {"scores": {"A": valid["scores"]["A"]}},
-            {"scores": {**valid["scores"], "F": valid["scores"]["A"]}},
-            {"scores": {**valid["scores"], "A": {**valid["scores"]["A"], "sequence_logprob": math.nan}}},
-            {"scores": {**valid["scores"], "A": {**valid["scores"]["A"], "token_logprobs": [math.inf]}}},
+            {**valid, "scores": {key: value for key, value in valid_scores.items() if key != "E"}},
+            {**valid, "scores": {**valid_scores, "F": valid_scores["A"]}},
+            {**valid, "scores": {**valid_scores, "A": {**valid_scores["A"], "sequence_logprob": math.nan}}},
+            {**valid, "scores": {**valid_scores, "A": {**valid_scores["A"], "token_logprobs": [math.inf]}}},
+            {**valid, "scores": {**valid_scores, "A": {**valid_scores["A"], "sequence_logprob": -2.0}}},
         ]
         for payload in invalid:
             with self.subTest(payload=payload), self.assertRaises(RuntimeError):
                 parse_score_response(payload)
+
+    def test_service_serializes_two_concurrent_score_calls(self):
+        scorer = ConcurrentScorer()
+        server = create_server(scorer, host=LOOPBACK_HOST, port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        host, port = server.server_address
+        client = AnswerScorerClient(f"http://{host}:{port}", timeout_seconds=2)
+        request = ScoreRequest(("u1.mp4", "u2.mp4"), "Q", ("1", "2", "3", "4", "5"))
+        results = []
+
+        def call_score():
+            results.append(client.score(request))
+
+        first = threading.Thread(target=call_score)
+        second = threading.Thread(target=call_score)
+        try:
+            first.start()
+            self.assertTrue(scorer.first_entered.wait(timeout=1))
+            second.start()
+            self.assertFalse(
+                scorer.second_entered.wait(timeout=0.1),
+                "第二请求应在服务级锁外等待，不能进入同一GPU scorer",
+            )
+            scorer.release_first.set()
+            first.join(timeout=2)
+            second.join(timeout=2)
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertTrue(scorer.second_entered.is_set())
+            self.assertEqual(scorer.max_active, 1)
+            self.assertEqual(len(results), 2)
+        finally:
+            scorer.release_first.set()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_service_logs_health_and_score_root_causes_without_http_disclosure(self):
+        cases = (
+            (FailingScorer(fail_health=True), "GET", "/health", "health root cause"),
+            (FailingScorer(fail_score=True), "POST", "/score", "gpu score root cause"),
+        )
+        for scorer, method, path, root_cause in cases:
+            server = create_server(scorer, host=LOOPBACK_HOST, port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                if method == "GET":
+                    request = urllib.request.Request(f"http://{host}:{port}{path}")
+                else:
+                    body = json.dumps({
+                        "request": ScoreRequest(
+                            ("u1.mp4", "u2.mp4"), "Q", ("1", "2", "3", "4", "5")
+                        ).to_payload(),
+                        "audit_material": {},
+                    }).encode("utf-8")
+                    request = urllib.request.Request(
+                        f"http://{host}:{port}{path}", data=body,
+                        headers={"Content-Type": "application/json"}, method="POST"
+                    )
+                with self.subTest(path=path), self.assertLogs(
+                    "training.grpo_v3_answer_scorer_service", level="ERROR"
+                ) as captured:
+                    with self.assertRaises(urllib.error.HTTPError) as raised:
+                        urllib.request.urlopen(request, timeout=1)
+                logs = "\n".join(captured.output)
+                self.assertIn(root_cause, logs)
+                self.assertIn("Traceback (most recent call last)", logs)
+                response_text = raised.exception.read().decode("utf-8")
+                raised.exception.close()
+                self.assertNotIn(root_cause, response_text)
+                self.assertNotIn("C:/secret/model", response_text)
+                self.assertNotIn("private prompt", response_text)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
     def test_client_converts_timeout_and_non_200_to_hard_failures(self):
         class TimeoutOpener:
