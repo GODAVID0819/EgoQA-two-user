@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-在不修改两个附加 worktree、不删除实验产物、不触碰远程仓库的前提下，将主 worktree 中混杂的源码、测试、文档和 Slurm 脚本整理为主题清晰、能够验证、便于回退的提交，并使主 worktree 最终达到干净状态。
+在不修改两个附加 worktree、不删除实验产物、不触碰远程仓库的前提下，将主 worktree 中混杂的源码、测试和 Slurm 脚本整理为主题清晰、能够验证、便于回退的提交；继续维护已经被 Git 跟踪的文档，但忽略未跟踪及未来新增的文档，并使主 worktree 最终达到干净状态。
 
 主 worktree 路径：
 
@@ -27,6 +27,7 @@
 /outputs/
 /analysis_outputs/
 /tmp/
+/docs/
 ```
 
 处理约束：
@@ -34,7 +35,9 @@
 - `outputs/` 和 `tmp/` 中已有内容继续保留在磁盘；
 - 当前本地已经删除的 7 个已跟踪 `analysis_outputs/` 文件，在生成产物清理提交中正式从当前版本移除；
 - 被移除的已跟踪分析产物仍保留在 Git 历史中，可按提交恢复；
-- 后续重新生成的三个目录内容不再进入常规 Git 状态。
+- 当前未跟踪及未来新增的 `docs/` 文件继续保留在磁盘，但不纳入本轮提交；
+- 已经被 Git 跟踪的 `docs/` 文件不退出版本控制，其现有修改仍需按功能主题审查和提交；
+- 后续重新生成的三个产物目录以及新增文档不再进入常规 Git 状态。
 
 ## 4. 文件组织原则
 
@@ -44,8 +47,8 @@
 - `tests/training/`：对应自动化测试；
 - `hpc/`：Slurm 作业入口；
 - `requirements/`：实验依赖；
-- `docs/GRPO/`：运行说明、实验设计、结果分析和汇报材料；
-- `docs/superpowers/`：已经完成的设计与实施计划。
+- 已被 Git 跟踪的 `docs/` 文件：继续按原路径维护；
+- 未被 Git 跟踪的 `docs/` 文件：保留在磁盘并由 `.gitignore` 排除。
 
 每个主题提交应尽量包含完整闭环：实现、对应测试、Slurm 入口、依赖和必要文档。若文件跨越多个主题，以运行时依赖闭环和可独立验证为优先，不机械拆分。
 
@@ -59,9 +62,9 @@
 
 内容：
 
-- 更新 `.gitignore`；
+- 更新 `.gitignore`，加入 `/outputs/`、`/analysis_outputs/`、`/tmp/` 和 `/docs/`；
 - 提交 `analysis_outputs/` 中 7 个已跟踪文件的删除状态；
-- 不删除 `outputs/` 和 `tmp/` 的磁盘内容。
+- 不删除 `outputs/`、`tmp/` 或未跟踪 `docs/` 的磁盘内容。
 
 ### 5.2 GRPO v2 LoRA 工作流
 
@@ -72,7 +75,7 @@
 - `training/grpo_v2_*`；
 - `tests/training/test_grpo_v2_*`；
 - `hpc/grpo_v2_*`；
-- `docs/GRPO/v2/`。
+- 不纳入当前未跟踪的 `docs/GRPO/v2/` 文件。
 
 ### 5.3 原生视频 GRPO v3 与 Gate
 
@@ -84,7 +87,7 @@
 - ms-swift Gate 0–4 Slurm 脚本；
 - 对应测试；
 - ms-swift 依赖；
-- 原生视频策略和 Torch runbook。
+- 已被 Git 跟踪且发生修改的相关文档；当前未跟踪的策略和 Torch runbook 保留在磁盘但不提交。
 
 ### 5.4 Adapter 与 Greedy Evaluation
 
@@ -95,7 +98,7 @@
 - adapter reload；
 - greedy evaluation 与 paired comparison；
 - 对应测试和 Slurm 脚本；
-- Gate 3 结果分析材料。
+- 已被 Git 跟踪的相关说明；当前未跟踪的 Gate 3 分析材料保留在磁盘但不提交。
 
 ### 5.5 Formality Convergence 与固定端点评估
 
@@ -106,19 +109,9 @@
 - formality artifact、convergence 和 fixed endpoint evaluation；
 - probe、smoke 和 fixed-eval Slurm 脚本；
 - 对应测试；
-- 实验说明和运行手册。
+- 已被 Git 跟踪且发生修改的实验说明和运行手册；当前未跟踪的 fixed-eval 文档保留在磁盘但不提交。
 
-### 5.6 实验分析与汇报材料
-
-建议提交信息：`docs: add GRPO v3 experiment analyses and reports`
-
-内容：
-
-- 实验设计与结果分析；
-- 汇报 Markdown 和演示文件；
-- 与已经实现内容对应的历史设计、实施计划。
-
-### 5.7 Torch 通用路径与元数据规则
+### 5.6 Torch 通用路径与元数据规则
 
 建议提交信息：`chore: align Torch experiment paths and metadata`
 
@@ -126,7 +119,7 @@
 
 - 通用 Slurm 路径和环境调整；
 - `qwen3vl_runner.py` 的相关改动；
-- Torch 实验元数据规则；
+- 已被 Git 跟踪的 Torch 实验元数据规则；当前未跟踪的元数据文档保留在磁盘但不提交；
 - 能覆盖这些改动的测试或静态检查。
 
 ## 6. Fixed-eval 重叠策略
@@ -156,9 +149,9 @@
 
 完成后必须验证：
 
-1. 主 worktree 的 `git status --short --branch` 不再显示未提交源码、测试、文档或 Slurm 文件；
-2. `outputs/`、`analysis_outputs/` 和 `tmp/` 被 Git 正确忽略；
-3. `outputs/` 和 `tmp/` 的已有磁盘内容仍然存在；
+1. 主 worktree 的 `git status --short --branch` 不再显示未提交源码、测试、已跟踪文档或 Slurm 文件；
+2. `outputs/`、`analysis_outputs/`、`tmp/` 和未跟踪 `docs/` 被 Git 正确忽略；
+3. `outputs/`、`tmp/` 和未跟踪 `docs/` 的已有磁盘内容仍然存在；
 4. 与改动对应的训练测试通过；
 5. Python 文件通过基础编译检查；
 6. `git diff --check` 通过；
