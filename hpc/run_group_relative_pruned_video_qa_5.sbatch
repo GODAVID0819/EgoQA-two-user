@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
-#SBATCH --constraint=h200|h100|a100
+#SBATCH --constraint=h100
 #SBATCH --mem=80G
 #SBATCH --time=24:00:00
 #SBATCH --output=hpc/logs/%x_%j.out

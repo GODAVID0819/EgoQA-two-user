@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --gres=gpu:a100:2
+#SBATCH --gres=gpu:h100:2
 #SBATCH --mem=128G
 #SBATCH --time=06:00:00
 #SBATCH --output=logs/grpo-judge-reward-v2-%j.out
@@ -53,6 +53,8 @@ REVIEW_VLLM_MAX_MODEL_LEN="${REVIEW_VLLM_MAX_MODEL_LEN:-16384}"
 REVIEW_VLLM_MAX_NUM_SEQS="${REVIEW_VLLM_MAX_NUM_SEQS:-${VLLM_MAX_NUM_SEQS}}"
 REVIEW_VLLM_GPU_MEMORY_UTILIZATION="${REVIEW_VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
 USE_SRUN_GPU_BINDING="${USE_SRUN_GPU_BINDING:-1}"
+VLLM_STARTUP_TIMEOUT_SECONDS="${VLLM_STARTUP_TIMEOUT_SECONDS:-2400}"
+VLLM_GDN_PREFILL_BACKEND="${VLLM_GDN_PREFILL_BACKEND:-triton}"
 
 cd "${PROJECT_ROOT}"
 mkdir -p logs outputs "${OUTPUT_DIR}" "${HOME}" "${HF_HOME}" "${XDG_CACHE_HOME}" "${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}" "${VLLM_CACHE_ROOT}" "${CUDA_CACHE_PATH}" "${FLASHINFER_WORKSPACE_DIR}"
@@ -71,6 +73,8 @@ echo "vllm_max_num_seqs=${VLLM_MAX_NUM_SEQS}"
 echo "review_vllm_max_model_len=${REVIEW_VLLM_MAX_MODEL_LEN}"
 echo "review_vllm_max_num_seqs=${REVIEW_VLLM_MAX_NUM_SEQS}"
 echo "use_srun_gpu_binding=${USE_SRUN_GPU_BINDING}"
+echo "vllm_startup_timeout_seconds=${VLLM_STARTUP_TIMEOUT_SECONDS}"
+echo "vllm_gdn_prefill_backend=${VLLM_GDN_PREFILL_BACKEND}"
 echo "slurm_job_gpus=${SLURM_JOB_GPUS:-}"
 echo "slurm_step_gpus=${SLURM_STEP_GPUS:-}"
 echo "cuda_visible_devices=${CUDA_VISIBLE_DEVICES:-}"
@@ -91,14 +95,15 @@ for i in range(count):
     print("torch_cuda_device", i, name, mem_info)
 PY
 
-REVIEW_ARGS=()
+REVIEW_ARGS=(--review-model-id "${REVIEW_MODEL_ID}" --review-base-url "${REVIEW_BASE_URL}")
+REVIEW_SERVER_REQUIRED=0
 SERVER_PIDS=()
 
 run_vllm_on_one_gpu() {
   local log_path="$1"
   shift
   if [[ "${USE_SRUN_GPU_BINDING}" == "1" ]]; then
-    srun --exclusive --ntasks=1 --cpus-per-task=8 --gres=gpu:a100:1 "$@" > "${log_path}" 2>&1
+    srun --exclusive --cpu-bind=none --ntasks=1 --cpus-per-task=8 --gres=gpu:h100:1 "$@" > "${log_path}" 2>&1
   else
     "$@" > "${log_path}" 2>&1
   fi
@@ -112,11 +117,13 @@ run_vllm_on_one_gpu "logs/judge-reward-v2-vllm-${SLURM_JOB_ID}.log" \
     --max-model-len "${VLLM_MAX_MODEL_LEN}" \
     --max-num-seqs "${VLLM_MAX_NUM_SEQS}" \
     --gpu-memory-utilization "${VLLM_GPU_MEMORY_UTILIZATION}" \
+    --gdn-prefill-backend "${VLLM_GDN_PREFILL_BACKEND}" \
     --allowed-local-media-path "${ALLOWED_MEDIA_ROOT}" &
 POLICY_SERVER_PID=$!
 SERVER_PIDS+=("${POLICY_SERVER_PID}")
 
 if [[ "${REVIEW_MODEL_ID}" != "${MODEL_ID}" || "${REVIEW_BASE_URL}" != "${BASE_URL}" ]]; then
+  REVIEW_SERVER_REQUIRED=1
   if [[ "$(python -c 'import torch; print(torch.cuda.device_count())')" -lt 2 ]]; then
     echo "Separate review model requested, but fewer than 2 CUDA devices are visible." >&2
     exit 2
@@ -129,10 +136,10 @@ if [[ "${REVIEW_MODEL_ID}" != "${MODEL_ID}" || "${REVIEW_BASE_URL}" != "${BASE_U
       --max-model-len "${REVIEW_VLLM_MAX_MODEL_LEN}" \
       --max-num-seqs "${REVIEW_VLLM_MAX_NUM_SEQS}" \
       --gpu-memory-utilization "${REVIEW_VLLM_GPU_MEMORY_UTILIZATION}" \
+      --gdn-prefill-backend "${VLLM_GDN_PREFILL_BACKEND}" \
       --allowed-local-media-path "${ALLOWED_MEDIA_ROOT}" &
   REVIEW_SERVER_PID=$!
   SERVER_PIDS+=("${REVIEW_SERVER_PID}")
-  REVIEW_ARGS+=(--review-model-id "${REVIEW_MODEL_ID}" --review-base-url "${REVIEW_BASE_URL}")
 fi
 
 cleanup() {
@@ -144,27 +151,33 @@ wait_for_server() {
   local url="$1"
   local log_path="$2"
   local pid="$3"
-  for _ in $(seq 1 120); do
+  local start_seconds="${SECONDS}"
+  local deadline=$((SECONDS + VLLM_STARTUP_TIMEOUT_SECONDS))
+
+  while (( SECONDS < deadline )); do
     if curl --fail --silent "${url}/models" >/dev/null; then
+      echo "vllm_ready url=${url} waited_seconds=$((SECONDS - start_seconds))"
       return 0
     fi
     if ! kill -0 "${pid}" 2>/dev/null; then
+      echo "vllm_process_exited_before_ready url=${url}" >&2
       tail -200 "${log_path}" >&2
       return 1
     fi
     sleep 10
   done
+  echo "vllm_startup_timeout url=${url} timeout_seconds=${VLLM_STARTUP_TIMEOUT_SECONDS}" >&2
   tail -200 "${log_path}" >&2
   return 1
 }
 
 wait_for_server "${BASE_URL}" "logs/judge-reward-v2-vllm-${SLURM_JOB_ID}.log" "${POLICY_SERVER_PID}"
-if [[ "${#REVIEW_ARGS[@]}" -gt 0 ]]; then
+if [[ "${REVIEW_SERVER_REQUIRED}" == "1" ]]; then
   wait_for_server "${REVIEW_BASE_URL}" "logs/judge-reward-v2-review-vllm-${SLURM_JOB_ID}.log" "${REVIEW_SERVER_PID}"
 fi
 
 curl --fail --silent "${BASE_URL}/models" >/dev/null
-if [[ "${#REVIEW_ARGS[@]}" -gt 0 ]]; then
+if [[ "${REVIEW_SERVER_REQUIRED}" == "1" ]]; then
   curl --fail --silent "${REVIEW_BASE_URL}/models" >/dev/null
 fi
 
