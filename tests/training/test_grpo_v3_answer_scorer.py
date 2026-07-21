@@ -325,6 +325,38 @@ class AnswerScorerCoreTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             scorer.score(request, audit_material=PromptAuditMaterial({"answer": "C"}))
 
+    def test_prompt_audit_rejects_all_structured_generator_field_markers(self):
+        scorer = FrozenAnswerScorer(FakeModel(), FakeProcessor(), torch_module=FAKE_TORCH)
+        structured_markers = (
+            '"review": "pass"',
+            "evidence_claims = hidden",
+            "evidence claims: hidden",
+            "explanation: hidden",
+            "解释：隐藏",
+            '"self_check": "done"',
+        )
+        for marker in structured_markers:
+            request = ScoreRequest(
+                videos=("first.mp4", "second.mp4"),
+                question=f"Question text; {marker}",
+                options=("1", "2", "3", "4", "5"),
+            )
+            with self.subTest(marker=marker), self.assertRaises(RuntimeError):
+                scorer.score(request)
+
+    def test_prompt_audit_does_not_reject_natural_language_field_words(self):
+        scorer = FrozenAnswerScorer(FakeModel(), FakeProcessor(), torch_module=FAKE_TORCH)
+        request = ScoreRequest(
+            videos=("first.mp4", "second.mp4"),
+            question="Review the evidence claims and explain your rationale.",
+            options=("An explanation", "A review", "A claim", "A reason", "None"),
+        )
+
+        response = scorer.score(request)
+
+        self.assertTrue(response.prompt_audit.passed)
+        self.assertEqual(response.prompt_audit.hits, [])
+
     def test_prompt_audit_allows_excluded_answer_text_when_it_is_a_legitimate_option(self):
         scorer = FrozenAnswerScorer(FakeModel(), FakeProcessor(), torch_module=FAKE_TORCH)
         request = ScoreRequest(

@@ -134,10 +134,25 @@ class ScoreResponse(Mapping[str, LabelScore]):
         }
 
 _GENERATOR_FIELD_PATTERNS = {
-    "correct": re.compile(r'(?i)(?:["\']correct["\']\s*:|\bcorrect\s*=)'),
-    "answer": re.compile(r'(?i)(?:["\']answer["\']\s*:|\bgenerator\s+answer\b)'),
-    "rationale": re.compile(r"(?i)\brationale\b"),
-    "self_check": re.compile(r"(?i)\bself[-_ ]check\b"),
+    "correct": re.compile(r'(?i)(?:["\']correct["\']\s*[:=：]|\bcorrect\s*[:=：])'),
+    # 裸 `Answer:` 是本实验规定的模型作答前缀，因此只拦截引号键、等号或 generator marker。
+    "answer": re.compile(
+        r'(?i)(?:["\']answer["\']\s*[:=：]|\banswer\s*=|\bgenerator\s+answer\s*[:=：]?)'
+    ),
+    "rationale": re.compile(
+        r'(?i)(?:["\']rationale["\']\s*[:=：]|\brationale\s*[:=：])'
+    ),
+    "self_check": re.compile(
+        r'(?i)(?:["\']self[-_ ]check["\']\s*[:=：]|\bself[-_ ]check\s*[:=：])'
+    ),
+    "review": re.compile(r'(?i)(?:["\']review["\']\s*[:=：]|\breview\s*[:=：])'),
+    "evidence_claims": re.compile(
+        r'(?i)(?:["\']evidence[_ ]claims["\']\s*[:=：]|\bevidence[_ ]claims\s*[:=：])'
+    ),
+    "explanation": re.compile(
+        r'(?i)(?:["\']explanation["\']\s*[:=：]|\bexplanation\s*[:=：])'
+    ),
+    "解释": re.compile(r'(?:["\']解释["\']\s*[:=：]|解释\s*[:=：])'),
 }
 
 
