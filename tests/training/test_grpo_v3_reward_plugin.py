@@ -513,6 +513,40 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(snapshot["right"], {"value": 1})
         self.assertNotIn('"type": "cycle"', json.dumps(snapshot))
 
+    def test_deep_noncyclic_metadata_is_bounded_without_covering_original_error(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        deep_list = []
+        cursor = deep_list
+        for _ in range(1200):
+            child = []
+            cursor.append(child)
+            cursor = child
+        deep_dict = {}
+        dict_cursor = deep_dict
+        for _ in range(1200):
+            child = {}
+            dict_cursor["child"] = child
+            dict_cursor = child
+
+        for name, deep_value, expected_type in (
+            ("list", deep_list, "list"),
+            ("dict", deep_dict, "dict"),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                kwargs = self._kwargs(Path(tmp))
+                kwargs["question_type"] = [deep_value]
+                kwargs["global_step"] = [0, 1]
+                trace = Path(tmp) / "answer_margin.jsonl"
+                reward = AnswerMarginReward(trace_path=trace, score_fn=StubAnswerMarginScoreFn())
+                with self.assertRaisesRegex(ValueError, "global_step"):
+                    reward(["a", "b", "c", "d"], **kwargs)
+                rows = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(rows), 1)
+            serialized = json.dumps(rows[0]["available_metadata"]["question_type"])
+            self.assertIn('"type": "max_depth"', serialized)
+            self.assertIn(f'"container_type": "{expected_type}"', serialized)
+
     def test_client_configuration_requires_explicit_environment(self):
         from training.grpo_v3_reward_plugin import AnswerMarginReward
 

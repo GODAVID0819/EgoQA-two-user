@@ -55,9 +55,13 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+ANSWER_MARGIN_METADATA_MAX_DEPTH = 64
+
+
 def _answer_margin_metadata_snapshot(
     value: Any,
     _active_ids: set[int] | None = None,
+    _depth: int = 0,
 ) -> Any:
     """仅供 answer-margin metadata 失败 trace 使用的稳定 JSON 快照。"""
 
@@ -75,6 +79,8 @@ def _answer_margin_metadata_snapshot(
             "sha256": hashlib.sha256(value).hexdigest(),
         }
     if isinstance(value, (dict, list, tuple, set, frozenset)):
+        if _depth >= ANSWER_MARGIN_METADATA_MAX_DEPTH:
+            return {"type": "max_depth", "container_type": type(value).__name__}
         identifier = id(value)
         if identifier in active_ids:
             return {"type": "cycle", "container_type": type(value).__name__}
@@ -87,18 +93,26 @@ def _answer_margin_metadata_snapshot(
                         safe_key = key
                     else:
                         safe_key = json.dumps(
-                            _answer_margin_metadata_snapshot(key, active_ids),
+                            _answer_margin_metadata_snapshot(
+                                key, active_ids, _depth + 1
+                            ),
                             ensure_ascii=False,
                             sort_keys=True,
                         )
-                    result[safe_key] = _answer_margin_metadata_snapshot(item, active_ids)
+                    result[safe_key] = _answer_margin_metadata_snapshot(
+                        item, active_ids, _depth + 1
+                    )
                 return result
             if isinstance(value, (list, tuple)):
                 return [
-                    _answer_margin_metadata_snapshot(item, active_ids) for item in value
+                    _answer_margin_metadata_snapshot(
+                        item, active_ids, _depth + 1
+                    ) for item in value
                 ]
             items = [
-                _answer_margin_metadata_snapshot(item, active_ids) for item in value
+                _answer_margin_metadata_snapshot(
+                    item, active_ids, _depth + 1
+                ) for item in value
             ]
             items.sort(
                 key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True)
