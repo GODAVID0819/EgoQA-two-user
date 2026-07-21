@@ -60,10 +60,39 @@ class ExtractCoreQATests(unittest.TestCase):
         self.assertTrue(fenced.ok)
         self.assertEqual(fenced.status, "repaired")
         self.assertFalse(embedded.ok, "the first complete object must be selected")
+        self.assertEqual(embedded.status, "unrecoverable")
 
         embedded = extract_core_qa(f"preface only: {encoded} epilogue")
         self.assertTrue(embedded.ok)
         self.assertEqual(embedded.as_qa(), self.qa)
+
+    def test_extra_text_recovery_preserves_raw_completion_and_inner_raw_status(self):
+        raw = "preface only: " + json.dumps(self.qa) + " epilogue"
+
+        result = extract_core_qa(raw)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.raw_completion, raw)
+        self.assertEqual(result.status, "extra_text_recovered")
+        self.assertEqual(result.inner_format_status, "raw_valid")
+        self.assertEqual(result.format_validation.repair_operations, [])
+
+    def test_extra_text_recovery_preserves_inner_repair_audit(self):
+        raw = (
+            'preface {"question":"Q","options":["1","2","3","4","5"] '
+            '"correct":"A",} epilogue'
+        )
+
+        result = extract_core_qa(raw)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.raw_completion, raw)
+        self.assertEqual(result.status, "extra_text_recovered")
+        self.assertEqual(result.inner_format_status, "repaired")
+        self.assertEqual(
+            [operation["operation"] for operation in result.format_validation.repair_operations],
+            ["remove_trailing_comma", "insert_missing_member_comma"],
+        )
 
     def test_reuses_conservative_missing_and_trailing_comma_repairs(self):
         missing_comma = (

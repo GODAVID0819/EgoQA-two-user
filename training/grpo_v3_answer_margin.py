@@ -27,6 +27,8 @@ class CoreQAExtraction:
     correct: str | None
     failure_reason: str | None
     format_validation: FormatValidationResult
+    raw_completion: str
+    inner_format_status: str
 
     def as_qa(self) -> dict[str, Any] | None:
         if not self.ok:
@@ -70,15 +72,25 @@ def _first_complete_object(text: str) -> str | None:
 def extract_core_qa(raw_completion: str) -> CoreQAExtraction:
     raw = str(raw_completion)
     validation = validate_completion_json(raw)
+    extra_text_recovered = False
     if validation.value is None:
         object_text = _first_complete_object(raw)
         if object_text is not None and object_text.strip() != raw.strip():
             validation = validate_completion_json(object_text)
+            extra_text_recovered = validation.value is not None
+    status = "extra_text_recovered" if extra_text_recovered else validation.status
     value = validation.value
     if value is None:
         return CoreQAExtraction(
-            False, validation.status, None, None, None,
-            "unrecoverable_json", validation,
+            ok=False,
+            status=status,
+            question=None,
+            options=None,
+            correct=None,
+            failure_reason="unrecoverable_json",
+            format_validation=validation,
+            raw_completion=raw,
+            inner_format_status=validation.status,
         )
     question = value.get("question")
     options = value.get("options")
@@ -102,22 +114,26 @@ def extract_core_qa(raw_completion: str) -> CoreQAExtraction:
         reason = "invalid_correct"
     else:
         return CoreQAExtraction(
-            True,
-            validation.status,
-            normalized_question,
-            normalized_options,
-            normalized_correct,
-            None,
-            validation,
+            ok=True,
+            status=status,
+            question=normalized_question,
+            options=normalized_options,
+            correct=normalized_correct,
+            failure_reason=None,
+            format_validation=validation,
+            raw_completion=raw,
+            inner_format_status=validation.status,
         )
     return CoreQAExtraction(
-        False,
-        validation.status,
-        normalized_question,
-        normalized_options,
-        normalized_correct,
-        reason,
-        validation,
+        ok=False,
+        status=status,
+        question=normalized_question,
+        options=normalized_options,
+        correct=normalized_correct,
+        failure_reason=reason,
+        format_validation=validation,
+        raw_completion=raw,
+        inner_format_status=validation.status,
     )
 
 
