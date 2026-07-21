@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import threading
@@ -52,6 +53,48 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
     return value
+
+
+def _answer_margin_metadata_snapshot(value: Any) -> Any:
+    """仅供 answer-margin metadata 失败 trace 使用的稳定 JSON 快照。"""
+
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, Path):
+        return {"type": "Path", "value": str(value)}
+    if isinstance(value, bytes):
+        return {
+            "type": "bytes",
+            "length": len(value),
+            "sha256": hashlib.sha256(value).hexdigest(),
+        }
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if isinstance(key, str):
+                safe_key = key
+            else:
+                safe_key = json.dumps(
+                    _answer_margin_metadata_snapshot(key),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            result[safe_key] = _answer_margin_metadata_snapshot(item)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [_answer_margin_metadata_snapshot(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        items = [_answer_margin_metadata_snapshot(item) for item in value]
+        items.sort(key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True))
+        return {"type": "set", "items": items}
+    value_type = type(value)
+    return {"type": f"{value_type.__module__}.{value_type.__qualname__}"}
+
+
+class CompletionGroupSizeError(ValueError):
+    """answer-margin ORM 没有收到固定的四 completion group。"""
 
 
 class ControlledGateReward(ORM):
@@ -442,7 +485,9 @@ class AnswerMarginReward(ORM):
                     packet_value = json.loads(raw_packet) if isinstance(raw_packet, str) else raw_packet
                 except Exception:
                     packet_value = raw_packet
-                packet_summary = summarize_packet(packet_value)
+                packet_summary = {
+                    "metadata_snapshot": _answer_margin_metadata_snapshot(packet_value)
+                }
                 if isinstance(packet_value, dict):
                     users = packet_value.get("required_users")
                     clips = packet_value.get("clips")
@@ -453,14 +498,19 @@ class AnswerMarginReward(ORM):
                             if isinstance(clip, dict)
                         }
                         if len(users) == 2 and all(str(user) in by_user for user in users):
-                            video_inputs = [
-                                {
+                            video_inputs = []
+                            for user in users:
+                                raw_path = by_user[str(user)]
+                                safe_path = _answer_margin_metadata_snapshot(raw_path)
+                                video_inputs.append({
                                     "user": str(user),
-                                    "path": str(by_user[str(user)]),
-                                    "basename": Path(str(by_user[str(user)])).name,
-                                }
-                                for user in users
-                            ]
+                                    "path": safe_path,
+                                    "basename": (
+                                        Path(str(raw_path)).name
+                                        if isinstance(raw_path, (str, Path))
+                                        else None
+                                    ),
+                                })
             step = single_available("global_step")
             if isinstance(step, bool) or not isinstance(step, int) or step < 0:
                 step = None
@@ -475,13 +525,18 @@ class AnswerMarginReward(ORM):
                 "global_step": step,
                 "reward_call_index": call_index,
                 "candidate_index": None,
-                "evidence_id": str(evidence) if evidence is not None else None,
+                "evidence_id": (
+                    _answer_margin_metadata_snapshot(evidence)
+                    if evidence is not None else None
+                ),
                 "raw_completion": None,
-                "raw_completions": [str(item) for item in completions],
+                "raw_completions": [
+                    _answer_margin_metadata_snapshot(item) for item in completions
+                ],
                 "packet_summary": packet_summary,
                 "video_inputs": video_inputs,
                 "permutation_key": None,
-                "available_metadata": _json_safe({
+                "available_metadata": _answer_margin_metadata_snapshot({
                     name: kwargs.get(name)
                     for name in (
                         "packet_json", "evidence_id", "question_type",
@@ -500,6 +555,16 @@ class AnswerMarginReward(ORM):
                     },
                 },
             }
+
+        if count != 4:
+            error = CompletionGroupSizeError(
+                f"answer-margin 固定要求4个completions，实际count={count}"
+            )
+            row = metadata_failure_row(error)
+            row["expected_completion_count"] = 4
+            row["actual_completion_count"] = count
+            _write_rows(self.trace_path, [row], self._lock)
+            raise error
 
         try:
             packets = _expand(kwargs["packet_json"], count, name="packet_json")

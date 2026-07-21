@@ -349,6 +349,40 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertIsNone(row["candidate_index"])
         self.assertEqual(row["available_metadata"]["evidence_id"], ["E1", "E2"])
 
+    def test_requires_exactly_four_completions_and_traces_empty_or_short_group(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward, CompletionGroupSizeError
+
+        for completions in ([], ["a", "b", "c"]):
+            with self.subTest(count=len(completions)), tempfile.TemporaryDirectory() as tmp:
+                trace = Path(tmp) / "answer_margin.jsonl"
+                reward = AnswerMarginReward(trace_path=trace, score_fn=StubAnswerMarginScoreFn())
+                with self.assertRaises(CompletionGroupSizeError):
+                    reward(completions, **self._kwargs(Path(tmp)))
+                rows = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(rows), 1)
+            self.assertIsNone(rows[0]["candidate_index"])
+            self.assertEqual(rows[0]["failure_stage"], "metadata")
+            self.assertEqual(rows[0]["record"]["infrastructure_error"]["type"], "CompletionGroupSizeError")
+            self.assertEqual(rows[0]["actual_completion_count"], len(completions))
+
+    def test_path_metadata_snapshot_cannot_replace_original_alignment_error(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        with tempfile.TemporaryDirectory() as tmp:
+            kwargs = self._kwargs(Path(tmp))
+            kwargs["evidence_id"] = [Path("E1"), Path("E2")]
+            kwargs["question_type"] = [{"values": {"b", "a"}, "blob": b"abc"}]
+            trace = Path(tmp) / "answer_margin.jsonl"
+            reward = AnswerMarginReward(trace_path=trace, score_fn=StubAnswerMarginScoreFn())
+            with self.assertRaisesRegex(ValueError, "evidence_id"):
+                reward(["a", "b", "c", "d"], **kwargs)
+            self.assertGreater(trace.stat().st_size, 0)
+            row = json.loads(trace.read_text(encoding="utf-8").splitlines()[0])
+        evidence_snapshot = row["available_metadata"]["evidence_id"]
+        self.assertEqual([item["type"] for item in evidence_snapshot], ["Path", "Path"])
+        self.assertEqual(row["available_metadata"]["question_type"][0]["blob"]["type"], "bytes")
+        self.assertEqual(row["available_metadata"]["question_type"][0]["values"]["type"], "set")
+
     def test_client_configuration_requires_explicit_environment(self):
         from training.grpo_v3_reward_plugin import AnswerMarginReward
 
