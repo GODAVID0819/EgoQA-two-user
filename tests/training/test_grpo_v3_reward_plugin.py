@@ -23,6 +23,10 @@ class StubAnswerMarginScoreFn:
         return {"reward": 0.25, "record": {"masked": False, "eligible_for_grpo": True}}
 
 
+class CustomAuditValue:
+    pass
+
+
 class ControlledRewardTests(unittest.TestCase):
     def test_returns_four_finite_nonconstant_rewards_and_traces(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -382,6 +386,38 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual([item["type"] for item in evidence_snapshot], ["Path", "Path"])
         self.assertEqual(row["available_metadata"]["question_type"][0]["blob"]["type"], "bytes")
         self.assertEqual(row["available_metadata"]["question_type"][0]["values"]["type"], "set")
+
+    def test_nonfinite_reward_with_unsafe_prior_record_is_traced_before_original_error(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        def nonfinite_score(**_kwargs):
+            return {
+                "reward": math.nan,
+                "record": {
+                    "raw_margin": math.nan,
+                    "clipped_margin": math.inf,
+                    "path": Path("audit/value"),
+                    "custom": CustomAuditValue(),
+                    "masked": False,
+                    "eligible_for_grpo": True,
+                },
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = Path(tmp) / "answer_margin.jsonl"
+            reward = AnswerMarginReward(trace_path=trace, score_fn=nonfinite_score)
+            with self.assertRaisesRegex(ValueError, "answer-margin reward 非有限"):
+                reward(["a", "b", "c", "d"], **self._kwargs(Path(tmp)))
+            self.assertGreater(trace.stat().st_size, 0)
+            row = json.loads(trace.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(row["failure_stage"], "response_validation")
+        self.assertEqual(row["record"]["raw_margin"], "nan")
+        self.assertEqual(row["record"]["clipped_margin"], "inf")
+        self.assertEqual(row["record"]["path"], {"type": "Path", "value": "audit\\value"})
+        self.assertTrue(row["record"]["custom"]["type"].endswith(".CustomAuditValue"))
+        self.assertTrue(row["record"]["masked"])
+        self.assertFalse(row["record"]["eligible_for_grpo"])
+        self.assertEqual(row["record"]["infrastructure_error"]["type"], "NonFiniteRewardError")
 
     def test_client_configuration_requires_explicit_environment(self):
         from training.grpo_v3_reward_plugin import AnswerMarginReward

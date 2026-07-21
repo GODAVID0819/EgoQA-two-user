@@ -673,7 +673,8 @@ class AnswerMarginReward(ORM):
                 if isinstance(error, ValueError) and "reward 非有限" in str(error)
                 else type(error).__name__
             )
-            record = dict(prior_record) if isinstance(prior_record, dict) else {}
+            prior_snapshot = _answer_margin_metadata_snapshot(prior_record)
+            record = prior_snapshot if isinstance(prior_snapshot, dict) else {}
             record.update({
                 "masked": True,
                 "eligible_for_grpo": False,
