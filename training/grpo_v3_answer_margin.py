@@ -67,9 +67,18 @@ def _first_complete_object(text: str) -> str | None:
             if depth < 0:
                 return None
     if start is None and in_string:
-        fallback_start = text.find("{")
-        if fallback_start >= 0:
-            return _first_complete_object(text[fallback_start:])
+        search_start = 0
+        while True:
+            fallback_start = text.find("{", search_start)
+            if fallback_start < 0:
+                break
+            candidate = _first_complete_object(text[fallback_start:])
+            if (
+                candidate is not None
+                and validate_completion_json(candidate).value is not None
+            ):
+                return candidate
+            search_start = fallback_start + 1
     return None
 
 
