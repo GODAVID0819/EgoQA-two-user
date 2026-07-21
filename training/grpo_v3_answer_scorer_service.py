@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import socket
@@ -14,7 +15,10 @@ from typing import Any, Mapping
 from training.grpo_v3_answer_margin import LABELS
 from training.grpo_v3_answer_scorer import (
     LabelScore,
+    PromptAudit,
+    PromptAuditMaterial,
     ScoreRequest,
+    ScoreResponse,
     load_frozen_answer_scorer,
 )
 
@@ -22,9 +26,11 @@ from training.grpo_v3_answer_scorer import (
 LOOPBACK_HOST = "127.0.0.1"
 
 
-def parse_score_response(payload: Mapping[str, Any]) -> dict[str, LabelScore]:
-    if not isinstance(payload, Mapping) or set(payload) != {"scores"}:
-        raise RuntimeError("score response must contain only scores")
+def parse_score_response(payload: Mapping[str, Any]) -> ScoreResponse:
+    if not isinstance(payload, Mapping) or set(payload) != {
+        "scores", "prompt_audit", "rendered_prompt"
+    }:
+        raise RuntimeError("score response has an invalid top-level structure")
     raw_scores = payload["scores"]
     if not isinstance(raw_scores, Mapping) or set(raw_scores) != set(LABELS):
         raise RuntimeError("score response must contain exactly A-E")
@@ -63,7 +69,25 @@ def parse_score_response(payload: Mapping[str, Any]) -> dict[str, LabelScore]:
         if not math.isclose(sequence_value, sum(numeric_logprobs), rel_tol=1e-7, abs_tol=1e-7):
             raise RuntimeError(f"{label} sequence logprob does not equal its token sum")
         parsed[label] = LabelScore(label, list(token_ids), numeric_logprobs, sequence_value)
-    return parsed
+    rendered_prompt = payload["rendered_prompt"]
+    audit = payload["prompt_audit"]
+    if not isinstance(rendered_prompt, str) or not isinstance(audit, Mapping) or set(audit) != {
+        "prompt_sha256", "passed", "rules", "hits"
+    }:
+        raise RuntimeError("score response has an invalid prompt audit structure")
+    expected_hash = hashlib.sha256(rendered_prompt.encode("utf-8")).hexdigest()
+    if audit["prompt_sha256"] != expected_hash:
+        raise RuntimeError("prompt audit hash does not match rendered prompt")
+    if audit["passed"] is not True or audit["hits"] != []:
+        raise RuntimeError("scorer prompt leakage audit did not pass")
+    if not isinstance(audit["rules"], list) or any(
+        not isinstance(rule, str) for rule in audit["rules"]
+    ):
+        raise RuntimeError("prompt audit rules must be a string list")
+    if not {"generator_field_marker_scan", "excluded_value_scan"}.issubset(audit["rules"]):
+        raise RuntimeError("prompt audit omits required leakage rules")
+    prompt_audit = PromptAudit(expected_hash, True, list(audit["rules"]), [])
+    return ScoreResponse(parsed, prompt_audit, rendered_prompt)
 
 
 class AnswerScorerClient:
@@ -80,8 +104,16 @@ class AnswerScorerClient:
             raise ValueError("timeout_seconds must be finite and positive")
         self.opener = opener or urllib.request.build_opener()
 
-    def score(self, request: ScoreRequest) -> dict[str, LabelScore]:
-        body = json.dumps(request.to_payload(), ensure_ascii=False).encode("utf-8")
+    def score(
+        self,
+        request: ScoreRequest,
+        *,
+        audit_material: PromptAuditMaterial | None = None,
+    ) -> ScoreResponse:
+        body = json.dumps({
+            "request": request.to_payload(),
+            "audit_material": (audit_material or PromptAuditMaterial({})).to_payload(),
+        }, ensure_ascii=False).encode("utf-8")
         http_request = urllib.request.Request(
             self.base_url + "/score",
             data=body,
@@ -122,7 +154,21 @@ def _handler_for(scorer: Any) -> type[BaseHTTPRequestHandler]:
             if self.path != "/health":
                 self._json(404, {"error": "not_found"})
                 return
-            self._json(200, {"status": "ok", "trainable_parameter_count": scorer.trainable_parameter_count if hasattr(scorer, "trainable_parameter_count") else 0})
+            try:
+                readiness = scorer.readiness()
+                healthy = (
+                    isinstance(readiness, Mapping)
+                    and readiness.get("status") == "ok"
+                    and readiness.get("trainable_parameter_count") == 0
+                    and isinstance(readiness.get("checks"), Mapping)
+                    and all(readiness["checks"].values())
+                )
+            except Exception:
+                readiness = {"status": "unhealthy", "checks": {}, "trainable_parameter_count": None}
+                healthy = False
+            if not healthy:
+                readiness = {**readiness, "status": "unhealthy"}
+            self._json(200 if healthy else 503, readiness)
 
         def do_POST(self) -> None:
             if self.path != "/score":
@@ -131,11 +177,14 @@ def _handler_for(scorer: Any) -> type[BaseHTTPRequestHandler]:
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
-                request = ScoreRequest.from_payload(payload)
-                scores = scorer.score(request)
-                if set(scores) != set(LABELS):
+                if not isinstance(payload, Mapping) or set(payload) != {"request", "audit_material"}:
+                    raise ValueError("score service expects request and audit_material")
+                request = ScoreRequest.from_payload(payload["request"])
+                audit_material = PromptAuditMaterial.from_payload(payload["audit_material"])
+                response = scorer.score(request, audit_material=audit_material)
+                if set(response) != set(LABELS):
                     raise RuntimeError("scorer returned incomplete labels")
-                response = {"scores": {label: scores[label].to_payload() for label in LABELS}}
+                response = response.to_payload()
                 # 复用客户端解析，服务端同样拒绝非有限或不完整结构。
                 parse_score_response(response)
                 self._json(200, response)

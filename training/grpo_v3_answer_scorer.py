@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
+import re
+from collections.abc import Iterator
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Mapping
 
 from training.grpo_v3_answer_margin import LABELS
@@ -66,6 +68,114 @@ class LabelScore:
             "token_logprobs": list(self.token_logprobs),
             "sequence_logprob": self.sequence_logprob,
         }
+
+
+@dataclass(frozen=True)
+class PromptAuditMaterial:
+    """只供泄露审计、绝不拼入模型 prompt 的生成器侧材料。"""
+
+    excluded_values: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.excluded_values, Mapping) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in self.excluded_values.items()
+        ):
+            raise ValueError("excluded_values must map strings to strings")
+
+    def to_payload(self) -> dict[str, str]:
+        return dict(self.excluded_values)
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "PromptAuditMaterial":
+        if payload is None:
+            return cls({})
+        if not isinstance(payload, Mapping):
+            raise ValueError("audit_material must be an object")
+        return cls(dict(payload))
+
+
+@dataclass(frozen=True)
+class PromptAudit:
+    prompt_sha256: str
+    passed: bool
+    rules: list[str]
+    hits: list[dict[str, str]]
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "prompt_sha256": self.prompt_sha256,
+            "passed": self.passed,
+            "rules": list(self.rules),
+            "hits": [dict(hit) for hit in self.hits],
+        }
+
+
+@dataclass(frozen=True)
+class ScoreResponse(Mapping[str, LabelScore]):
+    scores: dict[str, LabelScore]
+    prompt_audit: PromptAudit
+    rendered_prompt: str
+
+    def __getitem__(self, label: str) -> LabelScore:
+        return self.scores[label]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.scores)
+
+    def __len__(self) -> int:
+        return len(self.scores)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "scores": {label: self.scores[label].to_payload() for label in LABELS},
+            "prompt_audit": self.prompt_audit.to_payload(),
+            "rendered_prompt": self.rendered_prompt,
+        }
+
+_GENERATOR_FIELD_PATTERNS = {
+    "correct": re.compile(r'(?i)(?:["\']correct["\']\s*:|\bcorrect\s*=)'),
+    "answer": re.compile(r'(?i)(?:["\']answer["\']\s*:|\bgenerator\s+answer\b)'),
+    "rationale": re.compile(r"(?i)\brationale\b"),
+    "self_check": re.compile(r"(?i)\bself[-_ ]check\b"),
+}
+
+
+def audit_rendered_prompt(
+    prompt: str,
+    request: ScoreRequest,
+    material: PromptAuditMaterial,
+) -> PromptAudit:
+    """扫描实际模型文本；审计材料只参与比较，不参与 prompt 构造。"""
+
+    hits: list[dict[str, str]] = []
+    rules = ["generator_field_marker_scan", "excluded_value_scan"]
+    for name, pattern in _GENERATOR_FIELD_PATTERNS.items():
+        if pattern.search(prompt):
+            hits.append({"rule": "generator_field_marker_scan", "field": name})
+
+    allowed_sources = {request.question, *request.options}
+    for field, raw_value in material.excluded_values.items():
+        value = raw_value.strip()
+        if not value:
+            continue
+        if value in allowed_sources:
+            if "excluded_value_allowed_source" not in rules:
+                rules.append("excluded_value_allowed_source")
+            continue
+        # 单字母 correct 标签无法与正常 A-E 指令可靠区分，只由字段标记规则审计。
+        if field.casefold() == "correct" and value.upper() in LABELS:
+            if "short_correct_label_skipped" not in rules:
+                rules.append("short_correct_label_skipped")
+            continue
+        if value in prompt:
+            hits.append({"rule": "excluded_value_scan", "field": field})
+    return PromptAudit(
+        prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        passed=not hits,
+        rules=rules,
+        hits=hits,
+    )
 
 
 def build_answer_prompt(
@@ -151,7 +261,9 @@ class FrozenAnswerScorer:
     def _encode(self, texts: list[str], videos: tuple[str, str]) -> Any:
         encoded = self.processor(
             text=texts,
-            videos=[[videos[0], videos[1]] for _ in texts],
+            # Qwen3-VL processor 要求媒体按 batch 中占位符顺序展平：
+            # 每条文本两个 video_pad，因此五标签批次恰好对应十个媒体项。
+            videos=[video for _ in texts for video in videos],
             return_tensors="pt",
             padding=True,
         )
@@ -181,7 +293,33 @@ class FrozenAnswerScorer:
             raise RuntimeError("processor returned an empty chat template")
         return rendered + "Answer:"
 
-    def score(self, request: ScoreRequest) -> dict[str, LabelScore]:
+    def readiness(self) -> dict[str, Any]:
+        parameters = list(self.model.parameters()) if self.model is not None else []
+        trainable_count = sum(
+            int(parameter.numel()) if hasattr(parameter, "numel") else 1
+            for parameter in parameters
+            if parameter.requires_grad
+        )
+        checks = {
+            "model_exists": self.model is not None,
+            "processor_exists": self.processor is not None,
+            "eval_mode": self.model is not None and not bool(self.model.training),
+            "all_parameters_frozen": all(not parameter.requires_grad for parameter in parameters),
+            "trainable_parameter_count_zero": trainable_count == 0,
+        }
+        healthy = all(checks.values()) and self.trainable_parameter_count == 0
+        return {
+            "status": "ok" if healthy else "unhealthy",
+            "checks": checks,
+            "trainable_parameter_count": trainable_count,
+        }
+
+    def score(
+        self,
+        request: ScoreRequest,
+        *,
+        audit_material: PromptAuditMaterial | None = None,
+    ) -> ScoreResponse:
         if not isinstance(request, ScoreRequest):
             raise TypeError("request must be ScoreRequest")
         if self.model.training:
@@ -190,6 +328,13 @@ class FrozenAnswerScorer:
             raise RuntimeError("answer scorer model must remain fully frozen")
 
         prompt = self._render_prompt(request)
+        prompt_audit = audit_rendered_prompt(
+            prompt,
+            request,
+            audit_material or PromptAuditMaterial({}),
+        )
+        if not prompt_audit.passed:
+            raise RuntimeError(f"rendered scorer prompt failed leakage audit: {prompt_audit.hits}")
         prompt_batch = self._encode([prompt], request.videos)
         prompt_positions = _active_positions(prompt_batch["attention_mask"], 0)
         prompt_ids = _active_ids(prompt_batch["input_ids"], 0, prompt_positions)
@@ -238,7 +383,7 @@ class FrozenAnswerScorer:
                 token_logprobs=token_logprobs,
                 sequence_logprob=sequence_logprob,
             )
-        return results
+        return ScoreResponse(results, prompt_audit, prompt)
 
 
 def load_frozen_answer_scorer(
