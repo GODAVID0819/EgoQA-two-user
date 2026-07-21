@@ -371,6 +371,156 @@ class FormalityConfidenceReward(ORM):
         return rewards
 
 
+class AnswerMarginReward(ORM):
+    """双原生视频 frozen-scorer answer-margin ORM。"""
+
+    def __init__(
+        self,
+        args: Any = None,
+        *,
+        trace_path: str | Path | None = None,
+        score_fn: Callable[..., dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(args, **kwargs)
+        self.trace_path = _trace_path(trace_path)
+        self._lock = threading.Lock()
+        self._reward_call_index = 0
+        self.score_fn = score_fn or self._build_score_fn()
+
+    def _next_call_index(self) -> int:
+        with self._lock:
+            value = self._reward_call_index
+            self._reward_call_index += 1
+        return value
+
+    @staticmethod
+    def _build_score_fn() -> Callable[..., dict[str, Any]]:
+        from training.grpo_v3_answer_margin_reward import make_answer_margin_score_fn
+
+        base_url = os.environ.get("EGOQA_ANSWER_SCORER_BASE_URL")
+        timeout = os.environ.get("EGOQA_ANSWER_SCORER_TIMEOUT_SECONDS")
+        if not base_url:
+            raise RuntimeError("缺少 EGOQA_ANSWER_SCORER_BASE_URL")
+        if not timeout:
+            raise RuntimeError("缺少 EGOQA_ANSWER_SCORER_TIMEOUT_SECONDS")
+        try:
+            timeout_seconds = float(timeout)
+        except ValueError as exc:
+            raise RuntimeError("EGOQA_ANSWER_SCORER_TIMEOUT_SECONDS 必须是数字") from exc
+        return make_answer_margin_score_fn(base_url=base_url, timeout_seconds=timeout_seconds)
+
+    def __call__(self, completions: Sequence[str], **kwargs: Any) -> list[float]:
+        from training.grpo_v3_answer_margin import (
+            ANSWER_MARGIN_REWARD_REVISION,
+            PermutationKey,
+        )
+
+        count = len(completions)
+        call_index = self._next_call_index()
+        packets = _expand(kwargs["packet_json"], count, name="packet_json")
+        evidence_ids = _expand(kwargs["evidence_id"], count, name="evidence_id")
+        question_types = _expand(kwargs["question_type"], count, name="question_type")
+        generation_modes = _expand(kwargs["generation_mode"], count, name="generation_mode")
+        eval_ids = {
+            item.strip()
+            for item in os.environ.get("EGOQA_EVAL_EVIDENCE_IDS", "").split(",")
+            if item.strip()
+        }
+        phases = ["eval" if str(item) in eval_ids else "train" for item in evidence_ids]
+        if len(set(phases)) != 1:
+            rows = [
+                {
+                    "reward_kind": "combined_video_answer_margin",
+                    "reward_call_index": call_index,
+                    "phase": phases[index],
+                    "evidence_id": str(evidence_ids[index]),
+                    "candidate_index": index,
+                    "completion_length_chars": len(str(completions[index])),
+                    "reward": None,
+                    "record": {
+                        "masked": True,
+                        "eligible_for_grpo": False,
+                        "infrastructure_error": {
+                            "type": "MixedPhaseGroupError",
+                            "message": "同一 answer-margin reward 调用混入 train/eval evidence",
+                        },
+                    },
+                }
+                for index in range(count)
+            ]
+            _write_rows(self.trace_path, rows, self._lock)
+            raise ValueError("同一 answer-margin reward 调用不得混入 train/eval evidence")
+        phase = phases[0] if phases else "train"
+        condition_id = os.environ.get("EGOQA_ANSWER_MARGIN_CONDITION_ID", "temperature_0.5")
+        rewards: list[float] = []
+        rows: list[dict[str, Any]] = []
+        for index, completion in enumerate(completions):
+            try:
+                packet_value = packets[index]
+                packet = json.loads(packet_value) if isinstance(packet_value, str) else packet_value
+                key = PermutationKey(
+                    experiment_condition_id=condition_id,
+                    phase=phase,
+                    evidence_id=str(evidence_ids[index]),
+                    generation_seed_or_call_index=call_index,
+                    candidate_index=index,
+                    reward_revision=ANSWER_MARGIN_REWARD_REVISION,
+                )
+                result = self.score_fn(
+                    raw_completion=str(completion),
+                    packet=packet,
+                    evidence_id=str(evidence_ids[index]),
+                    question_type=str(question_types[index]),
+                    generation_mode=str(generation_modes[index]),
+                    candidate_index=index,
+                    key=key,
+                )
+                reward = result.get("reward")
+                if reward is None or not math.isfinite(float(reward)):
+                    raise ValueError(f"answer-margin reward 非有限: {reward}")
+                reward_value = float(reward)
+            except Exception as exc:
+                error_type = (
+                    "NonFiniteRewardError"
+                    if isinstance(exc, ValueError) and "reward 非有限" in str(exc)
+                    else type(exc).__name__
+                )
+                error_row = {
+                    "reward_kind": "combined_video_answer_margin",
+                    "reward_call_index": call_index,
+                    "phase": phase,
+                    "evidence_id": str(evidence_ids[index]),
+                    "candidate_index": index,
+                    "completion_length_chars": len(str(completion)),
+                    "reward": None,
+                    "record": {
+                        "masked": True,
+                        "eligible_for_grpo": False,
+                        "infrastructure_error": {
+                            "type": error_type,
+                            "message": str(exc),
+                        },
+                    },
+                }
+                _write_rows(self.trace_path, [*rows, error_row], self._lock)
+                raise
+            rewards.append(reward_value)
+            rows.append({
+                "reward_kind": "combined_video_answer_margin",
+                "reward_call_index": call_index,
+                "phase": phase,
+                "evidence_id": str(evidence_ids[index]),
+                "candidate_index": index,
+                "completion_length_chars": len(str(completion)),
+                "reward": reward_value,
+                "record": result.get("record", {}),
+            })
+        _write_rows(self.trace_path, rows, self._lock)
+        return rewards
+
+
 orms["egoqa_gate1_controlled"] = ControlledGateReward
 orms["egoqa_repo_native_judge"] = RepoNativeJudgeReward
 orms["egoqa_qa_formality_confidence"] = FormalityConfidenceReward
+orms["egoqa_combined_video_answer_margin"] = AnswerMarginReward

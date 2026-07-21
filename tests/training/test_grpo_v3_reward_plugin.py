@@ -10,6 +10,18 @@ from unittest.mock import patch
 from training.grpo_v3_reward_plugin import ControlledGateReward, RepoNativeJudgeReward
 
 
+class StubAnswerMarginScoreFn:
+    def __init__(self, *, failure: Exception | None = None) -> None:
+        self.calls = []
+        self.failure = failure
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.failure is not None:
+            raise self.failure
+        return {"reward": 0.25, "record": {"masked": False, "eligible_for_grpo": True}}
+
+
 class ControlledRewardTests(unittest.TestCase):
     def test_returns_four_finite_nonconstant_rewards_and_traces(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -175,6 +187,55 @@ class RepoNativeRewardTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["record"]["infrastructure_error"]["type"], "JSONDecodeError")
+
+
+class AnswerMarginPluginTests(unittest.TestCase):
+    def _kwargs(self) -> dict:
+        return {
+            "packet_json": [json.dumps({"evidence_id": "E1", "required_users": ["u1", "u2"], "clips": []})],
+            "evidence_id": ["E1"],
+            "question_type": ["commonality"],
+            "generation_mode": ["baseline"],
+        }
+
+    def test_registers_exact_orm_name_and_expands_existing_fields(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward, orms
+
+        score_fn = StubAnswerMarginScoreFn()
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = Path(tmp) / "answer_margin.jsonl"
+            reward = AnswerMarginReward(trace_path=trace, score_fn=score_fn)
+            values = reward(["a", "b", "c", "d"], **self._kwargs())
+            rows = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+        self.assertIs(orms["egoqa_combined_video_answer_margin"], AnswerMarginReward)
+        self.assertEqual(values, [0.25] * 4)
+        self.assertEqual([call["candidate_index"] for call in score_fn.calls], [0, 1, 2, 3])
+        self.assertTrue(all(call["packet"]["evidence_id"] == "E1" for call in score_fn.calls))
+        self.assertTrue(all(call["question_type"] == "commonality" for call in score_fn.calls))
+        self.assertTrue(all(call["generation_mode"] == "baseline" for call in score_fn.calls))
+        self.assertTrue(all(row["reward_kind"] == "combined_video_answer_margin" for row in rows))
+
+    def test_infrastructure_error_is_masked_traced_then_reraised(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        error = TimeoutError("answer scorer timeout")
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = Path(tmp) / "answer_margin.jsonl"
+            reward = AnswerMarginReward(trace_path=trace, score_fn=StubAnswerMarginScoreFn(failure=error))
+            with self.assertRaisesRegex(TimeoutError, "answer scorer timeout"):
+                reward(["a", "b", "c", "d"], **self._kwargs())
+            rows = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["reward"])
+        self.assertTrue(rows[0]["record"]["masked"])
+        self.assertFalse(rows[0]["record"]["eligible_for_grpo"])
+        self.assertEqual(rows[0]["record"]["infrastructure_error"]["type"], "TimeoutError")
+
+    def test_client_configuration_requires_explicit_environment(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        with patch.dict("os.environ", {}, clear=True), self.assertRaisesRegex(RuntimeError, "EGOQA_ANSWER_SCORER_BASE_URL"):
+            AnswerMarginReward(trace_path=Path("unused.jsonl"))
 
 
 if __name__ == "__main__":
