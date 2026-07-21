@@ -1,2 +1,8 @@
 __pycache__/
 *.py[cod]
+
+# Local experiment artifacts and research documentation
+/outputs/
+/analysis_outputs/
+/tmp/
+/docs/
