@@ -55,9 +55,13 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _answer_margin_metadata_snapshot(value: Any) -> Any:
+def _answer_margin_metadata_snapshot(
+    value: Any,
+    _active_ids: set[int] | None = None,
+) -> Any:
     """仅供 answer-margin metadata 失败 trace 使用的稳定 JSON 快照。"""
 
+    active_ids = set() if _active_ids is None else _active_ids
     if value is None or isinstance(value, (bool, int, str)):
         return value
     if isinstance(value, float):
@@ -70,25 +74,38 @@ def _answer_margin_metadata_snapshot(value: Any) -> Any:
             "length": len(value),
             "sha256": hashlib.sha256(value).hexdigest(),
         }
-    if isinstance(value, dict):
-        result: dict[str, Any] = {}
-        for key, item in value.items():
-            if isinstance(key, str):
-                safe_key = key
-            else:
-                safe_key = json.dumps(
-                    _answer_margin_metadata_snapshot(key),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
-            result[safe_key] = _answer_margin_metadata_snapshot(item)
-        return result
-    if isinstance(value, (list, tuple)):
-        return [_answer_margin_metadata_snapshot(item) for item in value]
-    if isinstance(value, (set, frozenset)):
-        items = [_answer_margin_metadata_snapshot(item) for item in value]
-        items.sort(key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True))
-        return {"type": "set", "items": items}
+    if isinstance(value, (dict, list, tuple, set, frozenset)):
+        identifier = id(value)
+        if identifier in active_ids:
+            return {"type": "cycle", "container_type": type(value).__name__}
+        active_ids.add(identifier)
+        try:
+            if isinstance(value, dict):
+                result: dict[str, Any] = {}
+                for key, item in value.items():
+                    if isinstance(key, str):
+                        safe_key = key
+                    else:
+                        safe_key = json.dumps(
+                            _answer_margin_metadata_snapshot(key, active_ids),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        )
+                    result[safe_key] = _answer_margin_metadata_snapshot(item, active_ids)
+                return result
+            if isinstance(value, (list, tuple)):
+                return [
+                    _answer_margin_metadata_snapshot(item, active_ids) for item in value
+                ]
+            items = [
+                _answer_margin_metadata_snapshot(item, active_ids) for item in value
+            ]
+            items.sort(
+                key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True)
+            )
+            return {"type": "set", "items": items}
+        finally:
+            active_ids.remove(identifier)
     value_type = type(value)
     return {"type": f"{value_type.__module__}.{value_type.__qualname__}"}
 

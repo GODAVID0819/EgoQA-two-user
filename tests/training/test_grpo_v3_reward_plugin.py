@@ -469,6 +469,50 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(values, [0.25] * 4)
         self.assertEqual(len(scorer.calls), 4)
 
+    def test_cyclic_metadata_snapshot_preserves_original_alignment_error(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        cyclic_dict = {}
+        cyclic_dict["self"] = cyclic_dict
+        first_list = []
+        second_list = [first_list]
+        first_list.append(second_list)
+        for name, cyclic_value, expected_type in (
+            ("dict", cyclic_dict, "dict"),
+            ("list", first_list, "list"),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                kwargs = self._kwargs(Path(tmp))
+                kwargs["question_type"] = [cyclic_value]
+                kwargs["global_step"] = [0, 1]
+                trace = Path(tmp) / "answer_margin.jsonl"
+                reward = AnswerMarginReward(trace_path=trace, score_fn=StubAnswerMarginScoreFn())
+                with self.assertRaisesRegex(ValueError, "global_step"):
+                    reward(["a", "b", "c", "d"], **kwargs)
+                rows = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(rows), 1)
+            serialized = json.dumps(rows[0]["available_metadata"]["question_type"])
+            self.assertIn('"type": "cycle"', serialized)
+            self.assertIn(f'"container_type": "{expected_type}"', serialized)
+
+    def test_shared_noncyclic_metadata_is_not_marked_as_cycle(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        shared = {"value": 1}
+        with tempfile.TemporaryDirectory() as tmp:
+            kwargs = self._kwargs(Path(tmp))
+            kwargs["question_type"] = [{"left": shared, "right": shared}]
+            kwargs["global_step"] = [0, 1]
+            trace = Path(tmp) / "answer_margin.jsonl"
+            reward = AnswerMarginReward(trace_path=trace, score_fn=StubAnswerMarginScoreFn())
+            with self.assertRaisesRegex(ValueError, "global_step"):
+                reward(["a", "b", "c", "d"], **kwargs)
+            row = json.loads(trace.read_text(encoding="utf-8").splitlines()[0])
+        snapshot = row["available_metadata"]["question_type"][0]
+        self.assertEqual(snapshot["left"], {"value": 1})
+        self.assertEqual(snapshot["right"], {"value": 1})
+        self.assertNotIn('"type": "cycle"', json.dumps(snapshot))
+
     def test_client_configuration_requires_explicit_environment(self):
         from training.grpo_v3_reward_plugin import AnswerMarginReward
 
