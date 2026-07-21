@@ -1,0 +1,240 @@
+"""GRPO v3 的宽松 QA 提取、确定性选项排列和答案 margin。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from dataclasses import dataclass
+from numbers import Real
+from typing import Any, Mapping
+
+from training.grpo_v3_json_format import FormatValidationResult, validate_completion_json
+
+
+LABELS = ("A", "B", "C", "D", "E")
+MARGIN_CLIP = 8.0
+ANSWER_MARGIN_REWARD_REVISION = "combined_video_answer_margin_v1"
+REWARD_REVISION = ANSWER_MARGIN_REWARD_REVISION
+
+
+@dataclass(frozen=True)
+class CoreQAExtraction:
+    ok: bool
+    status: str
+    question: str | None
+    options: list[str] | None
+    correct: str | None
+    failure_reason: str | None
+    format_validation: FormatValidationResult
+
+    def as_qa(self) -> dict[str, Any] | None:
+        if not self.ok:
+            return None
+        return {
+            "question": self.question,
+            "options": list(self.options) if self.options is not None else None,
+            "correct": self.correct,
+        }
+
+
+def _first_complete_object(text: str) -> str | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+            if depth < 0:
+                return None
+    return None
+
+
+def extract_core_qa(raw_completion: str) -> CoreQAExtraction:
+    raw = str(raw_completion)
+    validation = validate_completion_json(raw)
+    if validation.value is None:
+        object_text = _first_complete_object(raw)
+        if object_text is not None and object_text.strip() != raw.strip():
+            validation = validate_completion_json(object_text)
+    value = validation.value
+    if value is None:
+        return CoreQAExtraction(
+            False, validation.status, None, None, None,
+            "unrecoverable_json", validation,
+        )
+    question = value.get("question")
+    options = value.get("options")
+    correct = value.get("correct")
+    if not isinstance(question, str) or not question.strip():
+        reason = "invalid_question"
+    elif (
+        not isinstance(options, list)
+        or len(options) != 5
+        or any(not isinstance(option, str) or not option.strip() for option in options)
+    ):
+        reason = "invalid_options"
+    elif not isinstance(correct, str) or correct.upper() not in LABELS or len(correct) != 1:
+        reason = "invalid_correct"
+    else:
+        return CoreQAExtraction(
+            True, validation.status, question, list(options), correct.upper(), None, validation,
+        )
+    return CoreQAExtraction(
+        False,
+        validation.status,
+        question if isinstance(question, str) else None,
+        list(options) if isinstance(options, list) else None,
+        correct if isinstance(correct, str) else None,
+        reason,
+        validation,
+    )
+
+
+@dataclass(frozen=True)
+class PermutationKey:
+    condition_id: str
+    phase: str
+    evidence_id: str
+    generation_seed_or_call_index: str | int
+    candidate_index: int
+
+    def stable_text(self) -> str:
+        return json.dumps(
+            {
+                "condition_id": self.condition_id,
+                "phase": self.phase,
+                "evidence_id": self.evidence_id,
+                "generation_seed_or_call_index": self.generation_seed_or_call_index,
+                "candidate_index": self.candidate_index,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+
+@dataclass(frozen=True)
+class OptionPermutation:
+    permuted_options: list[str]
+    mapped_correct: str
+    permutation: list[int]
+    inverse: list[int]
+    digests: list[str]
+
+    @property
+    def options(self) -> list[str]:
+        return list(self.permuted_options)
+
+    @property
+    def correct(self) -> str:
+        return self.mapped_correct
+
+
+def permute_options(
+    options: list[str],
+    correct: str,
+    key: PermutationKey,
+) -> OptionPermutation:
+    if (
+        not isinstance(options, list)
+        or len(options) != len(LABELS)
+        or any(not isinstance(option, str) or not option.strip() for option in options)
+    ):
+        raise ValueError("options must contain exactly five non-empty strings")
+    if correct not in LABELS:
+        raise ValueError("correct must be one of A-E")
+    if not isinstance(key, PermutationKey):
+        raise ValueError("key must be a PermutationKey")
+
+    stable_prefix = key.stable_text().encode("utf-8") + b"\0"
+    digests = [
+        hashlib.sha256(stable_prefix + str(index).encode("ascii")).hexdigest()
+        for index in range(len(options))
+    ]
+    permutation = sorted(range(len(options)), key=lambda index: (digests[index], index))
+    inverse = [0] * len(options)
+    for new_index, old_index in enumerate(permutation):
+        inverse[old_index] = new_index
+    old_correct_index = LABELS.index(correct)
+    mapped_correct = LABELS[inverse[old_correct_index]]
+    return OptionPermutation(
+        permuted_options=[options[index] for index in permutation],
+        mapped_correct=mapped_correct,
+        permutation=permutation,
+        inverse=inverse,
+        digests=digests,
+    )
+
+
+@dataclass(frozen=True)
+class AnswerMargin:
+    raw_margin: float
+    clipped_margin: float
+    reward: float
+    log_probabilities: dict[str, float]
+    unique_top1: str | None
+    tie: bool
+
+    @property
+    def raw(self) -> float:
+        return self.raw_margin
+
+    @property
+    def clipped(self) -> float:
+        return self.clipped_margin
+
+
+def compute_answer_margin(scores: Mapping[str, Real], correct: str) -> AnswerMargin:
+    if not isinstance(scores, Mapping) or set(scores) != set(LABELS) or len(scores) != len(LABELS):
+        raise ValueError("scores must have exactly the labels A-E")
+    if correct not in LABELS:
+        raise ValueError("correct must be one of A-E")
+    numeric_scores: dict[str, float] = {}
+    for label in LABELS:
+        value = scores[label]
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise ValueError("scores must be finite real numbers")
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            raise ValueError("scores must be finite real numbers")
+        numeric_scores[label] = numeric
+
+    best_other = max(score for label, score in numeric_scores.items() if label != correct)
+    raw_margin = numeric_scores[correct] - best_other
+    clipped_margin = max(-MARGIN_CLIP, min(MARGIN_CLIP, raw_margin))
+
+    maximum = max(numeric_scores.values())
+    log_normalizer = maximum + math.log(
+        sum(math.exp(score - maximum) for score in numeric_scores.values())
+    )
+    log_probabilities = {
+        label: numeric_scores[label] - log_normalizer for label in LABELS
+    }
+    ranked = sorted(LABELS, key=lambda label: numeric_scores[label], reverse=True)
+    tie = numeric_scores[ranked[0]] - numeric_scores[ranked[1]] <= 1e-6
+    return AnswerMargin(
+        raw_margin=raw_margin,
+        clipped_margin=clipped_margin,
+        reward=clipped_margin / MARGIN_CLIP,
+        log_probabilities=log_probabilities,
+        unique_top1=None if tie else ranked[0],
+        tie=tie,
+    )
