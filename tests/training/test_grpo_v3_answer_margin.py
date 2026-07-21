@@ -173,7 +173,7 @@ class ExtractCoreQATests(unittest.TestCase):
 class PermuteOptionsTests(unittest.TestCase):
     def setUp(self):
         self.key = PermutationKey(
-            condition_id="condition-7",
+            experiment_condition_id="condition-7",
             phase="train",
             evidence_id="clip-19",
             generation_seed_or_call_index=23,
@@ -217,7 +217,9 @@ class PermuteOptionsTests(unittest.TestCase):
         script = (
             "import json; "
             "from training.grpo_v3_answer_margin import PermutationKey, permute_options; "
-            "k=PermutationKey('condition-7','train','clip-19',23,2,'combined_video_answer_margin_v1'); "
+            "k=PermutationKey(experiment_condition_id='condition-7',phase='train',"
+            "evidence_id='clip-19',generation_seed_or_call_index=23,candidate_index=2,"
+            "reward_revision='combined_video_answer_margin_v1'); "
             "r=permute_options(['zero','one','two','three','four'],'C',k); "
             "print(json.dumps([r.permutation,r.inverse,r.mapped_correct,r.digests]))"
         )
@@ -232,7 +234,7 @@ class PermuteOptionsTests(unittest.TestCase):
 
     def test_reward_revision_changes_stable_key_and_digests(self):
         changed_revision = PermutationKey(
-            condition_id=self.key.condition_id,
+            experiment_condition_id=self.key.experiment_condition_id,
             phase=self.key.phase,
             evidence_id=self.key.evidence_id,
             generation_seed_or_call_index=self.key.generation_seed_or_call_index,
@@ -245,6 +247,20 @@ class PermuteOptionsTests(unittest.TestCase):
 
         self.assertNotEqual(self.key.stable_text(), changed_revision.stable_text())
         self.assertNotEqual(original.digests, changed.digests)
+
+    def test_stable_text_uses_formal_experiment_condition_audit_key(self):
+        stable_payload = json.loads(self.key.stable_text())
+
+        self.assertEqual(stable_payload["experiment_condition_id"], "condition-7")
+        self.assertNotIn("condition_id", stable_payload)
+        self.assertEqual(set(stable_payload), {
+            "experiment_condition_id",
+            "phase",
+            "evidence_id",
+            "generation_seed_or_call_index",
+            "candidate_index",
+            "reward_revision",
+        })
 
     def test_rejects_invalid_options_and_correct(self):
         with self.assertRaises(ValueError):
@@ -317,6 +333,12 @@ class AnswerMarginTests(unittest.TestCase):
 
     def test_rejects_non_finite_margin_created_by_finite_score_subtraction(self):
         scores = {"A": 1e308, "B": -1e308, "C": -1e308, "D": -1e308, "E": -1e308}
+
+        with self.assertRaises(ValueError):
+            compute_answer_margin(scores, "A")
+
+    def test_rejects_non_finite_log_probability_derived_from_finite_scores(self):
+        scores = {"A": 1e308, "B": 1e308, "C": -1e308, "D": -1e308, "E": -1e308}
 
         with self.assertRaises(ValueError):
             compute_answer_margin(scores, "A")

@@ -123,7 +123,7 @@ def extract_core_qa(raw_completion: str) -> CoreQAExtraction:
 
 @dataclass(frozen=True)
 class PermutationKey:
-    condition_id: str
+    experiment_condition_id: str
     phase: str
     evidence_id: str
     generation_seed_or_call_index: str | int
@@ -133,7 +133,7 @@ class PermutationKey:
     def stable_text(self) -> str:
         return json.dumps(
             {
-                "condition_id": self.condition_id,
+                "experiment_condition_id": self.experiment_condition_id,
                 "phase": self.phase,
                 "evidence_id": self.evidence_id,
                 "generation_seed_or_call_index": self.generation_seed_or_call_index,
@@ -236,6 +236,7 @@ def compute_answer_margin(scores: Mapping[str, Real], correct: str) -> AnswerMar
     if not math.isfinite(raw_margin):
         raise ValueError("answer margin must be finite")
     clipped_margin = max(-MARGIN_CLIP, min(MARGIN_CLIP, raw_margin))
+    reward = clipped_margin / MARGIN_CLIP
 
     maximum = max(numeric_scores.values())
     log_normalizer = maximum + math.log(
@@ -244,12 +245,21 @@ def compute_answer_margin(scores: Mapping[str, Real], correct: str) -> AnswerMar
     log_probabilities = {
         label: numeric_scores[label] - log_normalizer for label in LABELS
     }
+    derived_values = [
+        raw_margin,
+        clipped_margin,
+        reward,
+        log_normalizer,
+        *log_probabilities.values(),
+    ]
+    if not all(math.isfinite(value) for value in derived_values):
+        raise ValueError("derived answer-margin statistics must be finite")
     ranked = sorted(LABELS, key=lambda label: numeric_scores[label], reverse=True)
     tie = numeric_scores[ranked[0]] - numeric_scores[ranked[1]] <= 1e-6
     return AnswerMargin(
         raw_margin=raw_margin,
         clipped_margin=clipped_margin,
-        reward=clipped_margin / MARGIN_CLIP,
+        reward=reward,
         log_probabilities=log_probabilities,
         unique_top1=None if tie else ranked[0],
         tie=tie,
