@@ -426,10 +426,98 @@ class AnswerMarginReward(ORM):
 
         count = len(completions)
         call_index = self._next_call_index()
-        packets = _expand(kwargs["packet_json"], count, name="packet_json")
-        evidence_ids = _expand(kwargs["evidence_id"], count, name="evidence_id")
-        question_types = _expand(kwargs["question_type"], count, name="question_type")
-        generation_modes = _expand(kwargs["generation_mode"], count, name="generation_mode")
+
+        def single_available(name: str) -> Any:
+            value = kwargs.get(name)
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+                return value[0] if len(value) == 1 else None
+            return value
+
+        def metadata_failure_row(error: Exception) -> dict[str, Any]:
+            raw_packet = single_available("packet_json")
+            packet_summary = None
+            video_inputs: list[dict[str, str]] = []
+            if raw_packet is not None:
+                try:
+                    packet_value = json.loads(raw_packet) if isinstance(raw_packet, str) else raw_packet
+                except Exception:
+                    packet_value = raw_packet
+                packet_summary = summarize_packet(packet_value)
+                if isinstance(packet_value, dict):
+                    users = packet_value.get("required_users")
+                    clips = packet_value.get("clips")
+                    if isinstance(users, list) and isinstance(clips, list):
+                        by_user = {
+                            str(clip.get("agent_name")): clip.get("local_video")
+                            for clip in clips
+                            if isinstance(clip, dict)
+                        }
+                        if len(users) == 2 and all(str(user) in by_user for user in users):
+                            video_inputs = [
+                                {
+                                    "user": str(user),
+                                    "path": str(by_user[str(user)]),
+                                    "basename": Path(str(by_user[str(user)])).name,
+                                }
+                                for user in users
+                            ]
+            step = single_available("global_step")
+            if isinstance(step, bool) or not isinstance(step, int) or step < 0:
+                step = None
+            evidence = single_available("evidence_id")
+            return {
+                "schema_version": TRACE_SCHEMA_VERSION,
+                "reward_revision": ANSWER_MARGIN_REWARD_REVISION,
+                "experiment_version": EXPERIMENT_REVISION,
+                "experiment_condition_id": EXPERIMENT_CONDITION_ID,
+                "reward_kind": "combined_video_answer_margin",
+                "phase": None,
+                "global_step": step,
+                "reward_call_index": call_index,
+                "candidate_index": None,
+                "evidence_id": str(evidence) if evidence is not None else None,
+                "raw_completion": None,
+                "raw_completions": [str(item) for item in completions],
+                "packet_summary": packet_summary,
+                "video_inputs": video_inputs,
+                "permutation_key": None,
+                "available_metadata": _json_safe({
+                    name: kwargs.get(name)
+                    for name in (
+                        "packet_json", "evidence_id", "question_type",
+                        "generation_mode", "global_step",
+                    )
+                    if name in kwargs
+                }),
+                "failure_stage": "metadata",
+                "reward": None,
+                "record": {
+                    "masked": True,
+                    "eligible_for_grpo": False,
+                    "infrastructure_error": {
+                        "type": type(error).__name__,
+                        "message": str(error),
+                    },
+                },
+            }
+
+        try:
+            packets = _expand(kwargs["packet_json"], count, name="packet_json")
+            evidence_ids = _expand(kwargs["evidence_id"], count, name="evidence_id")
+            question_types = _expand(kwargs["question_type"], count, name="question_type")
+            generation_modes = _expand(kwargs["generation_mode"], count, name="generation_mode")
+            if "global_step" not in kwargs:
+                raise ValueError("缺少 ms-swift ORM 展开字段 global_step")
+            global_steps = _expand(kwargs["global_step"], count, name="global_step")
+            if any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in global_steps
+            ):
+                raise ValueError("global_step 必须逐 completion 展开为非负整数")
+        except Exception as exc:
+            _write_rows(self.trace_path, [metadata_failure_row(exc)], self._lock)
+            raise
+
         eval_ids = {
             item.strip()
             for item in os.environ.get("EGOQA_EVAL_EVIDENCE_IDS", "").split(",")
@@ -558,27 +646,6 @@ class AnswerMarginReward(ORM):
                     stage="configuration",
                     global_step=preview_global_step(),
                 )],
-                self._lock,
-            )
-            raise error
-
-        if "global_step" not in kwargs:
-            error = ValueError("缺少 ms-swift ORM 展开字段 global_step")
-            _write_rows(
-                self.trace_path,
-                [masked_row(0, error, stage="metadata", global_step=None)],
-                self._lock,
-            )
-            raise error
-        global_steps = _expand(kwargs["global_step"], count, name="global_step")
-        if any(
-            isinstance(value, bool) or not isinstance(value, int) or value < 0
-            for value in global_steps
-        ):
-            error = ValueError("global_step 必须逐 completion 展开为非负整数")
-            _write_rows(
-                self.trace_path,
-                [masked_row(0, error, stage="metadata", global_step=None)],
                 self._lock,
             )
             raise error

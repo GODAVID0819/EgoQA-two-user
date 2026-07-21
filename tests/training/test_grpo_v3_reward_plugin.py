@@ -302,6 +302,53 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(row["failure_stage"], "metadata")
         self.assertEqual(len(row["video_inputs"]), 2)
 
+    def test_global_step_alignment_error_is_traced_then_reraised(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        with tempfile.TemporaryDirectory() as tmp:
+            kwargs = self._kwargs(Path(tmp))
+            kwargs["global_step"] = [0, 1]
+            trace = Path(tmp) / "answer_margin.jsonl"
+            reward = AnswerMarginReward(trace_path=trace, score_fn=StubAnswerMarginScoreFn())
+            with self.assertRaisesRegex(ValueError, "global_step"):
+                reward(["a", "b", "c", "d"], **kwargs)
+            rows = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["failure_stage"], "metadata")
+        self.assertIsNone(rows[0]["candidate_index"])
+        self.assertEqual(rows[0]["raw_completions"], ["a", "b", "c", "d"])
+        self.assertEqual(rows[0]["available_metadata"]["global_step"], [0, 1])
+
+    def test_missing_packet_json_is_traced_then_original_keyerror_is_reraised(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        with tempfile.TemporaryDirectory() as tmp:
+            kwargs = self._kwargs(Path(tmp))
+            del kwargs["packet_json"]
+            trace = Path(tmp) / "answer_margin.jsonl"
+            reward = AnswerMarginReward(trace_path=trace, score_fn=StubAnswerMarginScoreFn())
+            with self.assertRaises(KeyError):
+                reward(["a", "b", "c", "d"], **kwargs)
+            row = json.loads(trace.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(row["failure_stage"], "metadata")
+        self.assertIsNone(row["packet_summary"])
+        self.assertEqual(row["experiment_condition_id"], "t05")
+
+    def test_evidence_alignment_error_does_not_fabricate_candidate_identity(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        with tempfile.TemporaryDirectory() as tmp:
+            kwargs = self._kwargs(Path(tmp))
+            kwargs["evidence_id"] = ["E1", "E2"]
+            trace = Path(tmp) / "answer_margin.jsonl"
+            reward = AnswerMarginReward(trace_path=trace, score_fn=StubAnswerMarginScoreFn())
+            with self.assertRaisesRegex(ValueError, "evidence_id"):
+                reward(["a", "b", "c", "d"], **kwargs)
+            row = json.loads(trace.read_text(encoding="utf-8").splitlines()[0])
+        self.assertIsNone(row["evidence_id"])
+        self.assertIsNone(row["candidate_index"])
+        self.assertEqual(row["available_metadata"]["evidence_id"], ["E1", "E2"])
+
     def test_client_configuration_requires_explicit_environment(self):
         from training.grpo_v3_reward_plugin import AnswerMarginReward
 
