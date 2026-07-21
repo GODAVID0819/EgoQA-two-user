@@ -36,6 +36,22 @@ class ExtractCoreQATests(unittest.TestCase):
             "correct": "C",
         })
 
+    def test_strips_core_fields_without_changing_internal_characters(self):
+        raw = json.dumps({
+            "question": "  Who  opened the door?  ",
+            "options": ["  Ava ", " Bo  Junior ", "\tCy\n", " Di", "Em  "],
+            "correct": " c ",
+        })
+
+        result = extract_core_qa(raw)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.as_qa(), {
+            "question": "Who  opened the door?",
+            "options": ["Ava", "Bo  Junior", "Cy", "Di", "Em"],
+            "correct": "C",
+        })
+
     def test_extracts_complete_fence_and_extra_text(self):
         encoded = json.dumps(self.qa)
         fenced = extract_core_qa(f"```json\n{encoded}\n```")
@@ -162,6 +178,7 @@ class PermuteOptionsTests(unittest.TestCase):
             evidence_id="clip-19",
             generation_seed_or_call_index=23,
             candidate_index=2,
+            reward_revision=ANSWER_MARGIN_REWARD_REVISION,
         )
         self.options = ["zero", "one", "two", "three", "four"]
 
@@ -200,7 +217,7 @@ class PermuteOptionsTests(unittest.TestCase):
         script = (
             "import json; "
             "from training.grpo_v3_answer_margin import PermutationKey, permute_options; "
-            "k=PermutationKey('condition-7','train','clip-19',23,2); "
+            "k=PermutationKey('condition-7','train','clip-19',23,2,'combined_video_answer_margin_v1'); "
             "r=permute_options(['zero','one','two','three','four'],'C',k); "
             "print(json.dumps([r.permutation,r.inverse,r.mapped_correct,r.digests]))"
         )
@@ -212,6 +229,22 @@ class PermuteOptionsTests(unittest.TestCase):
         ).strip()
 
         self.assertEqual(actual, expected)
+
+    def test_reward_revision_changes_stable_key_and_digests(self):
+        changed_revision = PermutationKey(
+            condition_id=self.key.condition_id,
+            phase=self.key.phase,
+            evidence_id=self.key.evidence_id,
+            generation_seed_or_call_index=self.key.generation_seed_or_call_index,
+            candidate_index=self.key.candidate_index,
+            reward_revision="combined_video_answer_margin_v2",
+        )
+
+        original = permute_options(self.options, "C", self.key)
+        changed = permute_options(self.options, "C", changed_revision)
+
+        self.assertNotEqual(self.key.stable_text(), changed_revision.stable_text())
+        self.assertNotEqual(original.digests, changed.digests)
 
     def test_rejects_invalid_options_and_correct(self):
         with self.assertRaises(ValueError):
@@ -281,6 +314,12 @@ class AnswerMarginTests(unittest.TestCase):
         for correct in ("a", "F", "AA"):
             with self.subTest(correct=correct), self.assertRaises(ValueError):
                 compute_answer_margin(valid, correct)
+
+    def test_rejects_non_finite_margin_created_by_finite_score_subtraction(self):
+        scores = {"A": 1e308, "B": -1e308, "C": -1e308, "D": -1e308, "E": -1e308}
+
+        with self.assertRaises(ValueError):
+            compute_answer_margin(scores, "A")
 
 
 if __name__ == "__main__":

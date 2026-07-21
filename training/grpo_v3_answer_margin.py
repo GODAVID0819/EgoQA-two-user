@@ -83,26 +83,39 @@ def extract_core_qa(raw_completion: str) -> CoreQAExtraction:
     question = value.get("question")
     options = value.get("options")
     correct = value.get("correct")
-    if not isinstance(question, str) or not question.strip():
+    normalized_question = question.strip() if isinstance(question, str) else None
+    normalized_options = (
+        [option.strip() for option in options]
+        if isinstance(options, list) and all(isinstance(option, str) for option in options)
+        else None
+    )
+    normalized_correct = correct.strip().upper() if isinstance(correct, str) else None
+    if not normalized_question:
         reason = "invalid_question"
     elif (
-        not isinstance(options, list)
-        or len(options) != 5
-        or any(not isinstance(option, str) or not option.strip() for option in options)
+        normalized_options is None
+        or len(normalized_options) != 5
+        or any(not option for option in normalized_options)
     ):
         reason = "invalid_options"
-    elif not isinstance(correct, str) or correct.upper() not in LABELS or len(correct) != 1:
+    elif normalized_correct not in LABELS or len(normalized_correct) != 1:
         reason = "invalid_correct"
     else:
         return CoreQAExtraction(
-            True, validation.status, question, list(options), correct.upper(), None, validation,
+            True,
+            validation.status,
+            normalized_question,
+            normalized_options,
+            normalized_correct,
+            None,
+            validation,
         )
     return CoreQAExtraction(
         False,
         validation.status,
-        question if isinstance(question, str) else None,
-        list(options) if isinstance(options, list) else None,
-        correct if isinstance(correct, str) else None,
+        normalized_question,
+        normalized_options,
+        normalized_correct,
         reason,
         validation,
     )
@@ -115,6 +128,7 @@ class PermutationKey:
     evidence_id: str
     generation_seed_or_call_index: str | int
     candidate_index: int
+    reward_revision: str
 
     def stable_text(self) -> str:
         return json.dumps(
@@ -124,6 +138,7 @@ class PermutationKey:
                 "evidence_id": self.evidence_id,
                 "generation_seed_or_call_index": self.generation_seed_or_call_index,
                 "candidate_index": self.candidate_index,
+                "reward_revision": self.reward_revision,
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -218,6 +233,8 @@ def compute_answer_margin(scores: Mapping[str, Real], correct: str) -> AnswerMar
 
     best_other = max(score for label, score in numeric_scores.items() if label != correct)
     raw_margin = numeric_scores[correct] - best_other
+    if not math.isfinite(raw_margin):
+        raise ValueError("answer margin must be finite")
     clipped_margin = max(-MARGIN_CLIP, min(MARGIN_CLIP, raw_margin))
 
     maximum = max(numeric_scores.values())
