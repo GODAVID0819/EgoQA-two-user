@@ -76,6 +76,27 @@ class ExtractCoreQATests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.question, qa["question"])
 
+    def test_scanner_ignores_braces_inside_quoted_prefix_text(self):
+        raw = (
+            'prefix "{not an object}" then '
+            + json.dumps(self.qa)
+            + " suffix"
+        )
+
+        result = extract_core_qa(raw)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.as_qa(), self.qa)
+
+    def test_prefix_string_escapes_do_not_break_object_scanning(self):
+        prefix_string = json.dumps('escaped quote: " brace { and slash \\ }')
+        raw = "prefix " + prefix_string + " then " + json.dumps(self.qa) + " suffix"
+
+        result = extract_core_qa(raw)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.as_qa(), self.qa)
+
     def test_rejects_unclosed_string_or_object(self):
         unclosed_string = '{"question":"unterminated }'
         unclosed_object = json.dumps(self.qa)[:-1]

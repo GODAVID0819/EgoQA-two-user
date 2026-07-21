@@ -39,14 +39,11 @@ class CoreQAExtraction:
 
 
 def _first_complete_object(text: str) -> str | None:
-    start = text.find("{")
-    if start < 0:
-        return None
+    start: int | None = None
     depth = 0
     in_string = False
     escaped = False
-    for index in range(start, len(text)):
-        char = text[index]
+    for index, char in enumerate(text):
         if in_string:
             if escaped:
                 escaped = False
@@ -58,8 +55,10 @@ def _first_complete_object(text: str) -> str | None:
         if char == '"':
             in_string = True
         elif char == "{":
+            if start is None:
+                start = index
             depth += 1
-        elif char == "}":
+        elif char == "}" and start is not None:
             depth -= 1
             if depth == 0:
                 return text[start:index + 1]
