@@ -35,7 +35,7 @@ def packet(root: Path) -> dict:
 
 def key(candidate_index: int = 0) -> PermutationKey:
     return PermutationKey(
-        experiment_condition_id="temperature_0.5",
+        experiment_condition_id="t05",
         phase="train",
         evidence_id="E1",
         generation_seed_or_call_index=7,
@@ -80,9 +80,23 @@ class RecordingScorer:
 
 
 class AnswerMarginRewardCoreTests(unittest.TestCase):
+    @staticmethod
+    def _score(raw, packet_value, scorer, key_value=None):
+        return score_completion(
+            raw,
+            packet_value,
+            "E1",
+            0,
+            scorer=scorer,
+            key=key_value or key(),
+            global_step=3,
+            reward_call_index=7,
+        )
+
     def test_unrecoverable_qa_returns_floor_without_scorer(self):
         scorer = RecordingScorer()
-        result = score_completion("bad", {}, "E1", 0, scorer=scorer, key=key())
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._score("bad", packet(Path(tmp)), scorer)
         self.assertEqual(result["reward"], -1.0)
         self.assertEqual(scorer.calls, [])
         record = result["record"]
@@ -93,6 +107,16 @@ class AnswerMarginRewardCoreTests(unittest.TestCase):
         self.assertEqual(record["evidence_id"], "E1")
         self.assertEqual(record["candidate_index"], 0)
         self.assertEqual(record["permutation_key"]["phase"], "train")
+        self.assertEqual(record["experiment_condition_id"], "t05")
+        self.assertEqual(record["global_step"], 3)
+        self.assertEqual(record["reward_call_index"], 7)
+        self.assertEqual(len(record["video_inputs"]), 2)
+
+    def test_invalid_packet_with_bad_completion_is_infrastructure_error(self):
+        scorer = RecordingScorer()
+        with self.assertRaisesRegex(ValueError, "evidence_id"):
+            self._score("bad", {"evidence_id": "wrong"}, scorer)
+        self.assertEqual(scorer.calls, [])
 
     def test_scores_permuted_qa_and_writes_complete_audit_trace(self):
         scores = {"A": -4.0, "B": -3.0, "C": -2.0, "D": -1.0, "E": -5.0}
@@ -105,6 +129,8 @@ class AnswerMarginRewardCoreTests(unittest.TestCase):
                 0,
                 scorer=scorer,
                 key=key(),
+                global_step=3,
+                reward_call_index=7,
                 question_type="commonality",
                 generation_mode="baseline",
             )
@@ -156,11 +182,11 @@ class AnswerMarginRewardCoreTests(unittest.TestCase):
                 raise TimeoutError("scorer timeout")
 
         with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(TimeoutError, "scorer timeout"):
-            score_completion(completion(), packet(Path(tmp)), "E1", 0, scorer=TimeoutScorer(), key=key())
+            self._score(completion(), packet(Path(tmp)), TimeoutScorer())
 
     def test_metadata_misalignment_aborts_even_when_core_qa_is_bad(self):
         wrong = PermutationKey(
-            experiment_condition_id="temperature_0.5",
+            experiment_condition_id="t05",
             phase="train",
             evidence_id="other",
             generation_seed_or_call_index=7,
@@ -168,7 +194,7 @@ class AnswerMarginRewardCoreTests(unittest.TestCase):
             reward_revision=ANSWER_MARGIN_REWARD_REVISION,
         )
         with self.assertRaisesRegex(ValueError, "错位"):
-            score_completion("bad", {}, "E1", 0, scorer=RecordingScorer(), key=wrong)
+            self._score("bad", {}, RecordingScorer(), wrong)
 
     def test_resolve_ordered_videos_rejects_mapping_and_media_errors(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -11,13 +11,14 @@ from training.grpo_v3_reward_plugin import ControlledGateReward, RepoNativeJudge
 
 
 class StubAnswerMarginScoreFn:
-    def __init__(self, *, failure: Exception | None = None) -> None:
+    def __init__(self, *, failure: Exception | None = None, fail_at: int | None = None) -> None:
         self.calls = []
         self.failure = failure
+        self.fail_at = fail_at
 
     def __call__(self, **kwargs):
         self.calls.append(kwargs)
-        if self.failure is not None:
+        if self.failure is not None and (self.fail_at is None or kwargs["candidate_index"] == self.fail_at):
             raise self.failure
         return {"reward": 0.25, "record": {"masked": False, "eligible_for_grpo": True}}
 
@@ -190,12 +191,18 @@ class RepoNativeRewardTests(unittest.TestCase):
 
 
 class AnswerMarginPluginTests(unittest.TestCase):
-    def _kwargs(self) -> dict:
+    def _kwargs(self, root: Path) -> dict:
+        clips = []
+        for user in ("u1", "u2"):
+            video = root / f"{user}.mp4"
+            video.write_bytes(b"video")
+            clips.append({"agent_name": user, "local_video": str(video)})
         return {
-            "packet_json": [json.dumps({"evidence_id": "E1", "required_users": ["u1", "u2"], "clips": []})],
+            "packet_json": [json.dumps({"evidence_id": "E1", "required_users": ["u1", "u2"], "clips": clips})],
             "evidence_id": ["E1"],
             "question_type": ["commonality"],
             "generation_mode": ["baseline"],
+            "global_step": [3],
         }
 
     def test_registers_exact_orm_name_and_expands_existing_fields(self):
@@ -205,7 +212,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             trace = Path(tmp) / "answer_margin.jsonl"
             reward = AnswerMarginReward(trace_path=trace, score_fn=score_fn)
-            values = reward(["a", "b", "c", "d"], **self._kwargs())
+            values = reward(["a", "b", "c", "d"], **self._kwargs(Path(tmp)))
             rows = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
         self.assertIs(orms["egoqa_combined_video_answer_margin"], AnswerMarginReward)
         self.assertEqual(values, [0.25] * 4)
@@ -214,6 +221,16 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertTrue(all(call["question_type"] == "commonality" for call in score_fn.calls))
         self.assertTrue(all(call["generation_mode"] == "baseline" for call in score_fn.calls))
         self.assertTrue(all(row["reward_kind"] == "combined_video_answer_margin" for row in rows))
+        required = {
+            "schema_version", "reward_revision", "experiment_version",
+            "experiment_condition_id", "phase", "global_step", "reward_call_index",
+            "candidate_index", "evidence_id", "raw_completion", "packet_summary",
+            "video_inputs", "permutation_key",
+        }
+        self.assertTrue(all(required <= set(row) for row in rows))
+        self.assertTrue(all(row["experiment_condition_id"] == "t05" for row in rows))
+        self.assertTrue(all(row["global_step"] == 3 for row in rows))
+        self.assertTrue(all(len(row["video_inputs"]) == 2 for row in rows))
 
     def test_infrastructure_error_is_masked_traced_then_reraised(self):
         from training.grpo_v3_reward_plugin import AnswerMarginReward
@@ -223,13 +240,67 @@ class AnswerMarginPluginTests(unittest.TestCase):
             trace = Path(tmp) / "answer_margin.jsonl"
             reward = AnswerMarginReward(trace_path=trace, score_fn=StubAnswerMarginScoreFn(failure=error))
             with self.assertRaisesRegex(TimeoutError, "answer scorer timeout"):
-                reward(["a", "b", "c", "d"], **self._kwargs())
+                reward(["a", "b", "c", "d"], **self._kwargs(Path(tmp)))
             rows = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(len(rows), 1)
         self.assertIsNone(rows[0]["reward"])
         self.assertTrue(rows[0]["record"]["masked"])
         self.assertFalse(rows[0]["record"]["eligible_for_grpo"])
         self.assertEqual(rows[0]["record"]["infrastructure_error"]["type"], "TimeoutError")
+        self.assertEqual(rows[0]["experiment_condition_id"], "t05")
+        self.assertEqual(rows[0]["global_step"], 3)
+        self.assertEqual(rows[0]["raw_completion"], "a")
+        self.assertEqual(len(rows[0]["video_inputs"]), 2)
+        self.assertIsNotNone(rows[0]["permutation_key"])
+        self.assertEqual(rows[0]["failure_stage"], "scoring")
+
+    def test_partial_group_failure_writes_each_processed_candidate_once(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = Path(tmp) / "answer_margin.jsonl"
+            reward = AnswerMarginReward(
+                trace_path=trace,
+                score_fn=StubAnswerMarginScoreFn(failure=TimeoutError("late"), fail_at=1),
+            )
+            with self.assertRaises(TimeoutError):
+                reward(["a", "b", "c", "d"], **self._kwargs(Path(tmp)))
+            rows = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([row["candidate_index"] for row in rows], [0, 1])
+
+    def test_wrong_condition_is_masked_traced_then_aborts_before_scorer(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        score_fn = StubAnswerMarginScoreFn()
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            "os.environ", {"EGOQA_ANSWER_MARGIN_CONDITION_ID": "temperature_0.5"}, clear=False
+        ):
+            trace = Path(tmp) / "answer_margin.jsonl"
+            reward = AnswerMarginReward(trace_path=trace, score_fn=score_fn)
+            with self.assertRaisesRegex(ValueError, "t05"):
+                reward(["a", "b", "c", "d"], **self._kwargs(Path(tmp)))
+            rows = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(score_fn.calls, [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["failure_stage"], "configuration")
+        self.assertEqual(rows[0]["global_step"], 3)
+        self.assertIsNone(rows[0]["permutation_key"])
+        self.assertEqual(len(rows[0]["video_inputs"]), 2)
+
+    def test_missing_global_step_is_masked_not_silently_fabricated(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        with tempfile.TemporaryDirectory() as tmp:
+            kwargs = self._kwargs(Path(tmp))
+            del kwargs["global_step"]
+            trace = Path(tmp) / "answer_margin.jsonl"
+            reward = AnswerMarginReward(trace_path=trace, score_fn=StubAnswerMarginScoreFn())
+            with self.assertRaisesRegex(ValueError, "global_step"):
+                reward(["a", "b", "c", "d"], **kwargs)
+            row = json.loads(trace.read_text(encoding="utf-8").splitlines()[0])
+        self.assertIsNone(row["global_step"])
+        self.assertEqual(row["failure_stage"], "metadata")
+        self.assertEqual(len(row["video_inputs"]), 2)
 
     def test_client_configuration_requires_explicit_environment(self):
         from training.grpo_v3_reward_plugin import AnswerMarginReward

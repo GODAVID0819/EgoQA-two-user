@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -17,6 +19,7 @@ from training.grpo_v3_answer_scorer import PromptAuditMaterial, ScoreRequest, Sc
 
 
 EXPERIMENT_REVISION = "combined_video_answer_margin_convergence_v1"
+EXPERIMENT_CONDITION_ID = "t05"
 TRACE_SCHEMA_VERSION = 1
 
 
@@ -65,6 +68,51 @@ def resolve_ordered_videos(packet: Mapping[str, Any], evidence_id: str) -> tuple
     return videos[0], videos[1]
 
 
+def summarize_packet(packet: Any) -> dict[str, Any]:
+    """生成不依赖 packet 完整合法性的可审计身份摘要。"""
+
+    try:
+        serialized = json.dumps(packet, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        serialized = repr(packet)
+    summary: dict[str, Any] = {
+        "sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+        "value_type": type(packet).__name__,
+        "evidence_id": None,
+        "required_users": None,
+        "clips": None,
+    }
+    if not isinstance(packet, Mapping):
+        return summary
+    users = packet.get("required_users")
+    clips = packet.get("clips")
+    summary["evidence_id"] = packet.get("evidence_id")
+    summary["required_users"] = list(users) if isinstance(users, list) else users
+    if isinstance(clips, list):
+        summary["clips"] = [
+            {
+                "agent_name": clip.get("agent_name"),
+                "local_video": clip.get("local_video"),
+            }
+            if isinstance(clip, Mapping)
+            else {"invalid_clip_type": type(clip).__name__}
+            for clip in clips
+        ]
+    else:
+        summary["clips"] = clips
+    return summary
+
+
+def video_input_summary(
+    packet: Mapping[str, Any], videos: tuple[str, str]
+) -> list[dict[str, str]]:
+    users = list(packet["required_users"])
+    return [
+        {"user": str(users[index]), "path": path, "basename": Path(path).name}
+        for index, path in enumerate(videos)
+    ]
+
+
 def _audit_material(extracted: Any) -> PromptAuditMaterial:
     value = extracted.format_validation.value
     excluded: dict[str, str] = {}
@@ -102,6 +150,10 @@ def _floor_record(
     evidence_id: str,
     candidate_index: int,
     key: PermutationKey,
+    global_step: int,
+    reward_call_index: int,
+    packet_summary: dict[str, Any],
+    video_inputs: list[dict[str, str]],
     question_type: str,
     generation_mode: str,
 ) -> dict[str, Any]:
@@ -109,10 +161,17 @@ def _floor_record(
         "schema_version": TRACE_SCHEMA_VERSION,
         "reward_revision": ANSWER_MARGIN_REWARD_REVISION,
         "experiment_revision": EXPERIMENT_REVISION,
+        "experiment_version": EXPERIMENT_REVISION,
+        "phase": key.phase,
         "question_type": str(question_type),
         "generation_mode": str(generation_mode),
         "evidence_id": str(evidence_id),
         "candidate_index": candidate_index,
+        "experiment_condition_id": EXPERIMENT_CONDITION_ID,
+        "global_step": global_step,
+        "reward_call_index": reward_call_index,
+        "packet_summary": packet_summary,
+        "video_inputs": video_inputs,
         "permutation_key": _key_payload(key),
         "raw_completion": extracted.raw_completion,
         "core_qa": {
@@ -139,13 +198,28 @@ def score_completion(
     *,
     scorer: Any,
     key: PermutationKey,
+    global_step: int,
+    reward_call_index: int,
     question_type: str = "",
     generation_mode: str = "",
 ) -> dict[str, Any]:
     """为一条 completion 评分；基础设施异常原样抛出。"""
 
-    if key.evidence_id != str(evidence_id) or key.candidate_index != candidate_index:
+    if (
+        key.evidence_id != str(evidence_id)
+        or key.candidate_index != candidate_index
+        or key.experiment_condition_id != EXPERIMENT_CONDITION_ID
+        or key.reward_revision != ANSWER_MARGIN_REWARD_REVISION
+        or key.generation_seed_or_call_index != reward_call_index
+    ):
         raise ValueError("permutation key 与 completion 元数据错位")
+    if isinstance(global_step, bool) or not isinstance(global_step, int) or global_step < 0:
+        raise ValueError("global_step 必须是非负整数")
+    if isinstance(reward_call_index, bool) or not isinstance(reward_call_index, int) or reward_call_index < 0:
+        raise ValueError("reward_call_index 必须是非负整数")
+    videos = resolve_ordered_videos(packet, evidence_id)
+    packet_summary = summarize_packet(packet)
+    video_inputs = video_input_summary(packet, videos)
     extracted = extract_core_qa(raw_completion)
     if not extracted.ok:
         return {
@@ -155,13 +229,16 @@ def score_completion(
                 evidence_id=evidence_id,
                 candidate_index=candidate_index,
                 key=key,
+                global_step=global_step,
+                reward_call_index=reward_call_index,
+                packet_summary=packet_summary,
+                video_inputs=video_inputs,
                 question_type=question_type,
                 generation_mode=generation_mode,
             ),
         }
     assert extracted.options is not None and extracted.correct is not None
     permutation = permute_options(extracted.options, extracted.correct, key)
-    videos = resolve_ordered_videos(packet, evidence_id)
     request = ScoreRequest(
         videos=videos,
         question=str(extracted.question),
@@ -174,7 +251,6 @@ def score_completion(
         label: response.scores[label].sequence_logprob for label in LABELS
     }
     margin = compute_answer_margin(sequence_scores, permutation.correct)
-    users = list(packet["required_users"])
     label_scores = {
         label: {
             **response.scores[label].to_payload(),
@@ -188,14 +264,17 @@ def score_completion(
         "schema_version": TRACE_SCHEMA_VERSION,
         "reward_revision": ANSWER_MARGIN_REWARD_REVISION,
         "experiment_revision": EXPERIMENT_REVISION,
+        "experiment_version": EXPERIMENT_REVISION,
+        "phase": key.phase,
         "question_type": str(question_type),
         "generation_mode": str(generation_mode),
         "evidence_id": str(evidence_id),
         "candidate_index": candidate_index,
-        "video_inputs": [
-            {"user": users[index], "path": path, "basename": Path(path).name}
-            for index, path in enumerate(videos)
-        ],
+        "experiment_condition_id": EXPERIMENT_CONDITION_ID,
+        "global_step": global_step,
+        "reward_call_index": reward_call_index,
+        "packet_summary": packet_summary,
+        "video_inputs": video_inputs,
         "raw_completion": extracted.raw_completion,
         "core_qa": {
             "ok": True,

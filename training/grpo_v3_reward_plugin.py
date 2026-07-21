@@ -415,6 +415,14 @@ class AnswerMarginReward(ORM):
             ANSWER_MARGIN_REWARD_REVISION,
             PermutationKey,
         )
+        from training.grpo_v3_answer_margin_reward import (
+            EXPERIMENT_CONDITION_ID,
+            EXPERIMENT_REVISION,
+            TRACE_SCHEMA_VERSION,
+            resolve_ordered_videos,
+            summarize_packet,
+            video_input_summary,
+        )
 
         count = len(completions)
         call_index = self._next_call_index()
@@ -428,45 +436,186 @@ class AnswerMarginReward(ORM):
             if item.strip()
         }
         phases = ["eval" if str(item) in eval_ids else "train" for item in evidence_ids]
+
+        def key_payload(key: PermutationKey | None) -> dict[str, Any] | None:
+            if key is None:
+                return None
+            return {
+                "reward_revision": key.reward_revision,
+                "experiment_condition_id": key.experiment_condition_id,
+                "phase": key.phase,
+                "evidence_id": key.evidence_id,
+                "generation_seed_or_call_index": key.generation_seed_or_call_index,
+                "candidate_index": key.candidate_index,
+            }
+
+        def base_row(
+            index: int,
+            *,
+            global_step: int | None,
+            packet: Any = None,
+            videos: tuple[str, str] | None = None,
+            key: PermutationKey | None = None,
+        ) -> dict[str, Any]:
+            if packet is None:
+                raw_packet = packets[index]
+                try:
+                    packet = json.loads(raw_packet) if isinstance(raw_packet, str) else raw_packet
+                except Exception:
+                    packet = raw_packet
+            video_inputs: list[dict[str, str]] = []
+            if isinstance(packet, dict) and videos is not None:
+                video_inputs = video_input_summary(packet, videos)
+            elif isinstance(packet, dict):
+                users = packet.get("required_users")
+                clips = packet.get("clips")
+                if isinstance(users, list) and isinstance(clips, list):
+                    by_user = {
+                        str(clip.get("agent_name")): clip.get("local_video")
+                        for clip in clips
+                        if isinstance(clip, dict)
+                    }
+                    if len(users) == 2 and all(str(user) in by_user for user in users):
+                        video_inputs = [
+                            {
+                                "user": str(user),
+                                "path": str(by_user[str(user)]),
+                                "basename": Path(str(by_user[str(user)])).name,
+                            }
+                            for user in users
+                        ]
+            return {
+                "schema_version": TRACE_SCHEMA_VERSION,
+                "reward_revision": ANSWER_MARGIN_REWARD_REVISION,
+                "experiment_version": EXPERIMENT_REVISION,
+                "experiment_condition_id": EXPERIMENT_CONDITION_ID,
+                "reward_kind": "combined_video_answer_margin",
+                "phase": phases[index],
+                "global_step": global_step,
+                "reward_call_index": call_index,
+                "candidate_index": index,
+                "evidence_id": str(evidence_ids[index]),
+                "raw_completion": str(completions[index]),
+                "completion_length_chars": len(str(completions[index])),
+                "question_type": str(question_types[index]),
+                "generation_mode": str(generation_modes[index]),
+                "packet_summary": summarize_packet(packet),
+                "video_inputs": video_inputs,
+                "permutation_key": key_payload(key),
+            }
+
+        def masked_row(
+            index: int,
+            error: Exception,
+            *,
+            stage: str,
+            global_step: int | None,
+            packet: Any = None,
+            videos: tuple[str, str] | None = None,
+            key: PermutationKey | None = None,
+            prior_record: Any = None,
+        ) -> dict[str, Any]:
+            error_type = (
+                "NonFiniteRewardError"
+                if isinstance(error, ValueError) and "reward 非有限" in str(error)
+                else type(error).__name__
+            )
+            record = dict(prior_record) if isinstance(prior_record, dict) else {}
+            record.update({
+                "masked": True,
+                "eligible_for_grpo": False,
+                "infrastructure_error": {"type": error_type, "message": str(error)},
+            })
+            return {
+                **base_row(
+                    index,
+                    global_step=global_step,
+                    packet=packet,
+                    videos=videos,
+                    key=key,
+                ),
+                "failure_stage": stage,
+                "reward": None,
+                "record": record,
+            }
+
+        def preview_global_step() -> int | None:
+            raw = kwargs.get("global_step")
+            if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+                raw = raw[0] if raw else None
+            return raw if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0 else None
+
+        condition_value = os.environ.get(
+            "EGOQA_ANSWER_MARGIN_CONDITION_ID", EXPERIMENT_CONDITION_ID
+        )
+        if condition_value != EXPERIMENT_CONDITION_ID:
+            error = ValueError("EGOQA_ANSWER_MARGIN_CONDITION_ID 必须严格等于 t05")
+            _write_rows(
+                self.trace_path,
+                [masked_row(
+                    0,
+                    error,
+                    stage="configuration",
+                    global_step=preview_global_step(),
+                )],
+                self._lock,
+            )
+            raise error
+
+        if "global_step" not in kwargs:
+            error = ValueError("缺少 ms-swift ORM 展开字段 global_step")
+            _write_rows(
+                self.trace_path,
+                [masked_row(0, error, stage="metadata", global_step=None)],
+                self._lock,
+            )
+            raise error
+        global_steps = _expand(kwargs["global_step"], count, name="global_step")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in global_steps
+        ):
+            error = ValueError("global_step 必须逐 completion 展开为非负整数")
+            _write_rows(
+                self.trace_path,
+                [masked_row(0, error, stage="metadata", global_step=None)],
+                self._lock,
+            )
+            raise error
+
         if len(set(phases)) != 1:
-            rows = [
-                {
-                    "reward_kind": "combined_video_answer_margin",
-                    "reward_call_index": call_index,
-                    "phase": phases[index],
-                    "evidence_id": str(evidence_ids[index]),
-                    "candidate_index": index,
-                    "completion_length_chars": len(str(completions[index])),
-                    "reward": None,
-                    "record": {
-                        "masked": True,
-                        "eligible_for_grpo": False,
-                        "infrastructure_error": {
-                            "type": "MixedPhaseGroupError",
-                            "message": "同一 answer-margin reward 调用混入 train/eval evidence",
-                        },
-                    },
-                }
-                for index in range(count)
-            ]
+            error = ValueError("同一 answer-margin reward 调用不得混入 train/eval evidence")
+            rows = [masked_row(
+                index,
+                error,
+                stage="metadata",
+                global_step=int(global_steps[index]),
+            ) for index in range(count)]
             _write_rows(self.trace_path, rows, self._lock)
-            raise ValueError("同一 answer-margin reward 调用不得混入 train/eval evidence")
+            raise error
         phase = phases[0] if phases else "train"
-        condition_id = os.environ.get("EGOQA_ANSWER_MARGIN_CONDITION_ID", "temperature_0.5")
         rewards: list[float] = []
         rows: list[dict[str, Any]] = []
         for index, completion in enumerate(completions):
+            packet = None
+            videos = None
+            key = None
+            result = None
+            stage = "packet_json_parse"
             try:
-                packet_value = packets[index]
-                packet = json.loads(packet_value) if isinstance(packet_value, str) else packet_value
                 key = PermutationKey(
-                    experiment_condition_id=condition_id,
+                    experiment_condition_id=EXPERIMENT_CONDITION_ID,
                     phase=phase,
                     evidence_id=str(evidence_ids[index]),
                     generation_seed_or_call_index=call_index,
                     candidate_index=index,
                     reward_revision=ANSWER_MARGIN_REWARD_REVISION,
                 )
+                packet_value = packets[index]
+                packet = json.loads(packet_value) if isinstance(packet_value, str) else packet_value
+                stage = "media_mapping"
+                videos = resolve_ordered_videos(packet, str(evidence_ids[index]))
+                stage = "scoring"
                 result = self.score_fn(
                     raw_completion=str(completion),
                     packet=packet,
@@ -475,44 +624,37 @@ class AnswerMarginReward(ORM):
                     generation_mode=str(generation_modes[index]),
                     candidate_index=index,
                     key=key,
+                    global_step=int(global_steps[index]),
+                    reward_call_index=call_index,
                 )
+                stage = "response_validation"
                 reward = result.get("reward")
                 if reward is None or not math.isfinite(float(reward)):
                     raise ValueError(f"answer-margin reward 非有限: {reward}")
                 reward_value = float(reward)
             except Exception as exc:
-                error_type = (
-                    "NonFiniteRewardError"
-                    if isinstance(exc, ValueError) and "reward 非有限" in str(exc)
-                    else type(exc).__name__
+                error_row = masked_row(
+                    index,
+                    exc,
+                    stage=stage,
+                    global_step=int(global_steps[index]),
+                    packet=packet,
+                    videos=videos,
+                    key=key,
+                    prior_record=result.get("record") if isinstance(result, dict) else None,
                 )
-                error_row = {
-                    "reward_kind": "combined_video_answer_margin",
-                    "reward_call_index": call_index,
-                    "phase": phase,
-                    "evidence_id": str(evidence_ids[index]),
-                    "candidate_index": index,
-                    "completion_length_chars": len(str(completion)),
-                    "reward": None,
-                    "record": {
-                        "masked": True,
-                        "eligible_for_grpo": False,
-                        "infrastructure_error": {
-                            "type": error_type,
-                            "message": str(exc),
-                        },
-                    },
-                }
                 _write_rows(self.trace_path, [*rows, error_row], self._lock)
                 raise
             rewards.append(reward_value)
             rows.append({
-                "reward_kind": "combined_video_answer_margin",
-                "reward_call_index": call_index,
-                "phase": phase,
-                "evidence_id": str(evidence_ids[index]),
-                "candidate_index": index,
-                "completion_length_chars": len(str(completion)),
+                **base_row(
+                    index,
+                    global_step=int(global_steps[index]),
+                    packet=packet,
+                    videos=videos,
+                    key=key,
+                ),
+                "failure_stage": None,
                 "reward": reward_value,
                 "record": result.get("record", {}),
             })
