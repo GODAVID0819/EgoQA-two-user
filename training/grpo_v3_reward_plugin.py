@@ -97,6 +97,10 @@ class CompletionGroupSizeError(ValueError):
     """answer-margin ORM 没有收到固定的四 completion group。"""
 
 
+class GroupIdentityError(ValueError):
+    """answer-margin 四候选没有共享同一个 prompt/group 身份。"""
+
+
 class ControlledGateReward(ORM):
     """Gate 1 边界探针；分数只验证训练闭环，不代表任务质量。"""
 
@@ -716,15 +720,66 @@ class AnswerMarginReward(ORM):
             )
             raise error
 
-        if len(set(phases)) != 1:
-            error = ValueError("同一 answer-margin reward 调用不得混入 train/eval evidence")
-            rows = [masked_row(
-                index,
-                error,
-                stage="metadata",
-                global_step=int(global_steps[index]),
-            ) for index in range(count)]
-            _write_rows(self.trace_path, rows, self._lock)
+        def identity_tokens(values: Sequence[Any]) -> list[str]:
+            return [
+                json.dumps(
+                    _answer_margin_metadata_snapshot(value),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                for value in values
+            ]
+
+        packet_sha256: list[str] = []
+        packet_snapshots: list[Any] = []
+        for packet_value in packets:
+            try:
+                normalized_packet = (
+                    json.loads(packet_value) if isinstance(packet_value, str) else packet_value
+                )
+            except Exception:
+                normalized_packet = packet_value
+            snapshot = _answer_margin_metadata_snapshot(normalized_packet)
+            canonical = json.dumps(
+                snapshot,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            packet_snapshots.append(snapshot)
+            packet_sha256.append(hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
+        group_identity = {
+            "evidence_id": _answer_margin_metadata_snapshot(evidence_ids),
+            "global_step": _answer_margin_metadata_snapshot(global_steps),
+            "question_type": _answer_margin_metadata_snapshot(question_types),
+            "generation_mode": _answer_margin_metadata_snapshot(generation_modes),
+            "phase": list(phases),
+            "experiment_condition_id": [EXPERIMENT_CONDITION_ID] * count,
+            "packet_sha256": packet_sha256,
+            "packet_snapshots": packet_snapshots,
+        }
+        identity_checks = {
+            "evidence_id": len(set(identity_tokens(evidence_ids))) == 1,
+            "global_step": len(set(identity_tokens(global_steps))) == 1,
+            "question_type": len(set(identity_tokens(question_types))) == 1,
+            "generation_mode": len(set(identity_tokens(generation_modes))) == 1,
+            "phase": len(set(phases)) == 1,
+            "experiment_condition_id": condition_value == EXPERIMENT_CONDITION_ID,
+            "packet": len(set(packet_sha256)) == 1,
+        }
+        failed_identity = [name for name, passed in identity_checks.items() if not passed]
+        if failed_identity:
+            error = GroupIdentityError(
+                "answer-margin 四候选 group identity 不一致: " + ",".join(failed_identity)
+            )
+            row = metadata_failure_row(error)
+            row["group_identity"] = group_identity
+            row["group_identity_checks"] = identity_checks
+            _write_rows(self.trace_path, [row], self._lock)
             raise error
         phase = phases[0] if phases else "train"
         rewards: list[float] = []

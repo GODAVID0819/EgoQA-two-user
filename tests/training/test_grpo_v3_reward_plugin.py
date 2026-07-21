@@ -419,6 +419,56 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertFalse(row["record"]["eligible_for_grpo"])
         self.assertEqual(row["record"]["infrastructure_error"]["type"], "NonFiniteRewardError")
 
+    def test_rejects_mixed_group_identity_before_any_scorer_call(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward, GroupIdentityError
+
+        def mutations(kwargs):
+            packet_rows = kwargs["packet_json"] * 4
+            changed_packet = json.loads(packet_rows[-1])
+            changed_packet["extra_identity"] = "different"
+            return {
+                "evidence": {**kwargs, "evidence_id": ["E1", "E1", "E1", "E2"]},
+                "step": {**kwargs, "global_step": [3, 3, 3, 4]},
+                "packet": {**kwargs, "packet_json": [*packet_rows[:3], json.dumps(changed_packet)]},
+                "question_type": {**kwargs, "question_type": ["commonality"] * 3 + ["difference"]},
+                "generation_mode": {**kwargs, "generation_mode": ["baseline"] * 3 + ["other"]},
+            }
+
+        for name in ("evidence", "step", "packet", "question_type", "generation_mode"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                kwargs = self._kwargs(Path(tmp))
+                scorer = StubAnswerMarginScoreFn()
+                trace = Path(tmp) / "answer_margin.jsonl"
+                reward = AnswerMarginReward(trace_path=trace, score_fn=scorer)
+                with self.assertRaises(GroupIdentityError):
+                    reward(["a", "b", "c", "d"], **mutations(kwargs)[name])
+                rows = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(scorer.calls, [])
+            self.assertEqual(len(rows), 1)
+            self.assertIsNone(rows[0]["candidate_index"])
+            self.assertEqual(rows[0]["failure_stage"], "metadata")
+            self.assertEqual(rows[0]["record"]["infrastructure_error"]["type"], "GroupIdentityError")
+            self.assertEqual(len(rows[0]["group_identity"]["packet_sha256"]), 4)
+
+    def test_equivalent_packet_json_key_orders_share_one_group_identity(self):
+        from training.grpo_v3_reward_plugin import AnswerMarginReward
+
+        with tempfile.TemporaryDirectory() as tmp:
+            kwargs = self._kwargs(Path(tmp))
+            packet_value = json.loads(kwargs["packet_json"][0])
+            reversed_value = dict(reversed(list(packet_value.items())))
+            kwargs["packet_json"] = [
+                json.dumps(packet_value, ensure_ascii=False),
+                json.dumps(reversed_value, ensure_ascii=False),
+                json.dumps(packet_value, ensure_ascii=False, sort_keys=True),
+                json.dumps(reversed_value, ensure_ascii=False, sort_keys=True),
+            ]
+            scorer = StubAnswerMarginScoreFn()
+            reward = AnswerMarginReward(trace_path=Path(tmp) / "trace.jsonl", score_fn=scorer)
+            values = reward(["a", "b", "c", "d"], **kwargs)
+        self.assertEqual(values, [0.25] * 4)
+        self.assertEqual(len(scorer.calls), 4)
+
     def test_client_configuration_requires_explicit_environment(self):
         from training.grpo_v3_reward_plugin import AnswerMarginReward
 
