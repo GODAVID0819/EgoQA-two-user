@@ -142,6 +142,17 @@ class ExtractCoreQATests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.as_qa(), self.qa)
 
+    def test_recovers_object_after_unmatched_quote_in_prefix_text(self):
+        raw = 'prefix "unfinished then ' + json.dumps(self.qa) + " suffix"
+
+        result = extract_core_qa(raw)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.status, "extra_text_recovered")
+        self.assertEqual(result.inner_format_status, "raw_valid")
+        self.assertEqual(result.raw_completion, raw)
+        self.assertEqual(result.as_qa(), self.qa)
+
     def test_rejects_unclosed_string_or_object(self):
         unclosed_string = '{"question":"unterminated }'
         unclosed_object = json.dumps(self.qa)[:-1]

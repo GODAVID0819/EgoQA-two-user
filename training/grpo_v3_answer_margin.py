@@ -66,6 +66,10 @@ def _first_complete_object(text: str) -> str | None:
                 return text[start:index + 1]
             if depth < 0:
                 return None
+    if start is None and in_string:
+        fallback_start = text.find("{")
+        if fallback_start >= 0:
+            return _first_complete_object(text[fallback_start:])
     return None
 
 
