@@ -407,15 +407,35 @@ class FrozenAnswerScorer:
                 pad_token_id = 0
             input_ids = _matrix_like(full_batch["input_ids"], len(rows), width, int(pad_token_id))
             attention_mask = _matrix_like(full_batch["attention_mask"], len(rows), width, 0)
+            mm_token_type_ids = None
+            prompt_mm_token_types: list[int] | None = None
+            if "mm_token_type_ids" in full_batch:
+                if "mm_token_type_ids" not in prompt_batch:
+                    raise RuntimeError("prompt batch lacks mm_token_type_ids")
+                prompt_mm_token_types = _active_ids(
+                    prompt_batch["mm_token_type_ids"], 0, prompt_positions
+                )
+                if len(prompt_mm_token_types) != prompt_length:
+                    raise RuntimeError("mm_token_type_ids do not match the audited prompt span")
+                mm_token_type_ids = _matrix_like(
+                    full_batch["mm_token_type_ids"], len(rows), width, 0
+                )
             for row, (label, row_ids) in enumerate(zip(LABELS, rows)):
                 start = width - len(row_ids) if padding_side == "left" else 0
                 stop = start + len(row_ids)
                 input_ids[row, start:stop] = _values_like(input_ids, row_ids)
                 attention_mask[row, start:stop] = 1
+                if mm_token_type_ids is not None and prompt_mm_token_types is not None:
+                    prompt_stop = start + prompt_length
+                    mm_token_type_ids[row, start:prompt_stop] = _values_like(
+                        mm_token_type_ids, prompt_mm_token_types
+                    )
                 label_start = start + prompt_length
                 label_positions[label] = list(range(label_start, stop))
             full_batch["input_ids"] = input_ids
             full_batch["attention_mask"] = attention_mask
+            if mm_token_type_ids is not None:
+                full_batch["mm_token_type_ids"] = mm_token_type_ids
         else:
             full_batch = self._encode([prompt + label for label in LABELS], request.videos)
             input_ids = full_batch["input_ids"]

@@ -112,6 +112,11 @@ class FakeModel:
     def __call__(self, **inputs):
         self.calls.append({**inputs, "_grad_enabled": FAKE_TORCH.is_grad_enabled()})
         input_ids = inputs["input_ids"]
+        mm_token_type_ids = inputs.get("mm_token_type_ids")
+        if mm_token_type_ids is not None and mm_token_type_ids.shape != input_ids.shape:
+            raise IndexError(
+                f"mm token types {mm_token_type_ids.shape} do not match input ids {input_ids.shape}"
+            )
         batch, length = input_ids.shape
         vocab_size = 256
         logits = np.zeros((batch, length, vocab_size), dtype=np.float32)
@@ -215,6 +220,7 @@ class BoundaryMergingChatProcessor(FakeChatProcessor):
 class StrictTensorBoundaryMergingChatProcessor(BoundaryMergingChatProcessor):
     def __call__(self, **kwargs):
         encoded = super().__call__(**kwargs)
+        encoded["mm_token_type_ids"] = np.zeros_like(encoded["input_ids"])
         return {key: StrictTensor(value) for key, value in encoded.items()}
 
 
@@ -379,6 +385,9 @@ class AnswerScorerCoreTests(unittest.TestCase):
         result = scorer.score(request)
 
         self.assertEqual(tuple(result), LABELS)
+        model_call = scorer.model.calls[-1]
+        self.assertEqual(model_call["mm_token_type_ids"].shape, model_call["input_ids"].shape)
+        self.assertTrue(np.all(model_call["mm_token_type_ids"].values[:, -1] == 0))
 
     def test_teacher_forcing_supports_left_padding_and_multi_token_labels(self):
         scorer = FrozenAnswerScorer(

@@ -401,6 +401,14 @@ TypeError: can't assign a list to a torch.LongTensor
 
 则说明独立编码的标签 ID 仍以 Python `list` 直接写入真实 Torch tensor。NumPy/FakeTensor 测试可能允许该赋值，但 `torch.LongTensor` 不允许。修复版必须用目标 tensor 的 `new_tensor()` 创建同 dtype、同 device 的右值后再写入；不得把 HTTP 400 当成输入数据错误，也不得通过升级 GPU 处理。
 
+若 list 赋值修复后，模型 forward 显示：
+
+```text
+IndexError: The shape of the mask [N+1] ... does not match ... [N]
+```
+
+且堆栈位于 Qwen3-VL `get_rope_index()` 的 `mm_token_type_ids`，说明追加标签后只扩展了 `input_ids/attention_mask`，但逐 token 对齐的 `mm_token_type_ids` 仍少一个位置。修复版必须同步扩展该字段，保留 prompt 的图像/视频类型，并把 A–E 标签位置设为文本类型 `0`；不得删除 `mm_token_type_ids`，否则会破坏多模态 M-RoPE。
+
 在本地仓库根目录先确认 scorer 回归测试通过：
 
 ```powershell
@@ -423,6 +431,7 @@ cd /scratch/$USER/projects/EgoQA-two-user
   -m unittest tests.training.test_grpo_v3_answer_scorer
 
 grep -n '_values_like' training/grpo_v3_answer_scorer.py
+grep -n 'prompt_mm_token_types' training/grpo_v3_answer_scorer.py
 grep -n '#SBATCH --gres=gpu:l40s:1' hpc/grpo_v3_answer_margin_scorer_probe.sbatch
 grep -n 'gpu_environment.csv' hpc/grpo_v3_answer_margin_scorer_probe.sbatch
 
@@ -431,7 +440,7 @@ sbatch \
   hpc/grpo_v3_answer_margin_scorer_probe.sbatch
 ```
 
-上述三个 `grep` 均必须有输出。若 `gpu_environment.csv` 和 `nvidia_smi.txt` 在作业经过 `storage_preflight.json` 后仍未生成，说明远端实际执行的 `.sbatch` 不是最新版本；先重新上传脚本并用 `scontrol show job -dd <jobid>` 核对 `Command`、`WorkDir` 和 GRES，不得继续分析旧脚本产生的 GPU 证据。
+上述四个 `grep` 均必须有输出。若 `gpu_environment.csv` 和 `nvidia_smi.txt` 在作业经过 `storage_preflight.json` 后仍未生成，说明远端实际执行的 `.sbatch` 不是最新版本；先重新上传脚本并用 `scontrol show job -dd <jobid>` 核对 `Command`、`WorkDir` 和 GRES，不得继续分析旧脚本产生的 GPU 证据。
 
 只有新 job 顶层与 batch step 均为 `COMPLETED/0:0`，且新目录中的 `scorer_probe_result.json` 为 `status=passed`，才允许提交 calibration。
 
