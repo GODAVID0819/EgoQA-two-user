@@ -268,6 +268,91 @@ grep -nE 'Traceback|ERROR|Error|Exception|CUDA|video|processor' \
   "$OUTPUT_DIR/scorer_service.log" | tail -n 200 || true
 ```
 
+### 3.7 `torchvision.io.read_video` 缺失时的单变量修复
+
+若 `scorer_service.log` 明确显示以下链路：
+
+```text
+torchcodec is not installed
+falling back to torchvision
+AttributeError: module 'torchvision.io' has no attribute 'read_video'
+```
+
+则根因是 scorer 环境缺少 Transformers 首选的视频解码后端，而当前 torchvision 又不提供回退接口。不要修改 scorer 输入、抽帧替代原生视频或同时重装 torch/transformers/torchvision。对于 `torch==2.11.*`，只安装匹配的 `torchcodec==0.11`，并用 `--no-deps` 防止 pip 改写现有核心栈：
+
+```bash
+SCORER_ENV="${SCORER_ENV:-/scratch/$USER/envs/egoqa-ms-swift-v4.2.2-vllm024}"
+SCORER_PYTHON="$SCORER_ENV/bin/python"
+AUDIT_DIR=/scratch/$USER/projects/EgoQA-two-user/outputs/grpo_v3/environment_fixes
+mkdir -p "$AUDIT_DIR"
+
+"$SCORER_PYTHON" -m pip freeze \
+  > "$AUDIT_DIR/before_torchcodec_$(date +%Y%m%d_%H%M%S).txt"
+
+"$SCORER_PYTHON" -m pip install --no-deps \
+  --index-url https://download.pytorch.org/whl/cu130 \
+  'torchcodec==0.11.0'
+```
+
+安装后先验证版本、FFmpeg 动态库和真实 evidence MP4；任何一步失败都禁止重新提交 Gate：
+
+```bash
+cd /scratch/$USER/projects/EgoQA-two-user
+export TRAIN_ENV=/scratch/$USER/envs/egoqa-ms-swift-v4.2.2-vllm024
+export SCORER_ENV="$TRAIN_ENV"
+SCORER_PYTHON="$SCORER_ENV/bin/python"
+
+command -v ffmpeg
+ffmpeg -version | head -n 5
+
+"$SCORER_PYTHON" - <<'PY'
+import torch
+import torchcodec
+from importlib.metadata import version
+from torchcodec.decoders import VideoDecoder
+print("torch =", torch.__version__)
+print("torchcodec =", version("torchcodec"))
+print("torchcodec_import = passed")
+PY
+
+GATE0_DIR="$(head -n 1 outputs/grpo_v3/latest_gate0_output.txt)"
+DATASET="$GATE0_DIR/train_native_video.jsonl"
+
+PYTHONPATH="$PWD" "$SCORER_PYTHON" - "$DATASET" <<'PY'
+import json, sys
+from pathlib import Path
+from torchcodec.decoders import VideoDecoder
+
+evidence = "EGOLIFE2U_DAY2_11350000_A1_A5"
+dataset = Path(sys.argv[1])
+row = next(
+    json.loads(line)
+    for line in dataset.read_text(encoding="utf-8").splitlines()
+    if line.strip() and json.loads(line).get("evidence_id") == evidence
+)
+packet = json.loads(row["packet_json"]) if isinstance(row["packet_json"], str) else row["packet_json"]
+by_user = {clip["agent_name"]: clip["local_video"] for clip in packet["clips"]}
+videos = [Path(by_user[user]).resolve() for user in packet["required_users"]]
+assert len(videos) == 2
+for index, video in enumerate(videos):
+    assert video.is_file(), video
+    decoder = VideoDecoder(str(video), device="cpu")
+    frame = decoder[0]
+    print(index, video, decoder.metadata, tuple(frame.shape), frame.dtype)
+print("ordered_dual_native_video_decode = passed")
+PY
+```
+
+只有看到 `torchcodec_import=passed` 和 `ordered_dual_native_video_decode=passed` 后，才以相同共享环境重提 scorer-only Gate：
+
+```bash
+sbatch \
+  --export=ALL,TRAIN_ENV="$TRAIN_ENV",SCORER_ENV="$SCORER_ENV" \
+  hpc/grpo_v3_answer_margin_scorer_probe.sbatch
+```
+
+若 `torchcodec` 导入报缺少 FFmpeg、`libnpp`、`libnvrtc` 或版本不兼容，保存完整安装/导入输出并停在环境层；不得继续叠加重装 torchvision、torch 或 CUDA。
+
 Gate 文件分别检查：`scorer_probe_result.json`、`calibration_result.json`、`answer_margin_smoke1_result.json`、`answer_margin_smoke5_result.json`、`answer_margin_probe40_result.json`、`fixed_eval_summary.json`。每个作业还必须有 `storage_preflight.json`；训练 Gate 必须有 reward trace、环境审计、父 checkpoint 哈希清单、adapter/processor 与 reload 证据。
 
 若 scorer、CUDA、缓存、JIT 或 GPU 可见性失败，这是基础设施失败，修复后回到触发失败的最小 Gate。若 1-step 未过，禁止提交 5-step；5-step 未过，禁止提交 40-step。`not_converged` 是有效研究结果且 fixed-eval 作业退出码为 0；`invalid` 必须非零退出。
