@@ -34,6 +34,32 @@ export LD_LIBRARY_PATH="$FFMPEG_ENV/lib:${LD_LIBRARY_PATH:-}"
 
 确认模型、Gate 0 数据、`gate2_result.json`、`run_manifest.json` 和 `checkpoint-1` 均在 scratch；不得用 `latest` 指针替代 manifest 与哈希清单的最终验收。
 
+### 1.1 默认 GPU 资源
+
+正式脚本默认使用 L40S 48GB，不再先试 24GB GPU：
+
+| Gate | 默认 GPU | 时限 |
+|---|---:|---:|
+| scorer probe | 1×L40S 48GB | 2 小时 |
+| calibration | 2×L40S 48GB | 4 小时 |
+| smoke1 | 2×L40S 48GB | 4 小时 |
+| smoke5 | 2×L40S 48GB | 8 小时 |
+| probe40 | 2×L40S 48GB | 18 小时 |
+| fixed eval | 2×L40S 48GB | 12 小时 |
+
+提交前确认本站登记的 GRES 名称确实是 `l40s`：
+
+```bash
+sinfo -h -o '%P|%G|%l|%a|%D' | sort -u
+sinfo -N -h -o '%N|%P|%G|%t' | grep -i l40s | sort
+```
+
+若本站使用不同大小写或名称，只通过 `sbatch --gres=<sinfo 中的准确名称>` 覆盖资源参数，不修改实验参数。每个作业会在输出目录保存 `gpu_environment.csv` 和 `nvidia_smi.txt`；提交后必须用下列命令确认实际分配：
+
+```bash
+scontrol show job -dd <jobid> | grep -E 'JobId=|JobState=|ReqTRES=|AllocTRES=|TresPerNode=|NodeList='
+```
+
 ## 2. 严格依次提交
 
 先创建 Slurm 日志目录：
@@ -356,6 +382,108 @@ sbatch \
 ```
 
 若 `torchcodec` 导入报缺少 FFmpeg、`libnpp`、`libnvrtc` 或版本不兼容，保存完整安装/导入输出并停在环境层；不得继续叠加重装 torchvision、torch 或 CUDA。
+
+### 3.8 `encoding does not share the audited prompt prefix` 的代码修复
+
+若 `scorer_service.log` 显示：
+
+```text
+RuntimeError: A encoding does not share the audited prompt prefix
+```
+
+则外层 HTTP 500 的根因不是视频、CUDA 或服务健康状态，而是旧 scorer 分别编码 `prompt` 与 `prompt + label`，错误地假定 BPE tokenizer 在文本边界不会重新分词。不得通过关闭前缀审计、改成抽帧输入或忽略异常继续运行。修复版会让 A-E 由 tokenizer 单独编码，再显式拼接到已审计的 prompt token 后；`Answer:` 保留在用户指令中，不再拼到 assistant generation boundary 后。
+
+若应用上述修复后，外层变为 HTTP 400，且 `scorer_service.log` 显示：
+
+```text
+TypeError: can't assign a list to a torch.LongTensor
+```
+
+则说明独立编码的标签 ID 仍以 Python `list` 直接写入真实 Torch tensor。NumPy/FakeTensor 测试可能允许该赋值，但 `torch.LongTensor` 不允许。修复版必须用目标 tensor 的 `new_tensor()` 创建同 dtype、同 device 的右值后再写入；不得把 HTTP 400 当成输入数据错误，也不得通过升级 GPU 处理。
+
+在本地仓库根目录先确认 scorer 回归测试通过：
+
+```powershell
+python -m unittest discover -s tests\training -p 'test_grpo_v3_answer*.py'
+```
+
+随后只上传本次变更涉及的 scorer 文件；如需在远端保留回归测试证据，同时上传测试文件：
+
+```powershell
+sftp <torch-host>
+put training/grpo_v3_answer_scorer.py /scratch/<user>/projects/EgoQA-two-user/training/
+put tests/training/test_grpo_v3_answer_scorer.py /scratch/<user>/projects/EgoQA-two-user/tests/training/
+```
+
+远端先运行 scorer 单测，再重提同一个最小 Gate；旧失败作业不得原地复用：
+
+```bash
+cd /scratch/$USER/projects/EgoQA-two-user
+/scratch/$USER/envs/egoqa-ms-swift-v4.2.2-vllm024/bin/python \
+  -m unittest tests.training.test_grpo_v3_answer_scorer
+
+grep -n '_values_like' training/grpo_v3_answer_scorer.py
+grep -n '#SBATCH --gres=gpu:l40s:1' hpc/grpo_v3_answer_margin_scorer_probe.sbatch
+grep -n 'gpu_environment.csv' hpc/grpo_v3_answer_margin_scorer_probe.sbatch
+
+sbatch \
+  --export=ALL,TRAIN_ENV="$TRAIN_ENV",SCORER_ENV="$SCORER_ENV",FFMPEG_ENV="$FFMPEG_ENV" \
+  hpc/grpo_v3_answer_margin_scorer_probe.sbatch
+```
+
+上述三个 `grep` 均必须有输出。若 `gpu_environment.csv` 和 `nvidia_smi.txt` 在作业经过 `storage_preflight.json` 后仍未生成，说明远端实际执行的 `.sbatch` 不是最新版本；先重新上传脚本并用 `scontrol show job -dd <jobid>` 核对 `Command`、`WorkDir` 和 GRES，不得继续分析旧脚本产生的 GPU 证据。
+
+只有新 job 顶层与 batch step 均为 `COMPLETED/0:0`，且新目录中的 `scorer_probe_result.json` 为 `status=passed`，才允许提交 calibration。
+
+### 3.9 L40S OOM 或 GPU runtime 失败后的升级
+
+先用本次 JobID 定位证据，不得读取旧 `latest` 指针：
+
+```bash
+JOB_ID=<失败任务编号>
+GATE=<scorer_probe|calibration|smoke1|smoke5|probe40|fixed_eval>
+
+sacct -j "$JOB_ID" --format=JobID,State,ExitCode,Elapsed,AllocTRES%80
+grep -Ein 'out of memory|CUDA error|CUBLAS|CUDNN|illegal memory|device-side assert' \
+  "logs/grpo-v3-answer-margin-"*"${JOB_ID}"*.out \
+  "logs/grpo-v3-answer-margin-"*"${JOB_ID}"*.err || true
+find outputs/grpo_v3 -maxdepth 2 -path "*_${JOB_ID}/gpu_environment.csv" -exec sh -c 'echo "===== $1"; cat "$1"' _ {} \;
+find outputs/grpo_v3 -maxdepth 2 -path "*_${JOB_ID}/nvidia_smi.txt" -exec sh -c 'echo "===== $1"; cat "$1"' _ {} \;
+```
+
+仅以下情况允许升级 GPU：
+
+- 日志明确出现 `CUDA out of memory`；
+- L40S 上 BF16、CUDA kernel 或 compute capability 不兼容；
+- 同一 L40S runtime 故障在最小 Gate 可复现，且已排除依赖、路径、视频和数据错误。
+
+升级阶梯只保留两档：
+
+```text
+L40S 48GB → A100 80GB → H100 80GB
+```
+
+先从 `sinfo` 获取准确 GRES 名称，再用命令行覆盖脚本默认值。单 GPU Gate 示例：
+
+```bash
+sbatch \
+  --gres=<A100-80GB或H100的准确GRES>:1 \
+  --export=ALL,TRAIN_ENV="$TRAIN_ENV",SCORER_ENV="$SCORER_ENV",FFMPEG_ENV="$FFMPEG_ENV" \
+  hpc/grpo_v3_answer_margin_scorer_probe.sbatch
+```
+
+双 GPU Gate 示例：
+
+```bash
+sbatch \
+  --gres=<A100-80GB或H100的准确GRES>:2 \
+  --export=ALL,TRAIN_ENV="$TRAIN_ENV",SCORER_ENV="$SCORER_ENV",FFMPEG_ENV="$FFMPEG_ENV" \
+  hpc/grpo_v3_answer_margin_smoke1.sbatch
+```
+
+将最后一行替换成实际失败的同一个 Gate 脚本。升级后必须生成新的 JobID 和输出目录，并保持模型、adapter、batch、`num_generations`、gradient accumulation、原生视频、像素、dtype、temperature、步数、seed 和 reward 不变。
+
+如果错误是 TorchCodec/FFmpeg、文件缺失、home quota、数据、prompt、scorer HTTP 500、tokenizer 或 reward 语义错误，升级 GPU 无效，必须在原 Gate 修复根因。L40S 作业只是超时但持续有进展时，只增加 `--time`，不得同时升级 GPU 或修改研究参数。
 
 Gate 文件分别检查：`scorer_probe_result.json`、`calibration_result.json`、`answer_margin_smoke1_result.json`、`answer_margin_smoke5_result.json`、`answer_margin_probe40_result.json`、`fixed_eval_summary.json`。每个作业还必须有 `storage_preflight.json`；训练 Gate 必须有 reward trace、环境审计、父 checkpoint 哈希清单、adapter/processor 与 reload 证据。
 
