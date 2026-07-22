@@ -601,7 +601,7 @@ bootstrap 必须对 32 个配对差按 pair 重采样，不能分别重采样两
 - 不自动删除历史缓存、checkpoint 或用户文件；
 - Markdown 仅供人工阅读，远端训练、预检和测试不得依赖本文件存在。
 
-本实验的正式默认资源为 H100 80GB：scorer-only runtime probe 申请一张，其余 calibration、训练和固定评估 Gate 申请两张，GPU0 运行 policy，GPU1 运行冻结 scorer。L40S 48GB 实测在 5×24545 token 的 scorer `lm_head` 阶段已占用 30.49GiB，仍需一次性申请 34.73GiB，因此不再作为本实验的正式资源路径。
+本实验的正式默认资源为 H100 80GB：scorer-only runtime probe 申请一张，其余 calibration、训练和固定评估 Gate 申请两张，GPU0 运行 policy，GPU1 运行冻结 scorer。L40S 48GB 实测在 5×24545 token 的 scorer `lm_head` 阶段已占用 30.49GiB，完整序列 logits 仍需一次性申请 34.73GiB；H100 实测虽能生成该 logits，却在 `log_softmax` 再申请 34.73GiB 时 OOM。因此 scorer 必须通过模型原生 `logits_to_keep` 只生成覆盖 A–E 标签 teacher-forcing 位置的尾部 logits，不得物化完整序列的 logits/log-prob。该优化不改变标签序列 log-prob 或 answer-margin 定义。为减少新的资源变量，正式脚本仍保持 H100 资源不变，L40S 不作为当前正式路径。
 
 所有作业必须在模型加载前保存实际 GPU 名称、显存、compute capability、驱动与 CUDA 版本。H100 上若仍出现 OOM，必须先报告峰值显存和失败阶段，不得同时修改模型、batch、`num_generations`、原生视频、像素、dtype、temperature、步数或 reward。依赖、视频解码、数据、路径和 scorer 语义错误不得通过升级 GPU 绕过。
 

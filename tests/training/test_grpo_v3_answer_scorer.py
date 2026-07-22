@@ -125,6 +125,9 @@ class FakeModel:
             for position in range(length - 1):
                 next_id = int(input_ids[row, position + 1])
                 logits[row, position, next_id] = float(next_id) / 10.0
+        logits_to_keep = inputs.get("logits_to_keep", 0)
+        if logits_to_keep:
+            logits = logits[:, -int(logits_to_keep):, :]
         return type("Output", (), {"logits": logits})()
 
 
@@ -331,6 +334,7 @@ class AnswerScorerCoreTests(unittest.TestCase):
         self.assertTrue(all(not parameter.requires_grad for parameter in model.parameters_list))
         self.assertTrue(model.calls)
         self.assertTrue(all(not call["_grad_enabled"] for call in model.calls))
+        self.assertEqual(model.calls[-1]["logits_to_keep"], 2)
 
     def test_real_chat_template_context_contains_exactly_two_ordered_video_items(self):
         processor = FakeChatProcessor()
@@ -404,6 +408,7 @@ class AnswerScorerCoreTests(unittest.TestCase):
         self.assertEqual(result["A"].token_ids, [ord("A")])
         self.assertEqual(result["E"].token_ids, [ord("E")] * 5)
         self.assertEqual(len(result["E"].token_logprobs), 5)
+        self.assertEqual(scorer.model.calls[-1]["logits_to_keep"], 6)
 
     def test_score_response_audits_rendered_prompt_hash_and_leakage(self):
         scorer = FrozenAnswerScorer(FakeModel(), FakeProcessor(), torch_module=FAKE_TORCH)

@@ -451,9 +451,20 @@ class FrozenAnswerScorer:
                 label_spans[label] = label_ids
                 label_positions[label] = active_positions[prompt_length:]
 
+        source_positions = [
+            token_position - 1
+            for label in LABELS
+            for token_position in label_positions[label]
+        ]
+        if not source_positions or min(source_positions) < 0:
+            raise RuntimeError("cannot score a token without a preceding context token")
+        sequence_width = int(full_batch["input_ids"].shape[1])
+        logits_start = min(source_positions)
+        logits_to_keep = sequence_width - logits_start
+
         model_inputs = _move_to_model_device(full_batch, self.model)
         with self.torch.inference_mode():
-            output = self.model(**model_inputs)
+            output = self.model(**model_inputs, logits_to_keep=logits_to_keep)
             logits = output.logits
             log_probs = self.torch.nn.functional.log_softmax(logits, dim=-1)
 
@@ -461,9 +472,8 @@ class FrozenAnswerScorer:
         for row, label in enumerate(LABELS):
             token_logprobs: list[float] = []
             for token_position, token_id in zip(label_positions[label], label_spans[label]):
-                if token_position <= 0:
-                    raise RuntimeError("cannot score a token without a preceding context token")
-                value = _scalar(log_probs[row, token_position - 1, token_id])
+                local_position = token_position - 1 - logits_start
+                value = _scalar(log_probs[row, local_position, token_id])
                 if not math.isfinite(value):
                     raise RuntimeError(f"{label} contains a non-finite token logprob")
                 token_logprobs.append(value)

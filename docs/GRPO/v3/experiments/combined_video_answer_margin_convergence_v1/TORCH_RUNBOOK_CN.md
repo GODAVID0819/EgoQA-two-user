@@ -36,7 +36,7 @@ export LD_LIBRARY_PATH="$FFMPEG_ENV/lib:${LD_LIBRARY_PATH:-}"
 
 ### 1.1 默认 GPU 资源
 
-L40S 48GB 已在真实 scorer `lm_head` 阶段 OOM：进程已占用 30.49GiB，完整词表 logits 仍需申请 34.73GiB。正式脚本因此默认使用 H100 80GB，不再试 24GB/48GB GPU：
+L40S 48GB 已在真实 scorer `lm_head` 阶段 OOM；H100 80GB 随后在完整 logits 生成成功后，又因 `log_softmax` 需要第二份 34.73GiB 张量而 OOM。scorer 现只生成 A–E 标签 teacher-forcing 所需的尾部 logits。为避免同时改变代码与资源变量，正式脚本继续默认使用 H100 80GB，不再试 24GB/48GB GPU：
 
 | Gate | 默认 GPU | 时限 |
 |---|---:|---:|
@@ -444,7 +444,7 @@ sbatch \
 
 只有新 job 顶层与 batch step 均为 `COMPLETED/0:0`，且新目录中的 `scorer_probe_result.json` 为 `status=passed`，才允许提交 calibration。
 
-### 3.9 48GB GPU OOM 后升级到 H100
+### 3.9 显存 OOM 的资源与代码分流
 
 先用本次 JobID 定位证据，不得读取旧 `latest` 指针：
 
@@ -460,11 +460,13 @@ find outputs/grpo_v3 -maxdepth 2 -path "*_${JOB_ID}/gpu_environment.csv" -exec s
 find outputs/grpo_v3 -maxdepth 2 -path "*_${JOB_ID}/nvidia_smi.txt" -exec sh -c 'echo "===== $1"; cat "$1"' _ {} \;
 ```
 
-本实验已经满足升级条件：
+L40S 失败已经满足升级条件：
 
 - L40S 日志明确出现 `CUDA out of memory`；
 - OOM 位于 scorer `lm_head`，不是视频、路径、tokenizer 或 reward 错误；
-- 48GB 总显存无法容纳约 65GiB 的实测瞬时需求。
+- 48GB 总显存无法容纳完整序列 logits 的实测瞬时需求。
+
+但作业 `14543671` 证明单纯升级到 H100 仍不够：H100 已成功生成约 34.73GiB 的完整 logits，随后在 `log_softmax` 处又申请约 34.73GiB，导致 80GB 显存耗尽。这是 scorer 计算形状错误，不是继续升级 GPU 或设置 allocator 参数能够可靠解决的问题。修复版通过 `logits_to_keep` 只保留覆盖标签 token 前驱位置的尾部 logits，再在小张量上执行 `log_softmax`；单 token A–E 通常只需最后 2 个位置，多 token 和左右填充则按实际标签跨度动态计算。标签 token 的条件 log-prob 求和及 margin 公式保持不变。
 
 正式资源固定为：
 
@@ -497,6 +499,30 @@ sbatch \
 Gate 文件分别检查：`scorer_probe_result.json`、`calibration_result.json`、`answer_margin_smoke1_result.json`、`answer_margin_smoke5_result.json`、`answer_margin_probe40_result.json`、`fixed_eval_summary.json`。每个作业还必须有 `storage_preflight.json`；训练 Gate 必须有 reward trace、环境审计、父 checkpoint 哈希清单、adapter/processor 与 reload 证据。
 
 若 scorer、CUDA、缓存、JIT 或 GPU 可见性失败，这是基础设施失败，修复后回到触发失败的最小 Gate。若 1-step 未过，禁止提交 5-step；5-step 未过，禁止提交 40-step。`not_converged` 是有效研究结果且 fixed-eval 作业退出码为 0；`invalid` 必须非零退出。
+
+### 3.10 查看失败证据但不退出登录 shell
+
+不要在 SSH 登录 shell 直接粘贴含顶层 `exit 1` 的验收片段；该命令会结束当前 shell，因此终端显示 `logout`。使用下面的 `if/else`，结果缺失时只打印证据，不退出会话：
+
+```bash
+JOB_ID=<任务编号>
+OUTPUT_DIR="$PWD/outputs/grpo_v3/answer_margin_scorer_probe_${JOB_ID}"
+RESULT_FILE="$OUTPUT_DIR/scorer_probe_result.json"
+
+if [[ -s "$RESULT_FILE" ]]; then
+  echo "gate_b_result=present"
+  "$SCORER_PYTHON" -m json.tool "$RESULT_FILE"
+else
+  echo "gate_b_result=missing"
+  echo "===== GPU ====="
+  cat "$OUTPUT_DIR/gpu_environment.csv" 2>/dev/null || true
+  echo "===== STDERR ====="
+  tail -n 200 "logs/grpo-v3-answer-margin-scorer-${JOB_ID}.err" 2>/dev/null || true
+  echo "===== SCORER SERVICE ====="
+  tail -n 200 "$OUTPUT_DIR/scorer_service.log" 2>/dev/null || true
+  echo "验收停止：请先修复当前最小 Gate；SSH 会话仍保留。"
+fi
+```
 
 ## 4. 下载验收证据
 
