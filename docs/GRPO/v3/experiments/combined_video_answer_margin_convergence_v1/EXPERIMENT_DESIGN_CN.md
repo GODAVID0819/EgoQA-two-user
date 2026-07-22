@@ -388,7 +388,7 @@ Gate A 只证明本地纯逻辑与静态契约，不证明 Torch scorer 或训�
 
 ### 11.2 Gate B：scorer-only runtime probe
 
-先在单张 L40S 48GB 上启动冻结 2B scorer，不启动 trainer。依次验证：
+先在单张 H100 80GB 上启动冻结 2B scorer，不启动 trainer。依次验证：
 
 1. 模型、processor 和两段真实原生视频加载；
 2. 一条真实 QA 的五个标签均得到有限序列 logprob；
@@ -601,9 +601,9 @@ bootstrap 必须对 32 个配对差按 pair 重采样，不能分别重采样两
 - 不自动删除历史缓存、checkpoint 或用户文件；
 - Markdown 仅供人工阅读，远端训练、预检和测试不得依赖本文件存在。
 
-本实验的正式默认资源为 L40S 48GB：scorer-only runtime probe 申请一张，其余 calibration、训练和固定评估 Gate 申请两张，GPU0 运行 policy，GPU1 运行冻结 scorer。该选择综合考虑排队时间、运行速度与 OOM 后重提成本，不为 24GB GPU 建立正式资源路径。
+本实验的正式默认资源为 H100 80GB：scorer-only runtime probe 申请一张，其余 calibration、训练和固定评估 Gate 申请两张，GPU0 运行 policy，GPU1 运行冻结 scorer。L40S 48GB 实测在 5×24545 token 的 scorer `lm_head` 阶段已占用 30.49GiB，仍需一次性申请 34.73GiB，因此不再作为本实验的正式资源路径。
 
-所有作业必须在模型加载前保存实际 GPU 名称、显存、compute capability、驱动与 CUDA 版本。只有日志明确出现 CUDA OOM、L40S BF16/runtime 不兼容，或同一 L40S 硬件故障可复现时，才允许把同一 Gate 单变量升级到 A100 80GB 或 H100 80GB；升级时模型、batch、`num_generations`、原生视频、像素、dtype、temperature、步数和 reward 必须保持不变。依赖、视频解码、数据、路径和 scorer 语义错误不得通过升级 GPU 绕过。
+所有作业必须在模型加载前保存实际 GPU 名称、显存、compute capability、驱动与 CUDA 版本。H100 上若仍出现 OOM，必须先报告峰值显存和失败阶段，不得同时修改模型、batch、`num_generations`、原生视频、像素、dtype、temperature、步数或 reward。依赖、视频解码、数据、路径和 scorer 语义错误不得通过升级 GPU 绕过。
 
 ## 18. 证据与产物契约
 

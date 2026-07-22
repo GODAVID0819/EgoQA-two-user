@@ -33,12 +33,12 @@ class AnswerMarginSlurmTests(unittest.TestCase):
 
     def test_gpu_shape_and_scorer_isolation(self) -> None:
         probe = self.text("scorer_probe")
-        self.assertIn("#SBATCH --gres=gpu:l40s:1", probe)
+        self.assertIn("#SBATCH --gres=gpu:h100:1", probe)
         self.assertNotIn('"${SWIFT}" rlhf', probe)
         for name in NAMES[1:]:
             text = self.text(name)
             with self.subTest(name=name):
-                self.assertIn("#SBATCH --gres=gpu:l40s:2", text)
+                self.assertIn("#SBATCH --gres=gpu:h100:2", text)
                 self.assertIn("CUDA_VISIBLE_DEVICES=1", text)
                 self.assertIn("--device cuda:0", text)
                 self.assertIn("CUDA_VISIBLE_DEVICES=0", text)
@@ -51,14 +51,14 @@ class AnswerMarginSlurmTests(unittest.TestCase):
                 self.assertIn("nvidia-smi", text)
                 self.assertLess(text.index("gpu_environment.csv"), text.rindex("MODEL_LOAD_BOUNDARY"))
 
-    def test_l40s_walltimes_cover_slower_runtime(self) -> None:
+    def test_h100_walltimes_match_validated_runtime_budget(self) -> None:
         expected = {
-            "scorer_probe": "02:00:00",
-            "calibration": "04:00:00",
-            "smoke1": "04:00:00",
-            "smoke5": "08:00:00",
-            "probe40": "18:00:00",
-            "fixed_eval": "12:00:00",
+            "scorer_probe": "01:00:00",
+            "calibration": "02:00:00",
+            "smoke1": "02:00:00",
+            "smoke5": "03:00:00",
+            "probe40": "06:00:00",
+            "fixed_eval": "06:00:00",
         }
         for name, walltime in expected.items():
             with self.subTest(name=name):

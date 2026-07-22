@@ -4,9 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:l40s:2
+#SBATCH --gres=gpu:h100:2
 #SBATCH --mem=96G
-#SBATCH --time=12:00:00
+#SBATCH --time=06:00:00
 #SBATCH --output=logs/grpo-v3-answer-margin-fixed-eval-%j.out
 #SBATCH --error=logs/grpo-v3-answer-margin-fixed-eval-%j.err
 set -euo pipefail

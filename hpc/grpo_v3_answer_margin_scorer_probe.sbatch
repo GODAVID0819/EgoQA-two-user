@@ -4,9 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:l40s:1
+#SBATCH --gres=gpu:h100:1
 #SBATCH --mem=64G
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00
 #SBATCH --output=logs/grpo-v3-answer-margin-scorer-%j.out
 #SBATCH --error=logs/grpo-v3-answer-margin-scorer-%j.err
 

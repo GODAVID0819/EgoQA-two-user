@@ -36,22 +36,22 @@ export LD_LIBRARY_PATH="$FFMPEG_ENV/lib:${LD_LIBRARY_PATH:-}"
 
 ### 1.1 默认 GPU 资源
 
-正式脚本默认使用 L40S 48GB，不再先试 24GB GPU：
+L40S 48GB 已在真实 scorer `lm_head` 阶段 OOM：进程已占用 30.49GiB，完整词表 logits 仍需申请 34.73GiB。正式脚本因此默认使用 H100 80GB，不再试 24GB/48GB GPU：
 
 | Gate | 默认 GPU | 时限 |
 |---|---:|---:|
-| scorer probe | 1×L40S 48GB | 2 小时 |
-| calibration | 2×L40S 48GB | 4 小时 |
-| smoke1 | 2×L40S 48GB | 4 小时 |
-| smoke5 | 2×L40S 48GB | 8 小时 |
-| probe40 | 2×L40S 48GB | 18 小时 |
-| fixed eval | 2×L40S 48GB | 12 小时 |
+| scorer probe | 1×H100 80GB | 1 小时 |
+| calibration | 2×H100 80GB | 2 小时 |
+| smoke1 | 2×H100 80GB | 2 小时 |
+| smoke5 | 2×H100 80GB | 3 小时 |
+| probe40 | 2×H100 80GB | 6 小时 |
+| fixed eval | 2×H100 80GB | 6 小时 |
 
-提交前确认本站登记的 GRES 名称确实是 `l40s`：
+提交前确认本站登记的 GRES 名称确实是 `h100`，且实际显存为约 80GB：
 
 ```bash
 sinfo -h -o '%P|%G|%l|%a|%D' | sort -u
-sinfo -N -h -o '%N|%P|%G|%t' | grep -i l40s | sort
+sinfo -N -h -o '%N|%P|%G|%t' | grep -i h100 | sort
 ```
 
 若本站使用不同大小写或名称，只通过 `sbatch --gres=<sinfo 中的准确名称>` 覆盖资源参数，不修改实验参数。每个作业会在输出目录保存 `gpu_environment.csv` 和 `nvidia_smi.txt`；提交后必须用下列命令确认实际分配：
@@ -432,7 +432,7 @@ cd /scratch/$USER/projects/EgoQA-two-user
 
 grep -n '_values_like' training/grpo_v3_answer_scorer.py
 grep -n 'prompt_mm_token_types' training/grpo_v3_answer_scorer.py
-grep -n '#SBATCH --gres=gpu:l40s:1' hpc/grpo_v3_answer_margin_scorer_probe.sbatch
+grep -n '#SBATCH --gres=gpu:h100:1' hpc/grpo_v3_answer_margin_scorer_probe.sbatch
 grep -n 'gpu_environment.csv' hpc/grpo_v3_answer_margin_scorer_probe.sbatch
 
 sbatch \
@@ -444,7 +444,7 @@ sbatch \
 
 只有新 job 顶层与 batch step 均为 `COMPLETED/0:0`，且新目录中的 `scorer_probe_result.json` 为 `status=passed`，才允许提交 calibration。
 
-### 3.9 L40S OOM 或 GPU runtime 失败后的升级
+### 3.9 48GB GPU OOM 后升级到 H100
 
 先用本次 JobID 定位证据，不得读取旧 `latest` 指针：
 
@@ -460,23 +460,23 @@ find outputs/grpo_v3 -maxdepth 2 -path "*_${JOB_ID}/gpu_environment.csv" -exec s
 find outputs/grpo_v3 -maxdepth 2 -path "*_${JOB_ID}/nvidia_smi.txt" -exec sh -c 'echo "===== $1"; cat "$1"' _ {} \;
 ```
 
-仅以下情况允许升级 GPU：
+本实验已经满足升级条件：
 
-- 日志明确出现 `CUDA out of memory`；
-- L40S 上 BF16、CUDA kernel 或 compute capability 不兼容；
-- 同一 L40S runtime 故障在最小 Gate 可复现，且已排除依赖、路径、视频和数据错误。
+- L40S 日志明确出现 `CUDA out of memory`；
+- OOM 位于 scorer `lm_head`，不是视频、路径、tokenizer 或 reward 错误；
+- 48GB 总显存无法容纳约 65GiB 的实测瞬时需求。
 
-升级阶梯只保留两档：
+正式资源固定为：
 
 ```text
-L40S 48GB → A100 80GB → H100 80GB
+H100 80GB
 ```
 
-先从 `sinfo` 获取准确 GRES 名称，再用命令行覆盖脚本默认值。单 GPU Gate 示例：
+单 GPU Gate 示例：
 
 ```bash
 sbatch \
-  --gres=<A100-80GB或H100的准确GRES>:1 \
+  --gres=gpu:h100:1 \
   --export=ALL,TRAIN_ENV="$TRAIN_ENV",SCORER_ENV="$SCORER_ENV",FFMPEG_ENV="$FFMPEG_ENV" \
   hpc/grpo_v3_answer_margin_scorer_probe.sbatch
 ```
@@ -485,14 +485,14 @@ sbatch \
 
 ```bash
 sbatch \
-  --gres=<A100-80GB或H100的准确GRES>:2 \
+  --gres=gpu:h100:2 \
   --export=ALL,TRAIN_ENV="$TRAIN_ENV",SCORER_ENV="$SCORER_ENV",FFMPEG_ENV="$FFMPEG_ENV" \
   hpc/grpo_v3_answer_margin_smoke1.sbatch
 ```
 
-将最后一行替换成实际失败的同一个 Gate 脚本。升级后必须生成新的 JobID 和输出目录，并保持模型、adapter、batch、`num_generations`、gradient accumulation、原生视频、像素、dtype、temperature、步数、seed 和 reward 不变。
+将最后一行替换成实际失败的同一个 Gate 脚本。必须生成新的 JobID 和输出目录，并保持模型、adapter、batch、`num_generations`、gradient accumulation、原生视频、像素、dtype、temperature、步数、seed 和 reward 不变。
 
-如果错误是 TorchCodec/FFmpeg、文件缺失、home quota、数据、prompt、scorer HTTP 500、tokenizer 或 reward 语义错误，升级 GPU 无效，必须在原 Gate 修复根因。L40S 作业只是超时但持续有进展时，只增加 `--time`，不得同时升级 GPU 或修改研究参数。
+如果错误是 TorchCodec/FFmpeg、文件缺失、home quota、数据、prompt、tokenizer 或 reward 语义错误，升级 GPU 无效，必须在原 Gate 修复根因。HTTP 500 必须继续读取 `scorer_service.log`：只有内部异常明确是 OOM 才归入资源失败。
 
 Gate 文件分别检查：`scorer_probe_result.json`、`calibration_result.json`、`answer_margin_smoke1_result.json`、`answer_margin_smoke5_result.json`、`answer_margin_probe40_result.json`、`fixed_eval_summary.json`。每个作业还必须有 `storage_preflight.json`；训练 Gate 必须有 reward trace、环境审计、父 checkpoint 哈希清单、adapter/processor 与 reload 证据。
 
