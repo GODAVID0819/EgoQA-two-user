@@ -14,7 +14,8 @@ set -euo pipefail
 PROJECT_ROOT="${PROJECT_ROOT:-/scratch/${USER}/projects/EgoQA-two-user}"
 GRPO_V3_ROOT="${GRPO_V3_ROOT:-${PROJECT_ROOT}/outputs/grpo_v3}"
 TRAIN_ENV="${TRAIN_ENV:-/scratch/${USER}/envs/egoqa-ms-swift-v4.2.2-vllm024}"
-SCORER_ENV="${SCORER_ENV:-/scratch/${USER}/envs/egoqa-answer-scorer}"
+SCORER_ENV="${SCORER_ENV:-${TRAIN_ENV}}"
+FFMPEG_ENV="${FFMPEG_ENV:-/scratch/${USER}/envs/egoqa-ffmpeg-runtime}"
 SCORER_MODEL="${SCORER_MODEL:-/scratch/${USER}/models/Qwen3-VL-2B-Instruct}"
 EVIDENCE_ID="EGOLIFE2U_DAY2_11350000_A1_A5"
 OUTPUT_DIR="${OUTPUT_DIR:-${GRPO_V3_ROOT}/answer_margin_scorer_probe_${SLURM_JOB_ID}}"
@@ -35,17 +36,29 @@ export TMP="${TMPDIR}"
 export TEMP="${TMPDIR}"
 export VLLM_NO_USAGE_STATS=1
 export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
+export PATH="${FFMPEG_ENV}/bin:${PATH}"
+export LD_LIBRARY_PATH="${FFMPEG_ENV}/lib:${LD_LIBRARY_PATH:-}"
 
 cd "${PROJECT_ROOT}"
 mkdir -p "${OUTPUT_DIR}" "${JOB_SCRATCH_ROOT}" logs
 PYTHON="${TRAIN_ENV}/bin/python"
 SCORER_PYTHON="${SCORER_ENV}/bin/python"
-for required in "${PYTHON}" "${SCORER_PYTHON}" "${SCORER_MODEL}"; do
+for required in "${PYTHON}" "${SCORER_PYTHON}" "${SCORER_MODEL}" "${FFMPEG_ENV}/bin/ffmpeg"; do
   [[ -e "${required}" ]] || { echo "缺少路径: ${required}" >&2; exit 2; }
 done
 "${PYTHON}" -m training.torch_storage_preflight --allowed-root "${JOB_SCRATCH_ROOT}" --output "${OUTPUT_DIR}/storage_preflight.json"
 "${PYTHON}" -m pip freeze > "${OUTPUT_DIR}/policy_environment.txt"
 "${SCORER_PYTHON}" -m pip freeze > "${OUTPUT_DIR}/scorer_environment.txt"
+"${FFMPEG_ENV}/bin/ffmpeg" -version > "${OUTPUT_DIR}/ffmpeg_environment.txt"
+"${SCORER_PYTHON}" - <<'PY' > "${OUTPUT_DIR}/video_decoder_environment.txt"
+import torch
+from importlib.metadata import version
+from torchcodec.decoders import VideoDecoder
+
+print("torch =", torch.__version__)
+print("torchcodec =", version("torchcodec"))
+print("video_decoder_backend =", VideoDecoder.__module__)
+PY
 
 if [[ -z "${GATE0_DIR:-}" ]]; then GATE0_DIR="$(head -n 1 "${GRPO_V3_ROOT}/latest_gate0_output.txt")"; fi
 DATASET="${DATASET:-${GATE0_DIR}/train_native_video.jsonl}"

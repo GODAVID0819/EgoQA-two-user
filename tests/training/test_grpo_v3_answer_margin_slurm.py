@@ -68,6 +68,16 @@ class AnswerMarginSlurmTests(unittest.TestCase):
         for fragment in ("32", "64", "fixed_eval_results.jsonl", "fixed_eval_summary.json", "not_converged", "invalid"):
             self.assertIn(fragment, fixed)
 
+    def test_scorer_jobs_use_explicit_ffmpeg_runtime_and_torchcodec_preflight(self) -> None:
+        for name in NAMES:
+            text = self.text(name)
+            with self.subTest(name=name):
+                self.assertIn("FFMPEG_ENV", text)
+                self.assertIn('PATH="${FFMPEG_ENV}/bin:${PATH}"', text)
+                self.assertIn('LD_LIBRARY_PATH="${FFMPEG_ENV}/lib:${LD_LIBRARY_PATH:-}"', text)
+                self.assertIn("from torchcodec.decoders import VideoDecoder", text)
+                self.assertLess(text.index("from torchcodec.decoders import VideoDecoder"), text.rindex("MODEL_LOAD_BOUNDARY"))
+
 
 if __name__ == "__main__":
     unittest.main()

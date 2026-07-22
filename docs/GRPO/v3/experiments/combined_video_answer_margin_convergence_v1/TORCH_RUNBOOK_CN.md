@@ -17,9 +17,7 @@ put -r hpc /scratch/<user>/projects/EgoQA-two-user/
 ```bash
 cd /scratch/$USER/projects/EgoQA-two-user
 /scratch/$USER/envs/egoqa-ms-swift-v4.2.2-vllm024/bin/python -m pip check
-/scratch/$USER/envs/egoqa-answer-scorer/bin/python -m pip check
 /scratch/$USER/envs/egoqa-ms-swift-v4.2.2-vllm024/bin/python -c 'import torch,transformers,peft,swift; print(torch.__version__,transformers.__version__)'
-/scratch/$USER/envs/egoqa-answer-scorer/bin/python -c 'import torch,transformers; print(torch.__version__,transformers.__version__)'
 command -v gcc; command -v g++; command -v ninja
 bash -n hpc/grpo_v3_answer_margin_{scorer_probe,calibration,smoke1,smoke5,probe40,fixed_eval}.sbatch
 ```
@@ -29,6 +27,9 @@ bash -n hpc/grpo_v3_answer_margin_{scorer_probe,calibration,smoke1,smoke5,probe4
 ```bash
 export TRAIN_ENV=/scratch/$USER/envs/egoqa-ms-swift-v4.2.2-vllm024
 export SCORER_ENV="$TRAIN_ENV"
+export FFMPEG_ENV=/scratch/$USER/envs/egoqa-ffmpeg-runtime
+export PATH="$FFMPEG_ENV/bin:$PATH"
+export LD_LIBRARY_PATH="$FFMPEG_ENV/lib:${LD_LIBRARY_PATH:-}"
 ```
 
 确认模型、Gate 0 数据、`gate2_result.json`、`run_manifest.json` 和 `checkpoint-1` 均在 scratch；不得用 `latest` 指针替代 manifest 与哈希清单的最终验收。
@@ -300,10 +301,13 @@ mkdir -p "$AUDIT_DIR"
 cd /scratch/$USER/projects/EgoQA-two-user
 export TRAIN_ENV=/scratch/$USER/envs/egoqa-ms-swift-v4.2.2-vllm024
 export SCORER_ENV="$TRAIN_ENV"
+export FFMPEG_ENV=/scratch/$USER/envs/egoqa-ffmpeg-runtime
+export PATH="$FFMPEG_ENV/bin:$PATH"
+export LD_LIBRARY_PATH="$FFMPEG_ENV/lib:${LD_LIBRARY_PATH:-}"
 SCORER_PYTHON="$SCORER_ENV/bin/python"
 
-command -v ffmpeg
-ffmpeg -version | head -n 5
+test -x "$FFMPEG_ENV/bin/ffmpeg"
+"$FFMPEG_ENV/bin/ffmpeg" -version | head -n 5
 
 "$SCORER_PYTHON" - <<'PY'
 import torch
@@ -347,7 +351,7 @@ PY
 
 ```bash
 sbatch \
-  --export=ALL,TRAIN_ENV="$TRAIN_ENV",SCORER_ENV="$SCORER_ENV" \
+  --export=ALL,TRAIN_ENV="$TRAIN_ENV",SCORER_ENV="$SCORER_ENV",FFMPEG_ENV="$FFMPEG_ENV" \
   hpc/grpo_v3_answer_margin_scorer_probe.sbatch
 ```
 

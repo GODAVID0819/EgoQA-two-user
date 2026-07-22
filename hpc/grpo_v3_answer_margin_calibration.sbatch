@@ -11,7 +11,7 @@
 #SBATCH --error=logs/grpo-v3-answer-margin-calibration-%j.err
 set -euo pipefail
 PROJECT_ROOT="${PROJECT_ROOT:-/scratch/${USER}/projects/EgoQA-two-user}"; GRPO_V3_ROOT="${GRPO_V3_ROOT:-${PROJECT_ROOT}/outputs/grpo_v3}"
-TRAIN_ENV="${TRAIN_ENV:-/scratch/${USER}/envs/egoqa-ms-swift-v4.2.2-vllm024}"; SCORER_ENV="${SCORER_ENV:-/scratch/${USER}/envs/egoqa-answer-scorer}"
+TRAIN_ENV="${TRAIN_ENV:-/scratch/${USER}/envs/egoqa-ms-swift-v4.2.2-vllm024}"; SCORER_ENV="${SCORER_ENV:-${TRAIN_ENV}}"; FFMPEG_ENV="${FFMPEG_ENV:-/scratch/${USER}/envs/egoqa-ffmpeg-runtime}"
 POLICY_MODEL="${POLICY_MODEL:-/scratch/${USER}/models/Qwen3-VL-2B-Instruct}"; SCORER_MODEL="${SCORER_MODEL:-${POLICY_MODEL}}"
 EVIDENCE_ID="EGOLIFE2U_DAY2_11350000_A1_A5"; OUTPUT_DIR="${OUTPUT_DIR:-${GRPO_V3_ROOT}/answer_margin_calibration_${SLURM_JOB_ID}}"
 JOB_SCRATCH_ROOT="${JOB_SCRATCH_ROOT:-/scratch/${USER}/answer_margin_calibration_${SLURM_JOB_ID}}"
@@ -20,9 +20,20 @@ export HF_DATASETS_CACHE="${JOB_SCRATCH_ROOT}/huggingface/datasets"; export MODE
 export TRITON_CACHE_DIR="${JOB_SCRATCH_ROOT}/triton"; export TORCHINDUCTOR_CACHE_DIR="${JOB_SCRATCH_ROOT}/torchinductor"; export VLLM_CACHE_ROOT="${JOB_SCRATCH_ROOT}/vllm"
 export CUDA_CACHE_PATH="${JOB_SCRATCH_ROOT}/cuda"; export FLASHINFER_WORKSPACE_BASE="${JOB_SCRATCH_ROOT}/flashinfer"; export TMPDIR="${JOB_SCRATCH_ROOT}/tmp"; export TMP="${TMPDIR}"; export TEMP="${TMPDIR}"
 export VLLM_NO_USAGE_STATS=1; export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"; export EGOQA_ANSWER_SCORER_BASE_URL="http://127.0.0.1:8765"; export EGOQA_ANSWER_SCORER_TIMEOUT_SECONDS=300
+export PATH="${FFMPEG_ENV}/bin:${PATH}"; export LD_LIBRARY_PATH="${FFMPEG_ENV}/lib:${LD_LIBRARY_PATH:-}"
 cd "${PROJECT_ROOT}"; mkdir -p "${OUTPUT_DIR}" "${JOB_SCRATCH_ROOT}" logs
 PYTHON="${TRAIN_ENV}/bin/python"; SCORER_PYTHON="${SCORER_ENV}/bin/python"
 "${PYTHON}" -m training.torch_storage_preflight --allowed-root "${JOB_SCRATCH_ROOT}" --output "${OUTPUT_DIR}/storage_preflight.json"
+[[ -x "${FFMPEG_ENV}/bin/ffmpeg" ]] || { echo "缺少 FFmpeg: ${FFMPEG_ENV}/bin/ffmpeg" >&2; exit 2; }
+"${FFMPEG_ENV}/bin/ffmpeg" -version > "${OUTPUT_DIR}/ffmpeg_environment.txt"
+"${SCORER_PYTHON}" - <<'PY' > "${OUTPUT_DIR}/video_decoder_environment.txt"
+import torch
+from importlib.metadata import version
+from torchcodec.decoders import VideoDecoder
+print("torch =", torch.__version__)
+print("torchcodec =", version("torchcodec"))
+print("video_decoder_backend =", VideoDecoder.__module__)
+PY
 PREV_DIR="$(head -n 1 "${GRPO_V3_ROOT}/latest_answer_margin_scorer_probe_output.txt")"
 "${PYTHON}" -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "passed"' "${PREV_DIR}/scorer_probe_result.json"
 if [[ -z "${GATE2_DIR:-}" ]]; then GATE2_DIR="$(head -n 1 "${GRPO_V3_ROOT}/latest_gate2_output.txt")"; fi
