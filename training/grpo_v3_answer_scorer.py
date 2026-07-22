@@ -261,6 +261,36 @@ def _move_to_model_device(inputs: Any, model: Any) -> Any:
     }
 
 
+def _matrix_like(reference: Any, rows: int, width: int, fill_value: int) -> Any:
+    if hasattr(reference, "new_full"):
+        return reference.new_full((rows, width), fill_value)
+    import numpy as np
+
+    return np.full((rows, width), fill_value, dtype=reference.dtype)
+
+
+def _values_like(reference: Any, values: list[int]) -> Any:
+    if hasattr(reference, "new_tensor"):
+        return reference.new_tensor(values)
+    return values
+
+
+def _encode_label_ids(processor: Any, label: str) -> list[int] | None:
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is None or not hasattr(tokenizer, "encode"):
+        return None
+    token_ids = tokenizer.encode(label, add_special_tokens=False)
+    if hasattr(token_ids, "tolist"):
+        token_ids = token_ids.tolist()
+    if (
+        not isinstance(token_ids, list)
+        or not token_ids
+        or any(isinstance(token_id, bool) or not isinstance(token_id, int) for token_id in token_ids)
+    ):
+        raise RuntimeError(f"{label} standalone tokenization is not a non-empty integer list")
+    return token_ids
+
+
 class FrozenAnswerScorer:
     """对五个完整标签 span 执行 teacher forcing 的 inference-only scorer。"""
 
@@ -290,13 +320,12 @@ class FrozenAnswerScorer:
         prompt = build_answer_prompt(request.question, request.options)
         if not hasattr(self.processor, "apply_chat_template"):
             return prompt
-        user_text = prompt.removesuffix("Answer:").rstrip()
         conversation = [{
             "role": "user",
             "content": [
                 {"type": "video", "video": request.videos[0]},
                 {"type": "video", "video": request.videos[1]},
-                {"type": "text", "text": user_text},
+                {"type": "text", "text": prompt},
             ],
         }]
         rendered = self.processor.apply_chat_template(
@@ -306,7 +335,7 @@ class FrozenAnswerScorer:
         )
         if not isinstance(rendered, str) or not rendered:
             raise RuntimeError("processor returned an empty chat template")
-        return rendered + "Answer:"
+        return rendered
 
     def readiness(self) -> dict[str, Any]:
         parameters = list(self.model.parameters()) if self.model is not None else []
@@ -357,21 +386,50 @@ class FrozenAnswerScorer:
         if prompt_length < 1:
             raise RuntimeError("scorer prompt token span is empty")
 
-        full_batch = self._encode([prompt + label for label in LABELS], request.videos)
-        input_ids = full_batch["input_ids"]
-        attention_mask = full_batch["attention_mask"]
         label_spans: dict[str, list[int]] = {}
         label_positions: dict[str, list[int]] = {}
-        for row, label in enumerate(LABELS):
-            active_positions = _active_positions(attention_mask, row)
-            full_ids = _active_ids(input_ids, row, active_positions)
-            if full_ids[:prompt_length] != prompt_ids:
-                raise RuntimeError(f"{label} encoding does not share the audited prompt prefix")
-            label_ids = full_ids[prompt_length:]
-            if not label_ids:
-                raise RuntimeError(f"{label} label token span is empty")
-            label_spans[label] = label_ids
-            label_positions[label] = active_positions[prompt_length:]
+        standalone_label_ids = {
+            label: _encode_label_ids(self.processor, label) for label in LABELS
+        }
+        if all(token_ids is not None for token_ids in standalone_label_ids.values()):
+            label_spans = {
+                label: list(standalone_label_ids[label]) for label in LABELS
+            }
+            rows = [prompt_ids + label_spans[label] for label in LABELS]
+            width = max(len(row_ids) for row_ids in rows)
+            full_batch = self._encode([prompt for _ in LABELS], request.videos)
+            tokenizer = self.processor.tokenizer
+            padding_side = getattr(tokenizer, "padding_side", "right")
+            if padding_side not in {"left", "right"}:
+                raise RuntimeError(f"unsupported tokenizer padding_side={padding_side!r}")
+            pad_token_id = getattr(tokenizer, "pad_token_id", 0)
+            if pad_token_id is None:
+                pad_token_id = 0
+            input_ids = _matrix_like(full_batch["input_ids"], len(rows), width, int(pad_token_id))
+            attention_mask = _matrix_like(full_batch["attention_mask"], len(rows), width, 0)
+            for row, (label, row_ids) in enumerate(zip(LABELS, rows)):
+                start = width - len(row_ids) if padding_side == "left" else 0
+                stop = start + len(row_ids)
+                input_ids[row, start:stop] = _values_like(input_ids, row_ids)
+                attention_mask[row, start:stop] = 1
+                label_start = start + prompt_length
+                label_positions[label] = list(range(label_start, stop))
+            full_batch["input_ids"] = input_ids
+            full_batch["attention_mask"] = attention_mask
+        else:
+            full_batch = self._encode([prompt + label for label in LABELS], request.videos)
+            input_ids = full_batch["input_ids"]
+            attention_mask = full_batch["attention_mask"]
+            for row, label in enumerate(LABELS):
+                active_positions = _active_positions(attention_mask, row)
+                full_ids = _active_ids(input_ids, row, active_positions)
+                if full_ids[:prompt_length] != prompt_ids:
+                    raise RuntimeError(f"{label} encoding does not share the audited prompt prefix")
+                label_ids = full_ids[prompt_length:]
+                if not label_ids:
+                    raise RuntimeError(f"{label} label token span is empty")
+                label_spans[label] = label_ids
+                label_positions[label] = active_positions[prompt_length:]
 
         model_inputs = _move_to_model_device(full_batch, self.model)
         with self.torch.inference_mode():

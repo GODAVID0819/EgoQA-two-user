@@ -61,6 +61,32 @@ class FakeTorch:
 FAKE_TORCH = FakeTorch()
 
 
+class StrictTensor:
+    """模拟 torch.Tensor：切片赋值要求 tensor-like，拒绝 Python list。"""
+
+    def __init__(self, values):
+        self.values = np.asarray(values)
+        self.dtype = self.values.dtype
+
+    @property
+    def shape(self):
+        return self.values.shape
+
+    def new_full(self, shape, fill_value):
+        return StrictTensor(np.full(shape, fill_value, dtype=self.dtype))
+
+    def new_tensor(self, values):
+        return StrictTensor(np.asarray(values, dtype=self.dtype))
+
+    def __getitem__(self, key):
+        return self.values[key]
+
+    def __setitem__(self, key, value):
+        if isinstance(value, list):
+            raise TypeError("can't assign a list to a torch.LongTensor")
+        self.values[key] = value.values if isinstance(value, StrictTensor) else value
+
+
 class FakeParameter:
     def __init__(self):
         self.requires_grad = True
@@ -142,6 +168,54 @@ class FakeChatProcessor(FakeProcessor):
             return_tensors=return_tensors,
             padding=padding,
         )
+
+
+class BoundaryMergingChatProcessor(FakeChatProcessor):
+    """模拟 BPE 在任意普通文本尾部与 A-E 的边界重新分词。"""
+
+    _ASSISTANT_BOUNDARY = "<|assistant|>"
+
+    def __init__(self):
+        super().__init__()
+        self.tokenizer = self
+        self.padding_side = "right"
+        self.pad_token_id = 0
+
+    def encode(self, text, *, add_special_tokens):
+        if add_special_tokens:
+            raise AssertionError("label tokenization must not add special tokens")
+        return [ord(char) for char in text]
+
+    def apply_chat_template(self, conversation, *, tokenize, add_generation_prompt):
+        self.conversations.append(conversation)
+        self.asserted_arguments = (tokenize, add_generation_prompt)
+        return f"<video_pad><video_pad>{self._ASSISTANT_BOUNDARY}x"
+
+    def __call__(self, *, text, videos, return_tensors, padding):
+        self.calls.append({"text": list(text), "videos": videos})
+        rows = []
+        for item in text:
+            prefix, suffix = item.split(self._ASSISTANT_BOUNDARY, 1)
+            row = [ord(char) for char in prefix] + [200]
+            if len(suffix) >= 2 and suffix[-1] in LABELS:
+                row.extend(ord(char) for char in suffix[:-2])
+                row.append(210 + LABELS.index(suffix[-1]))
+            else:
+                row.extend(ord(char) for char in suffix)
+            rows.append(row)
+        width = max(len(row) for row in rows)
+        input_ids = np.zeros((len(rows), width), dtype=np.int64)
+        attention_mask = np.zeros((len(rows), width), dtype=np.int64)
+        for index, row in enumerate(rows):
+            input_ids[index, :len(row)] = np.asarray(row)
+            attention_mask[index, :len(row)] = 1
+        return {"input_ids": input_ids, "attention_mask": attention_mask}
+
+
+class StrictTensorBoundaryMergingChatProcessor(BoundaryMergingChatProcessor):
+    def __call__(self, **kwargs):
+        encoded = super().__call__(**kwargs)
+        return {key: StrictTensor(value) for key, value in encoded.items()}
 
 
 class LeftPaddingMultiTokenProcessor(FakeProcessor):
@@ -269,9 +343,42 @@ class AnswerScorerCoreTests(unittest.TestCase):
             {"type": "video", "video": "first.mp4"},
             {"type": "video", "video": "second.mp4"},
         ])
+        self.assertEqual(content[2]["type"], "text")
+        self.assertTrue(content[2]["text"].endswith("Answer:"))
         self.assertEqual(processor.asserted_arguments, (False, True))
-        self.assertTrue(processor.calls[0]["text"][0].endswith("Answer:"))
+        self.assertEqual(
+            processor.calls[0]["text"],
+            ["<video_pad><video_pad><rendered_native_video_chat>"],
+        )
         self.assertEqual(processor.calls[-1]["videos"], ["first.mp4", "second.mp4"] * 5)
+
+    def test_teacher_forcing_tokenizes_labels_separately_at_chat_boundary(self):
+        processor = BoundaryMergingChatProcessor()
+        scorer = FrozenAnswerScorer(FakeModel(), processor, torch_module=FAKE_TORCH)
+        request = ScoreRequest(
+            videos=("first.mp4", "second.mp4"),
+            question="Q?",
+            options=("1", "2", "3", "4", "5"),
+        )
+
+        result = scorer.score(request)
+
+        self.assertEqual(tuple(result), LABELS)
+        self.assertEqual(processor.calls[0]["text"], ["<video_pad><video_pad><|assistant|>x"])
+        self.assertEqual(result["A"].token_ids, [ord("A")])
+
+    def test_teacher_forcing_assigns_tensor_like_rows_to_torch_style_batches(self):
+        processor = StrictTensorBoundaryMergingChatProcessor()
+        scorer = FrozenAnswerScorer(FakeModel(), processor, torch_module=FAKE_TORCH)
+        request = ScoreRequest(
+            videos=("first.mp4", "second.mp4"),
+            question="Q?",
+            options=("1", "2", "3", "4", "5"),
+        )
+
+        result = scorer.score(request)
+
+        self.assertEqual(tuple(result), LABELS)
 
     def test_teacher_forcing_supports_left_padding_and_multi_token_labels(self):
         scorer = FrozenAnswerScorer(
