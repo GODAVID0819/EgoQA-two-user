@@ -4,9 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:h100:1
+#SBATCH --gres=gpu:l40s:1
 #SBATCH --mem=64G
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --output=logs/grpo-v3-answer-margin-scorer-%j.out
 #SBATCH --error=logs/grpo-v3-answer-margin-scorer-%j.err
 
@@ -47,6 +47,8 @@ for required in "${PYTHON}" "${SCORER_PYTHON}" "${SCORER_MODEL}" "${FFMPEG_ENV}/
   [[ -e "${required}" ]] || { echo "缺少路径: ${required}" >&2; exit 2; }
 done
 "${PYTHON}" -m training.torch_storage_preflight --allowed-root "${JOB_SCRATCH_ROOT}" --output "${OUTPUT_DIR}/storage_preflight.json"
+nvidia-smi --query-gpu=index,uuid,name,compute_cap,memory.total,driver_version --format=csv,noheader > "${OUTPUT_DIR}/gpu_environment.csv"
+nvidia-smi > "${OUTPUT_DIR}/nvidia_smi.txt"
 "${PYTHON}" -m pip freeze > "${OUTPUT_DIR}/policy_environment.txt"
 "${SCORER_PYTHON}" -m pip freeze > "${OUTPUT_DIR}/scorer_environment.txt"
 "${FFMPEG_ENV}/bin/ffmpeg" -version > "${OUTPUT_DIR}/ffmpeg_environment.txt"

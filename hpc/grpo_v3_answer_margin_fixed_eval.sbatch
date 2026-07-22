@@ -4,9 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:h100:2
+#SBATCH --gres=gpu:l40s:2
 #SBATCH --mem=96G
-#SBATCH --time=06:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/grpo-v3-answer-margin-fixed-eval-%j.out
 #SBATCH --error=logs/grpo-v3-answer-margin-fixed-eval-%j.err
 set -euo pipefail
@@ -22,6 +22,8 @@ export VLLM_NO_USAGE_STATS=1; export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}
 export PATH="${FFMPEG_ENV}/bin:${PATH}"; export LD_LIBRARY_PATH="${FFMPEG_ENV}/lib:${LD_LIBRARY_PATH:-}"
 cd "${PROJECT_ROOT}"; mkdir -p "${OUTPUT_DIR}" "${JOB_SCRATCH_ROOT}" logs; PYTHON="${TRAIN_ENV}/bin/python"; SCORER_PYTHON="${SCORER_ENV}/bin/python"
 "${PYTHON}" -m training.torch_storage_preflight --allowed-root "${JOB_SCRATCH_ROOT}" --output "${OUTPUT_DIR}/storage_preflight.json"
+nvidia-smi --query-gpu=index,uuid,name,compute_cap,memory.total,driver_version --format=csv,noheader > "${OUTPUT_DIR}/gpu_environment.csv"
+nvidia-smi > "${OUTPUT_DIR}/nvidia_smi.txt"
 [[ -x "${FFMPEG_ENV}/bin/ffmpeg" ]] || { echo "缺少 FFmpeg: ${FFMPEG_ENV}/bin/ffmpeg" >&2; exit 2; }
 "${FFMPEG_ENV}/bin/ffmpeg" -version > "${OUTPUT_DIR}/ffmpeg_environment.txt"
 "${SCORER_PYTHON}" - <<'PY' > "${OUTPUT_DIR}/video_decoder_environment.txt"

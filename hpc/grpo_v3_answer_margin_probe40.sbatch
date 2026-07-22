@@ -4,9 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:h100:2
+#SBATCH --gres=gpu:l40s:2
 #SBATCH --mem=96G
-#SBATCH --time=06:00:00
+#SBATCH --time=18:00:00
 #SBATCH --output=logs/grpo-v3-answer-margin-probe40-%j.out
 #SBATCH --error=logs/grpo-v3-answer-margin-probe40-%j.err
 # 本 Gate 复用同目录 smoke1 的完整 scratch-first 执行体；下列锁定项供提交前静态审计。
