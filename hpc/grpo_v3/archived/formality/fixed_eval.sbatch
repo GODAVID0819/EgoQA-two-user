@@ -97,7 +97,7 @@ curl --fail --silent --show-error \
   -d "{\"model\":\"${REVIEW_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with OK.\"}],\"max_tokens\":8,\"temperature\":0}" \
   "${REVIEW_BASE_URL}/chat/completions" > "${OUTPUT_DIR}/reviewer_text_probe.json"
 
-CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3_formality_fixed_eval \
+CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3.experiments.archived.formality.fixed_eval \
   --probe-dir "${FORMALITY_PROBE_DIR}" \
   --dataset "${DATASET}" \
   --model-path "${POLICY_MODEL}" \

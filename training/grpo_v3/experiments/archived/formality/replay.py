@@ -11,7 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from training.grpo_v3_formality_reward import FORMALITY_COMPONENT, confidence_reward
+from training.grpo_v3.experiments.archived.formality.reward import FORMALITY_COMPONENT, confidence_reward
 
 
 def _choice_logprobs(row: dict[str, Any]) -> tuple[float, float] | None:

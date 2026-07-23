@@ -67,5 +67,12 @@ class GrpoV3StructureTests(unittest.TestCase):
         self.assertNotIn("temperature=0.3", text)
         self.assertNotIn("temperature=0.7", text)
 
+    def test_formality_exists_only_as_archived_experiment(self) -> None:
+        archive = ROOT / "training/grpo_v3/experiments/archived/formality"
+        self.assertTrue((archive / "reward.py").is_file())
+        self.assertTrue((archive / "reward_plugin.py").is_file())
+        self.assertFalse(any((ROOT / "training").glob("grpo_v3_formality_*.py")))
+        self.assertFalse(any((ROOT / "hpc").glob("grpo_v3_formality_*.sbatch")))
+
 if __name__ == "__main__":
     unittest.main()

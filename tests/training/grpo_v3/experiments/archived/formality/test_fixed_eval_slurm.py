@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
-SBATCH = ROOT / "hpc" / "grpo_v3_formality_fixed_eval.sbatch"
+ROOT = Path(__file__).resolve().parents[6]
+SBATCH = ROOT / "hpc/grpo_v3/archived/formality/fixed_eval.sbatch"
 
 
 class FormalityFixedEvalSlurmTests(unittest.TestCase):
@@ -33,7 +33,7 @@ class FormalityFixedEvalSlurmTests(unittest.TestCase):
             "TEMP",
             "VLLM_NO_USAGE_STATS=1",
             "training.torch_storage_preflight",
-            "training.grpo_v3_formality_fixed_eval",
+            "training.grpo_v3.experiments.archived.formality.fixed_eval",
             "fixed_eval_results.jsonl",
             "fixed_eval_summary.json",
             "run_manifest.json",
@@ -62,7 +62,7 @@ class FormalityFixedEvalSlurmTests(unittest.TestCase):
         reviewer_at = text.index('"${VLLM}" serve')
         models_at = text.index('${REVIEW_BASE_URL}/models')
         chat_at = text.index('${REVIEW_BASE_URL}/chat/completions')
-        eval_at = text.index("training.grpo_v3_formality_fixed_eval")
+        eval_at = text.index("training.grpo_v3.experiments.archived.formality.fixed_eval")
         self.assertLess(storage_at, reviewer_at)
         self.assertLess(reviewer_at, models_at)
         self.assertLess(models_at, chat_at)

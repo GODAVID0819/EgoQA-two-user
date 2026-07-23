@@ -12,7 +12,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Callable
 
-from training.grpo_v3_formality_reward import FORMALITY_COMPONENT, make_formality_score_fn
+from training.grpo_v3.experiments.archived.formality.reward import FORMALITY_COMPONENT, make_formality_score_fn
 
 
 CHECKPOINT_STEPS = (0, 40)

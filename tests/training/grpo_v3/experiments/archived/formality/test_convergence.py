@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from training.grpo_v3_formality_convergence import analyze_formality_convergence
+from training.grpo_v3.experiments.archived.formality.convergence import analyze_formality_convergence
 
 
 def _rows(*, steps: int = 40, improving: bool = True) -> list[dict]:

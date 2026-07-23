@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3_formality_artifacts import (
+from training.grpo_v3.experiments.archived.formality.artifacts import (
     summarize_formality_run,
     validate_formality_artifacts,
 )

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3_formality_replay import replay_file, replay_trace
+from training.grpo_v3.experiments.archived.formality.replay import replay_file, replay_trace
 
 
 def _row(call_index: int, candidate_index: int, margin: float) -> dict:

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from qwen3vl_runner import Qwen3VLTransformersRunner
-from training.grpo_v3_formality_fixed_eval import (
+from training.grpo_v3.experiments.archived.formality.fixed_eval import (
     FIXED_EVAL_MIN_VIDEO_PIXELS,
     FIXED_SEEDS,
     analyze_fixed_eval,

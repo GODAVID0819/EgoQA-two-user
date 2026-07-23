@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=egoqa-v3-form-smoke
+#SBATCH --job-name=egoqa-v3-form-probe
 #SBATCH --account=torch_pr_674_tandon_advanced
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -7,9 +7,9 @@
 #SBATCH --gres=gpu:2
 #SBATCH --constraint=l40s
 #SBATCH --mem=64G
-#SBATCH --time=04:00:00
-#SBATCH --output=logs/grpo-v3-formality-smoke-%j.out
-#SBATCH --error=logs/grpo-v3-formality-smoke-%j.err
+#SBATCH --time=06:00:00
+#SBATCH --output=logs/grpo-v3-formality-probe-%j.out
+#SBATCH --error=logs/grpo-v3-formality-probe-%j.err
 
 set -euo pipefail
 REQUIRED_FRAMEWORK="ms-swift==4.2.2"
@@ -19,7 +19,7 @@ TRAIN_ENV="${TRAIN_ENV:-/scratch/${USER}/envs/egoqa-ms-swift-v4.2.2-vllm024}"
 INFERENCE_ENV="${INFERENCE_ENV:-/scratch/${USER}/envs/egoqa-grpo}"
 POLICY_MODEL="${POLICY_MODEL:-/scratch/${USER}/models/Qwen3-VL-2B-Instruct}"
 REVIEW_MODEL="${REVIEW_MODEL:-/scratch/${USER}/models/Qwen3-VL-8B-Instruct}"
-OUTPUT_DIR="${OUTPUT_DIR:-${GRPO_V3_ROOT}/formality_smoke_${SLURM_JOB_ID}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${GRPO_V3_ROOT}/formality_probe_${SLURM_JOB_ID}}"
 REVIEW_BASE_URL="${REVIEW_BASE_URL:-http://127.0.0.1:8001/v1}"
 POLICY_INPUT="native_video"
 EGOQA_FORMALITY_REWARD_REVISION="qa_formality_confidence_v1"
@@ -82,7 +82,7 @@ cleanup() {
 trap cleanup EXIT
 nvidia-smi --query-gpu=timestamp,index,name,memory.total,memory.used,utilization.gpu --format=csv -l 5 > "${OUTPUT_DIR}/gpu_metrics.csv" &
 GPU_MONITOR_PID=$!
-REVIEW_LOG="${PROJECT_ROOT}/logs/grpo-v3-formality-smoke-review-${SLURM_JOB_ID}.log"
+REVIEW_LOG="${PROJECT_ROOT}/logs/grpo-v3-formality-probe-review-${SLURM_JOB_ID}.log"
 CUDA_VISIBLE_DEVICES=1 "${VLLM}" serve "${REVIEW_MODEL}" --host 127.0.0.1 --port 8001 \
   --dtype bfloat16 --max-model-len 32768 --max-num-seqs 4 --gpu-memory-utilization 0.80 \
   --gdn-prefill-backend triton > "${REVIEW_LOG}" 2>&1 &
@@ -95,28 +95,32 @@ done
 curl --fail --silent "${REVIEW_BASE_URL}/models" >/dev/null
 
 CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf --rlhf_type grpo --model "${POLICY_MODEL}" --adapters "${ADAPTER_DIR}" \
-  --dataset "${DATASET}" --external_plugins "${PROJECT_ROOT}/training/grpo_v3/runtime/reward_plugin.py" \
+  --dataset "${DATASET}" --external_plugins "${PROJECT_ROOT}/training/grpo_v3/experiments/archived/formality/reward_plugin.py" \
   --reward_funcs egoqa_qa_formality_confidence --tuner_type lora --torch_dtype bfloat16 \
   --freeze_vit true --freeze_aligner true --target_modules q_proj v_proj --lora_rank 8 --lora_alpha 16 \
   --use_vllm false --num_generations 4 --per_device_train_batch_size 4 --gradient_accumulation_steps 1 \
-  --gradient_checkpointing true --max_steps 1 --seed 42 --data_seed 42 --dataset_shuffle false \
+  --gradient_checkpointing true --max_steps 40 --seed 42 --data_seed 42 --dataset_shuffle false \
   --max_length 32768 --max_completion_length 1024 --learning_rate 1e-5 --lr_scheduler_type constant \
-  --beta 0.0 --temperature 0.7 --top_p 1.0 --save_steps 1 --save_total_limit 1 --logging_steps 1 \
+  --beta 0.0 --temperature 0.7 --top_p 1.0 --save_steps 5 --save_total_limit 1 --logging_steps 1 \
   --log_completions true --split_dataset_ratio 0 --dataset_num_proc 1 --dataloader_num_workers 0 \
   --report_to none --output_dir "${OUTPUT_DIR}/swift"
 
 CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3.shared.adapter_reload \
   --model-path "${POLICY_MODEL}" --search-root "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/adapter_reload.json"
 set +e
-"${PYTHON}" -m training.grpo_v3_formality_artifacts validate --mode smoke --output-dir "${OUTPUT_DIR}"
+"${PYTHON}" -m training.grpo_v3.experiments.archived.formality.convergence \
+  --trace "${EGOQA_GRPO_V3_REWARD_TRACE}" --expected-steps 40 \
+  --output "${OUTPUT_DIR}/convergence_metrics.json"
+CONVERGENCE_STATUS=$?
+"${PYTHON}" -m training.grpo_v3.experiments.archived.formality.artifacts validate --mode probe --output-dir "${OUTPUT_DIR}"
 VALIDATE_STATUS=$?
 set -e
-"${PYTHON}" -m training.grpo_v3_formality_artifacts summarize --mode smoke --output-dir "${OUTPUT_DIR}" \
+"${PYTHON}" -m training.grpo_v3.experiments.archived.formality.artifacts summarize --mode probe --output-dir "${OUTPUT_DIR}" \
   --dataset "${DATASET}" --parent-run "${GATE2_DIR}" --policy-model "${POLICY_MODEL}" \
   --reviewer-model "${REVIEW_MODEL}" --job-id "${SLURM_JOB_ID}"
-if (( VALIDATE_STATUS != 0 )); then
-  echo "Formality smoke 验收失败；结果和 manifest 已保留在 ${OUTPUT_DIR}" >&2
-  exit "${VALIDATE_STATUS}"
+if (( CONVERGENCE_STATUS != 0 || VALIDATE_STATUS != 0 )); then
+  echo "Formality probe 验收失败；结果和 manifest 已保留在 ${OUTPUT_DIR}" >&2
+  exit 2
 fi
-echo "${OUTPUT_DIR}" > "${GRPO_V3_ROOT}/latest_formality_smoke_output.txt"
+echo "${OUTPUT_DIR}" > "${GRPO_V3_ROOT}/latest_formality_probe_output.txt"
 echo "framework=${REQUIRED_FRAMEWORK} policy_input=${POLICY_INPUT} output=${OUTPUT_DIR}"

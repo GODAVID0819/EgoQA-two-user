@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
-SMOKE = ROOT / "hpc" / "grpo_v3_formality_smoke.sbatch"
-PROBE = ROOT / "hpc" / "grpo_v3_formality_probe.sbatch"
+ROOT = Path(__file__).resolve().parents[6]
+SMOKE = ROOT / "hpc/grpo_v3/archived/formality/smoke.sbatch"
+PROBE = ROOT / "hpc/grpo_v3/archived/formality/probe.sbatch"
 
 
 class FormalitySlurmTests(unittest.TestCase):
@@ -31,8 +31,8 @@ class FormalitySlurmTests(unittest.TestCase):
                     "qa_formality_confidence_v1",
                     "gate2_result.json",
                     "run_manifest.json",
-                    "training.grpo_v3_formality_artifacts validate",
-                    "training.grpo_v3_formality_artifacts summarize",
+                    "training.grpo_v3.experiments.archived.formality.artifacts validate",
+                    "training.grpo_v3.experiments.archived.formality.artifacts summarize",
                 ):
                     self.assertIn(fragment, text)
                 for forbidden in (
@@ -50,15 +50,15 @@ class FormalitySlurmTests(unittest.TestCase):
         self.assertNotIn("--max_steps 40", smoke)
         self.assertIn("--max_steps 40", probe)
         self.assertNotIn("latest_formality_smoke_output.txt", probe)
-        self.assertIn("training.grpo_v3_formality_convergence", probe)
+        self.assertIn("training.grpo_v3.experiments.archived.formality.convergence", probe)
         self.assertIn("--expected-steps 40", probe)
 
     def test_failure_results_are_summarized_before_exit(self) -> None:
         for path in (SMOKE, PROBE):
             with self.subTest(path=path.name):
                 text = path.read_text(encoding="utf-8")
-                validate_at = text.index("training.grpo_v3_formality_artifacts validate")
-                summarize_at = text.index("training.grpo_v3_formality_artifacts summarize")
+                validate_at = text.index("training.grpo_v3.experiments.archived.formality.artifacts validate")
+                summarize_at = text.index("training.grpo_v3.experiments.archived.formality.artifacts summarize")
                 exit_at = text.rindex("exit")
                 self.assertLess(validate_at, summarize_at)
                 self.assertLess(summarize_at, exit_at)

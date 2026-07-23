@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from training.grpo_v3_formality_reward import FORMALITY_COMPONENT
+from training.grpo_v3.experiments.archived.formality.reward import FORMALITY_COMPONENT
 
 
 WINDOW_GROUPS = 10
