@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from training.grpo_v3_greedy_eval import evaluate_rows
+from training.grpo_v3.evaluation.greedy_eval import evaluate_rows
 
 
 class _Runner:

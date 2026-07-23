@@ -164,7 +164,7 @@ class V3SlurmContractTests(unittest.TestCase):
             "qwen3-vl-2b-instruct",
             "qwen3-vl-8b-instruct",
             "gate3_v2_eval_native_video.jsonl",
-            "training.grpo_v3_greedy_eval",
+            "training.grpo_v3.evaluation.greedy_eval",
             "--adapter-label",
             "--max-image-pixels \"${video_max_pixels}\"",
             "cuda_visible_devices=1",

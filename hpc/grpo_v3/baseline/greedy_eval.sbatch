@@ -82,7 +82,7 @@ for _ in $(seq 1 240); do
 done
 curl --fail --silent "${REVIEW_BASE_URL}/models" >/dev/null
 
-CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3_greedy_eval \
+CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3.evaluation.greedy_eval \
   --dataset "${EVAL_DATASET}" --model-path "${POLICY_MODEL}" \
   --adapter-dir "${ADAPTER_DIR}" --adapter-label "${ADAPTER_LABEL}" \
   --review-model "${REVIEW_MODEL}" --review-base-url "${REVIEW_BASE_URL}" \

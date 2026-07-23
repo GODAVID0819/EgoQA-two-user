@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3_groundedness_audit import (
+from training.grpo_v3.evaluation.groundedness_audit import (
     _markdown,
     build_review_rows,
     export_audit,

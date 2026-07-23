@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from training.grpo_v3_greedy_compare import compare_runs
+from training.grpo_v3.evaluation.greedy_compare import compare_runs
 
 
 def _row(evidence_id: str, question_type: str, reward: float, groundedness: str) -> dict:

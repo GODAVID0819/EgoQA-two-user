@@ -74,5 +74,17 @@ class GrpoV3StructureTests(unittest.TestCase):
         self.assertFalse(any((ROOT / "training").glob("grpo_v3_formality_*.py")))
         self.assertFalse(any((ROOT / "hpc").glob("grpo_v3_formality_*.sbatch")))
 
+    def test_evaluation_tools_have_one_package(self) -> None:
+        expected = (
+            ROOT / "training/grpo_v3/evaluation/greedy_compare.py",
+            ROOT / "training/grpo_v3/evaluation/greedy_eval.py",
+            ROOT / "training/grpo_v3/evaluation/groundedness_audit.py",
+        )
+        for path in expected:
+            with self.subTest(path=path):
+                self.assertTrue(path.is_file())
+        self.assertFalse(any((ROOT / "training").glob("grpo_v3_greedy_*.py")))
+        self.assertFalse((ROOT / "training/grpo_v3_groundedness_audit.py").exists())
+
 if __name__ == "__main__":
     unittest.main()
