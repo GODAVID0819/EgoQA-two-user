@@ -70,7 +70,7 @@ MODEL_LOAD_BOUNDARY=1
 SCORER_PID=""
 cleanup() { [[ -z "${SCORER_PID}" ]] || kill "${SCORER_PID}" 2>/dev/null || true; }
 trap cleanup EXIT
-CUDA_VISIBLE_DEVICES=0 "${SCORER_PYTHON}" -m training.grpo_v3_answer_scorer_service \
+CUDA_VISIBLE_DEVICES=0 "${SCORER_PYTHON}" -m training.grpo_v3.experiments.answer_margin.scorer_service \
   --model "${SCORER_MODEL}" --device cuda:0 --torch-dtype bfloat16 --port 8765 \
   > "${OUTPUT_DIR}/scorer_service.log" 2>&1 &
 SCORER_PID=$!
@@ -84,8 +84,8 @@ curl --fail --silent http://127.0.0.1:8765/health > "${OUTPUT_DIR}/scorer_health
 CUDA_VISIBLE_DEVICES=0 "${PYTHON}" - "${DATASET}" "${EVIDENCE_ID}" "${OUTPUT_DIR}/scorer_runtime_probe.json" <<'PY'
 import hashlib, json, os, sys, time
 from pathlib import Path
-from training.grpo_v3_answer_scorer import ScoreRequest
-from training.grpo_v3_answer_scorer_service import AnswerScorerClient
+from training.grpo_v3.experiments.answer_margin.scorer import ScoreRequest
+from training.grpo_v3.experiments.answer_margin.scorer_service import AnswerScorerClient
 dataset, evidence, output = map(Path, (sys.argv[1], sys.argv[2], sys.argv[3]))
 evidence = str(evidence)
 rows = [json.loads(x) for x in dataset.read_text(encoding="utf-8").splitlines() if x.strip()]
@@ -121,7 +121,7 @@ payload = {"evidence_id": evidence, "health": {"status": "passed", "raw": health
                        "peak_memory_bytes": 0, "elapsed_seconds": time.perf_counter() - start}}
 output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 PY
-"${PYTHON}" -m training.grpo_v3_answer_margin_preflight --kind scorer-probe \
+"${PYTHON}" -m training.grpo_v3.experiments.answer_margin.preflight --kind scorer-probe \
   --input "${OUTPUT_DIR}/scorer_runtime_probe.json" --output "${OUTPUT_DIR}/scorer_probe_result.json"
 cp "${OUTPUT_DIR}/scorer_probe_result.json" "${OUTPUT_DIR}/run_manifest.json"
 echo "${OUTPUT_DIR}" > "${GRPO_V3_ROOT}/latest_answer_margin_scorer_probe_output.txt"

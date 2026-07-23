@@ -9,7 +9,7 @@ import statistics
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from training.grpo_v3_answer_margin import LABELS
+from training.grpo_v3.experiments.answer_margin.domain import LABELS
 
 
 FIXED_EVIDENCE_ID = "EGOLIFE2U_DAY2_11350000_A1_A5"

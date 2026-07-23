@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from training.grpo_v3_answer_margin import LABELS
+from training.grpo_v3.experiments.answer_margin.domain import LABELS
 
 
 @dataclass(frozen=True)

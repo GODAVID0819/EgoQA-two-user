@@ -14,8 +14,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Mapping
 
-from training.grpo_v3_answer_margin import LABELS
-from training.grpo_v3_answer_scorer import (
+from training.grpo_v3.experiments.answer_margin.domain import LABELS
+from training.grpo_v3.experiments.answer_margin.scorer import (
     LabelScore,
     PromptAudit,
     PromptAuditMaterial,

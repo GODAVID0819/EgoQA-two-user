@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from training.grpo_v3_answer_margin_preflight import (
+from training.grpo_v3.experiments.answer_margin.preflight import (
     FIXED_EVIDENCE_ID,
     validate_calibration,
     validate_scorer_probe,

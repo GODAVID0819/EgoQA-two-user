@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[5]
 NAMES = ("scorer_probe", "calibration", "smoke1", "smoke5", "probe40", "fixed_eval")
 SCRATCH_VARS = (
     "HOME", "XDG_CACHE_HOME", "HF_HOME", "HF_DATASETS_CACHE", "MODELSCOPE_CACHE",
@@ -15,9 +15,9 @@ SCRATCH_VARS = (
 
 class AnswerMarginSlurmTests(unittest.TestCase):
     def text(self, name: str) -> str:
-        text = (ROOT / "hpc" / f"grpo_v3_answer_margin_{name}.sbatch").read_text(encoding="utf-8")
+        text = (ROOT / "hpc" / "grpo_v3" / "answer_margin" / f"{name}.sbatch").read_text(encoding="utf-8")
         if name in {"smoke5", "probe40"}:
-            text += "\n" + (ROOT / "hpc" / "grpo_v3_answer_margin_smoke1.sbatch").read_text(encoding="utf-8")
+            text += "\n" + (ROOT / "hpc" / "grpo_v3" / "answer_margin" / "smoke1.sbatch").read_text(encoding="utf-8")
         return text
 
     def test_all_jobs_are_scratch_first_and_preflight_before_model(self) -> None:
@@ -88,6 +88,21 @@ class AnswerMarginSlurmTests(unittest.TestCase):
         fixed = self.text("fixed_eval")
         for fragment in ("32", "64", "fixed_eval_results.jsonl", "fixed_eval_summary.json", "not_converged", "invalid"):
             self.assertIn(fragment, fixed)
+
+    def test_offline_jobs_construct_permutation_keys_with_named_fields(self) -> None:
+        for name in ("calibration", "fixed_eval"):
+            text = self.text(name)
+            with self.subTest(name=name):
+                self.assertNotIn("PermutationKey(ANSWER_MARGIN_REWARD_REVISION,", text)
+                for field in (
+                    'experiment_condition_id="t05"',
+                    "phase=",
+                    "evidence_id=evidence",
+                    "generation_seed_or_call_index=",
+                    "candidate_index=",
+                    "reward_revision=ANSWER_MARGIN_REWARD_REVISION",
+                ):
+                    self.assertIn(field, text)
 
     def test_scorer_jobs_use_explicit_ffmpeg_runtime_and_torchcodec_preflight(self) -> None:
         for name in NAMES:

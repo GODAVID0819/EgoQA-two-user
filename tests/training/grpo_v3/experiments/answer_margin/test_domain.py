@@ -4,7 +4,7 @@ import subprocess
 import sys
 import unittest
 
-from training.grpo_v3_answer_margin import (
+from training.grpo_v3.experiments.answer_margin.domain import (
     ANSWER_MARGIN_REWARD_REVISION,
     LABELS,
     MARGIN_CLIP,
@@ -271,7 +271,7 @@ class PermuteOptionsTests(unittest.TestCase):
     def test_same_key_is_stable_across_python_processes(self):
         script = (
             "import json; "
-            "from training.grpo_v3_answer_margin import PermutationKey, permute_options; "
+            "from training.grpo_v3.experiments.answer_margin.domain import PermutationKey, permute_options; "
             "k=PermutationKey(experiment_condition_id='condition-7',phase='train',"
             "evidence_id='clip-19',generation_seed_or_call_index=23,candidate_index=2,"
             "reward_revision='combined_video_answer_margin_v1'); "

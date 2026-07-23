@@ -7,17 +7,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3_answer_margin import (
+from training.grpo_v3.experiments.answer_margin.domain import (
     ANSWER_MARGIN_REWARD_REVISION,
     LABELS,
     PermutationKey,
 )
-from training.grpo_v3_answer_margin_reward import (
+from training.grpo_v3.experiments.answer_margin.reward import (
     EXPERIMENT_REVISION,
     resolve_ordered_videos,
     score_completion,
 )
-from training.grpo_v3_answer_scorer import (
+from training.grpo_v3.experiments.answer_margin.scorer import (
     LabelScore,
     PromptAudit,
     ScoreResponse,

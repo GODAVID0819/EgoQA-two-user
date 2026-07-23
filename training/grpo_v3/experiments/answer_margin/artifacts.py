@@ -9,8 +9,8 @@ import statistics
 from pathlib import Path
 from typing import Any, Mapping
 
-from training.grpo_v3_answer_margin import ANSWER_MARGIN_REWARD_REVISION, LABELS
-from training.grpo_v3_answer_margin_preflight import FIXED_EVIDENCE_ID
+from training.grpo_v3.experiments.answer_margin.domain import ANSWER_MARGIN_REWARD_REVISION, LABELS
+from training.grpo_v3.experiments.answer_margin.preflight import FIXED_EVIDENCE_ID
 
 
 MODE_COUNTS = {"smoke1": (1, 4, 1), "smoke5": (5, 20, 4), "probe40": (40, 160, 32)}

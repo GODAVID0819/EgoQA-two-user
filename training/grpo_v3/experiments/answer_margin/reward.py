@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from training.grpo_v3_answer_margin import (
+from training.grpo_v3.experiments.answer_margin.domain import (
     ANSWER_MARGIN_REWARD_REVISION,
     LABELS,
     PermutationKey,
@@ -15,7 +15,7 @@ from training.grpo_v3_answer_margin import (
     extract_core_qa,
     permute_options,
 )
-from training.grpo_v3_answer_scorer import PromptAuditMaterial, ScoreRequest, ScoreResponse
+from training.grpo_v3.experiments.answer_margin.scorer import PromptAuditMaterial, ScoreRequest, ScoreResponse
 
 
 EXPERIMENT_REVISION = "combined_video_answer_margin_convergence_v1"
@@ -308,7 +308,7 @@ def score_completion(
 
 
 def make_answer_margin_score_fn(*, base_url: str, timeout_seconds: float):
-    from training.grpo_v3_answer_scorer_service import AnswerScorerClient
+    from training.grpo_v3.experiments.answer_margin.scorer_service import AnswerScorerClient
 
     client = AnswerScorerClient(base_url, timeout_seconds=timeout_seconds)
 

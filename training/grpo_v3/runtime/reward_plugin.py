@@ -474,7 +474,7 @@ class AnswerMarginReward(ORM):
 
     @staticmethod
     def _build_score_fn() -> Callable[..., dict[str, Any]]:
-        from training.grpo_v3_answer_margin_reward import make_answer_margin_score_fn
+        from training.grpo_v3.experiments.answer_margin.reward import make_answer_margin_score_fn
 
         base_url = os.environ.get("EGOQA_ANSWER_SCORER_BASE_URL")
         timeout = os.environ.get("EGOQA_ANSWER_SCORER_TIMEOUT_SECONDS")
@@ -489,11 +489,11 @@ class AnswerMarginReward(ORM):
         return make_answer_margin_score_fn(base_url=base_url, timeout_seconds=timeout_seconds)
 
     def __call__(self, completions: Sequence[str], **kwargs: Any) -> list[float]:
-        from training.grpo_v3_answer_margin import (
+        from training.grpo_v3.experiments.answer_margin.domain import (
             ANSWER_MARGIN_REWARD_REVISION,
             PermutationKey,
         )
-        from training.grpo_v3_answer_margin_reward import (
+        from training.grpo_v3.experiments.answer_margin.reward import (
             EXPERIMENT_CONDITION_ID,
             EXPERIMENT_REVISION,
             TRACE_SCHEMA_VERSION,

@@ -43,7 +43,7 @@ GATE0_DIR="${GATE0_DIR:-$(head -n 1 "${GRPO_V3_ROOT}/latest_gate0_output.txt")}"
 ADAPTER_DIR="$(${PYTHON} -c 'import json,sys; from pathlib import Path; d=Path(sys.argv[1]); r=json.load(open(d/"gate2_result.json")); m=json.load(open(d/"run_manifest.json")); assert r["status"] == "passed"; p=Path(m["adapter_dir"]); assert p.name == "checkpoint-1"; print(p)' "${GATE2_DIR}")"
 MODEL_LOAD_BOUNDARY=1
 SCORER_PID=""; cleanup(){ [[ -z "${SCORER_PID}" ]] || kill "${SCORER_PID}" 2>/dev/null || true; }; trap cleanup EXIT
-CUDA_VISIBLE_DEVICES=1 "${SCORER_PYTHON}" -m training.grpo_v3_answer_scorer_service --model "${SCORER_MODEL}" --device cuda:0 --torch-dtype bfloat16 --port 8765 > "${OUTPUT_DIR}/scorer_service.log" 2>&1 & SCORER_PID=$!
+CUDA_VISIBLE_DEVICES=1 "${SCORER_PYTHON}" -m training.grpo_v3.experiments.answer_margin.scorer_service --model "${SCORER_MODEL}" --device cuda:0 --torch-dtype bfloat16 --port 8765 > "${OUTPUT_DIR}/scorer_service.log" 2>&1 & SCORER_PID=$!
 for _ in $(seq 1 180); do curl --fail --silent http://127.0.0.1:8765/health > "${OUTPUT_DIR}/scorer_health.json" && break; kill -0 "${SCORER_PID}" 2>/dev/null || exit 3; sleep 10; done
 curl --fail --silent http://127.0.0.1:8765/health >/dev/null
 CUDA_VISIBLE_DEVICES=0 "${PYTHON}" - "${DATASET}" "${EVIDENCE_ID}" "${POLICY_MODEL}" "${ADAPTER_DIR}" "${OUTPUT_DIR}/calibration_trace.jsonl" <<'PY'
@@ -51,8 +51,8 @@ import json, sys
 from pathlib import Path
 from peft import PeftModel
 from qwen3vl_runner import Qwen3VLTransformersRunner
-from training.grpo_v3_answer_margin import ANSWER_MARGIN_REWARD_REVISION, PermutationKey
-from training.grpo_v3_answer_margin_reward import make_answer_margin_score_fn
+from training.grpo_v3.experiments.answer_margin.domain import ANSWER_MARGIN_REWARD_REVISION, PermutationKey
+from training.grpo_v3.experiments.answer_margin.reward import make_answer_margin_score_fn
 from training.grpo_v3_formality_fixed_eval import _prompt, set_generation_seed
 dataset, evidence, model, adapter, output = sys.argv[1:]
 row = next(x for x in (json.loads(s) for s in Path(dataset).read_text(encoding="utf-8").splitlines() if s.strip()) if x.get("evidence_id") == evidence)
@@ -67,9 +67,16 @@ with Path(output).open("w", encoding="utf-8") as f:
       set_generation_seed(2026072200 + 4*group + candidate, torch_module=runner.torch)
       completions.append(runner.generate(_prompt(row), image_paths=[], video_paths=row["videos"], decoding_mode="sampling", temperature=0.5, top_p=1.0))
     for candidate, raw in enumerate(completions):
-      key=PermutationKey(ANSWER_MARGIN_REWARD_REVISION,"t05","calibration",evidence,group,candidate)
+      key=PermutationKey(
+        experiment_condition_id="t05",
+        phase="calibration",
+        evidence_id=evidence,
+        generation_seed_or_call_index=group,
+        candidate_index=candidate,
+        reward_revision=ANSWER_MARGIN_REWARD_REVISION,
+      )
       item=score(raw_completion=str(raw),packet=packet,evidence_id=evidence,candidate_index=candidate,key=key,global_step=0,reward_call_index=group,question_type=row["question_type"],generation_mode=row.get("generation_mode","baseline"))
       item["record"]["temperature"]=0.5; f.write(json.dumps(item,ensure_ascii=False,allow_nan=False)+"\n")
 PY
-"${PYTHON}" -m training.grpo_v3_answer_margin_preflight --kind calibration --input "${OUTPUT_DIR}/calibration_trace.jsonl" --output "${OUTPUT_DIR}/calibration_result.json"
+"${PYTHON}" -m training.grpo_v3.experiments.answer_margin.preflight --kind calibration --input "${OUTPUT_DIR}/calibration_trace.jsonl" --output "${OUTPUT_DIR}/calibration_result.json"
 echo "${OUTPUT_DIR}" > "${GRPO_V3_ROOT}/latest_answer_margin_calibration_output.txt"; echo "answer_margin_calibration_status=passed output=${OUTPUT_DIR}"

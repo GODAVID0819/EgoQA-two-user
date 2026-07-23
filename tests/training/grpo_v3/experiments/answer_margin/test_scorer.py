@@ -9,7 +9,7 @@ import urllib.request
 
 import numpy as np
 
-from training.grpo_v3_answer_scorer import (
+from training.grpo_v3.experiments.answer_margin.scorer import (
     LABELS,
     FrozenAnswerScorer,
     LabelScore,
@@ -20,7 +20,7 @@ from training.grpo_v3_answer_scorer import (
     build_answer_prompt,
     freeze_model,
 )
-from training.grpo_v3_answer_scorer_service import (
+from training.grpo_v3.experiments.answer_margin.scorer_service import (
     LOOPBACK_HOST,
     AnswerScorerClient,
     create_server,
@@ -734,7 +734,7 @@ class AnswerScorerServiceTests(unittest.TestCase):
                         headers={"Content-Type": "application/json"}, method="POST"
                     )
                 with self.subTest(path=path), self.assertLogs(
-                    "training.grpo_v3_answer_scorer_service", level="ERROR"
+                    "training.grpo_v3.experiments.answer_margin.scorer_service", level="ERROR"
                 ) as captured:
                     with self.assertRaises(urllib.error.HTTPError) as raised:
                         urllib.request.urlopen(request, timeout=1)

@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3_answer_margin import ANSWER_MARGIN_REWARD_REVISION
-from training.grpo_v3_answer_margin_artifacts import expected_counts, validate_training_artifacts
-from training.grpo_v3_answer_margin_preflight import FIXED_EVIDENCE_ID
+from training.grpo_v3.experiments.answer_margin.domain import ANSWER_MARGIN_REWARD_REVISION
+from training.grpo_v3.experiments.answer_margin.artifacts import expected_counts, validate_training_artifacts
+from training.grpo_v3.experiments.answer_margin.preflight import FIXED_EVIDENCE_ID
 
 
 def _write_json(path: Path, value: dict) -> None:

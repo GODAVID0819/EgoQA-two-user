@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from training.grpo_v3_answer_margin_fixed_eval import (
+from training.grpo_v3.experiments.answer_margin.fixed_eval import (
     BOOTSTRAP_REPLICATES,
     BOOTSTRAP_SEED,
     CHECKPOINT_STEPS,

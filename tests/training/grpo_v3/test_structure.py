@@ -39,5 +39,33 @@ class GrpoV3StructureTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(path.is_file())
 
+    def test_answer_margin_has_one_experiment_home(self) -> None:
+        expected = (
+            ROOT / "training/grpo_v3/experiments/answer_margin/domain.py",
+            ROOT / "training/grpo_v3/experiments/answer_margin/reward.py",
+            ROOT / "training/grpo_v3/experiments/answer_margin/scorer.py",
+            ROOT / "hpc/grpo_v3/answer_margin/calibration.sbatch",
+            ROOT / "hpc/grpo_v3/answer_margin/fixed_eval.sbatch",
+        )
+        for path in expected:
+            with self.subTest(path=path):
+                self.assertTrue(path.is_file())
+
+    def test_answer_margin_is_the_active_temperature_point(self) -> None:
+        roots = (
+            ROOT / "training/grpo_v3/experiments/answer_margin",
+            ROOT / "hpc/grpo_v3/answer_margin",
+        )
+        text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for base in roots
+            if base.exists()
+            for path in base.rglob("*")
+            if path.is_file() and path.suffix in {".py", ".sbatch"}
+        )
+        self.assertIn("0.5", text)
+        self.assertNotIn("temperature=0.3", text)
+        self.assertNotIn("temperature=0.7", text)
+
 if __name__ == "__main__":
     unittest.main()
