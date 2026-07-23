@@ -86,5 +86,21 @@ class GrpoV3StructureTests(unittest.TestCase):
         self.assertFalse(any((ROOT / "training").glob("grpo_v3_greedy_*.py")))
         self.assertFalse((ROOT / "training/grpo_v3_groundedness_audit.py").exists())
 
+    def test_active_code_does_not_depend_on_archived_experiments(self) -> None:
+        roots = (
+            ROOT / "training/grpo_v3/runtime",
+            ROOT / "training/grpo_v3/baseline",
+            ROOT / "training/grpo_v3/experiments/answer_margin",
+            ROOT / "hpc/grpo_v3/answer_margin",
+            ROOT / "hpc/grpo_v3/baseline",
+        )
+        offenders = []
+        for base in roots:
+            for path in base.rglob("*"):
+                if path.is_file() and path.suffix in {".py", ".sbatch"}:
+                    if "experiments.archived" in path.read_text(encoding="utf-8"):
+                        offenders.append(path.relative_to(ROOT).as_posix())
+        self.assertEqual(offenders, [])
+
 if __name__ == "__main__":
     unittest.main()

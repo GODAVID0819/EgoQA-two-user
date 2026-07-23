@@ -53,7 +53,7 @@ from peft import PeftModel
 from qwen3vl_runner import Qwen3VLTransformersRunner
 from training.grpo_v3.experiments.answer_margin.domain import ANSWER_MARGIN_REWARD_REVISION, PermutationKey
 from training.grpo_v3.experiments.answer_margin.reward import make_answer_margin_score_fn
-from training.grpo_v3_formality_fixed_eval import _prompt, set_generation_seed
+from training.grpo_v3.shared.fixed_eval import fixed_eval_prompt, set_generation_seed
 dataset, evidence, model, adapter, output = sys.argv[1:]
 row = next(x for x in (json.loads(s) for s in Path(dataset).read_text(encoding="utf-8").splitlines() if s.strip()) if x.get("evidence_id") == evidence)
 packet = json.loads(row["packet_json"]) if isinstance(row["packet_json"], str) else row["packet_json"]
@@ -65,7 +65,7 @@ with Path(output).open("w", encoding="utf-8") as f:
     completions=[]
     for candidate in range(4):
       set_generation_seed(2026072200 + 4*group + candidate, torch_module=runner.torch)
-      completions.append(runner.generate(_prompt(row), image_paths=[], video_paths=row["videos"], decoding_mode="sampling", temperature=0.5, top_p=1.0))
+      completions.append(runner.generate(fixed_eval_prompt(row), image_paths=[], video_paths=row["videos"], decoding_mode="sampling", temperature=0.5, top_p=1.0))
     for candidate, raw in enumerate(completions):
       key=PermutationKey(
         experiment_condition_id="t05",

@@ -48,14 +48,14 @@ from pathlib import Path
 from training.grpo_v3.experiments.answer_margin.domain import ANSWER_MARGIN_REWARD_REVISION,PermutationKey
 from training.grpo_v3.experiments.answer_margin.reward import make_answer_margin_score_fn
 from training.grpo_v3.experiments.answer_margin.fixed_eval import EVAL_SEEDS
-from training.grpo_v3_formality_fixed_eval import _prompt,load_multi_adapter_runner,set_generation_seed
+from training.grpo_v3.shared.fixed_eval import fixed_eval_prompt,load_multi_adapter_runner,set_generation_seed
 dataset,evidence,model,a0,a40,out=sys.argv[1:]; rows=[json.loads(s) for s in Path(dataset).read_text(encoding="utf-8").splitlines() if s.strip()]; row=next(x for x in rows if x.get("evidence_id")==evidence)
 packet=json.loads(row["packet_json"]) if isinstance(row["packet_json"],str) else row["packet_json"]; runner=load_multi_adapter_runner(model_path=model,adapters={0:Path(a0),40:Path(a40)},max_new_tokens=1024,max_image_pixels=50176)
 score=make_answer_margin_score_fn(base_url="http://127.0.0.1:8765",timeout_seconds=300); results=[]
 for step,adapter in ((0,a0),(40,a40)):
  runner.model.set_adapter(f"step_{step}")
  for index,seed in enumerate(EVAL_SEEDS):
-  set_generation_seed(seed,torch_module=runner.torch); raw=runner.generate(_prompt(row),image_paths=[],video_paths=row["videos"],decoding_mode="sampling",temperature=0.5,top_p=1.0)
+  set_generation_seed(seed,torch_module=runner.torch); raw=runner.generate(fixed_eval_prompt(row),image_paths=[],video_paths=row["videos"],decoding_mode="sampling",temperature=0.5,top_p=1.0)
   key=PermutationKey(
    experiment_condition_id="t05",
    phase="eval",
