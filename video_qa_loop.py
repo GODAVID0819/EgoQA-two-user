@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import itertools
+import json
 import math
 import time
 from pathlib import Path
@@ -12,14 +13,20 @@ from typing import Any
 
 from .io_utils import append_jsonl, iter_jsonl, write_jsonl
 from .prompts import (
+    DEFAULT_QUALITY_QUOTA,
     GENERATION_MODES,
+    QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
     build_answerability_prompt,
     build_evidence_groundedness_judge_prompt,
+    build_judge_json_repair_prompt,
     build_qa_formality_judge_prompt,
-    build_relation_discovery_prompt,
-    build_relation_mcq_prompt,
     build_video_generation_prompt,
+    formality_participant_names,
+    judge_schema_for_check,
+    qa_formality_errors,
 )
+# Archived discovery-mode imports:
+# from .prompts import build_relation_discovery_prompt, build_relation_mcq_prompt
 from .qwen3vl_runner import (
     DEFAULT_CHOICE_FIELD,
     DEFAULT_DECISION_CHOICES,
@@ -27,6 +34,8 @@ from .qwen3vl_runner import (
     DEFAULT_SAMPLING_TEMPERATURE,
     DEFAULT_SAMPLING_TOP_P,
     GENERATOR_DECODING_MODES,
+    OpenRouterRequestError,
+    OPENROUTER_REASONING_EFFORTS,
     make_runner,
 )
 from .schema import OPTION_LETTERS, extract_json_object, normalize_correct, validate_qa_item
@@ -63,18 +72,129 @@ BLOCKING_JUDGE_CHECKS = (
     "evidence_groundedness",
     "answerability",
 )
-DECISION_ENTROPY_JUDGE_CHECKS = {
+QUALITY_SCORED_JUDGE_CHECKS = {
     "qa_formality",
     "evidence_groundedness",
 }
-# Archived inactive scoring constants:
-# QUALITY_SCORED_JUDGE_CHECKS = {"qa_formality", "evidence_groundedness"}
-# QUALITY_FLAGS = {
-#     1: "1_weak_or_reject",
-#     2: "2_acceptable",
-#     3: "3_strong",
-# }
+# Legacy PASS/FAIL entropy helpers remain below for old analysis artifacts and
+# explicit offline calls. The production review path does not request logits,
+# attach decision_uncertainty JSON, or use entropy for acceptance.
+LEGACY_DECISION_ENTROPY_JUDGE_CHECKS = set(QUALITY_SCORED_JUDGE_CHECKS)
 TEMPORAL_REASONING_MODE = "temporal_reasoning"
+
+
+def quality_score_value(value: Any) -> int | None:
+    """Return a valid integer quality score without changing the judge decision."""
+
+    if isinstance(value, bool):
+        return None
+    try:
+        score = int(value)
+    except (TypeError, ValueError):
+        return None
+    return score if score in {1, 2, 3} else None
+
+
+def quality_quota_snapshot(previous: int, quota: int) -> dict[str, int]:
+    """Capture the prompt-time state for one judge category."""
+
+    limit = max(1, int(quota))
+    observed = max(0, int(previous))
+    return {
+        "quota": limit,
+        "previous_three_point_assignments": observed,
+        "remaining_before_candidate": max(0, limit - observed),
+    }
+
+
+def attach_quality_quota_metadata(
+    check: dict[str, Any],
+    *,
+    quota_state: dict[str, int],
+) -> dict[str, Any]:
+    """Audit score rationale and post-quota rebuttal without gating acceptance."""
+
+    score = quality_score_value(check.get("quality_score"))
+    if score is not None:
+        check["quality_score"] = score
+    previous = int(quota_state["previous_three_point_assignments"])
+    quota = int(quota_state["quota"])
+    assigned_three = score == 3
+    exceeded = bool(assigned_three and previous >= quota)
+    quality_reason_present = bool(str(check.get("quality_reason") or "").strip())
+    quota_rebuttal_present = bool(str(check.get("quota_rebuttal") or "").strip())
+    if not exceeded and check.get("quota_rebuttal") is None:
+        check["quota_rebuttal"] = ""
+    check["quality_quota"] = {
+        **quota_state,
+        "assigned_score": score,
+        "assigned_three_points": assigned_three,
+        "quota_exceeded_by_this_assignment": exceeded,
+        "quality_reason_present": quality_reason_present,
+        "quota_rebuttal_required": exceeded,
+        "quota_rebuttal_present": quota_rebuttal_present,
+        "output_contract_satisfied": bool(
+            score is not None
+            and quality_reason_present
+            and (not exceeded or quota_rebuttal_present)
+        ),
+        "acceptance_effect": "none; PASS/FAIL and answerability remain the only gates",
+    }
+    return check
+
+
+def quality_quota_counts_from_rows(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Restore observed 3-point assignments from canonical run traces on resume."""
+
+    restored_compact_counts = {
+        check_name: 0 for check_name in QUALITY_SCORED_JUDGE_CHECKS
+    }
+    trace_counts = {check_name: 0 for check_name in QUALITY_SCORED_JUDGE_CHECKS}
+    for row in rows:
+        compact_config = (
+            row.get("production_judge_config")
+            if isinstance(row.get("production_judge_config"), dict)
+            else {}
+        )
+        row_compact_counts = compact_config.get("observed_three_point_assignments")
+        if isinstance(row_compact_counts, dict):
+            for check_name in QUALITY_SCORED_JUDGE_CHECKS:
+                try:
+                    restored_compact_counts[check_name] = max(
+                        restored_compact_counts[check_name],
+                        int(row_compact_counts.get(check_name, 0)),
+                    )
+                except (TypeError, ValueError):
+                    pass
+        traces = row.get("generation_trace")
+        if not isinstance(traces, list):
+            traces = row.get("attempts")
+        if not isinstance(traces, list):
+            nested_qa = row.get("qa") if isinstance(row.get("qa"), dict) else {}
+            traces = nested_qa.get("generation_trace")
+        if not isinstance(traces, list):
+            continue
+        for trace in traces:
+            if not isinstance(trace, dict):
+                continue
+            judge_trace = trace.get("judge")
+            if not isinstance(judge_trace, dict):
+                continue
+            merged = judge_trace.get("merged")
+            checks = merged.get("checks") if isinstance(merged, dict) else None
+            if not isinstance(checks, dict):
+                continue
+            for check_name in QUALITY_SCORED_JUDGE_CHECKS:
+                check = checks.get(check_name)
+                if isinstance(check, dict) and quality_score_value(check.get("quality_score")) == 3:
+                    trace_counts[check_name] += 1
+    # A row may contain both the cumulative compact counter and the canonical traces.
+    # They describe the same assignments, so take the larger reconstruction rather
+    # than adding them and double-counting the pre-resume quota state.
+    return {
+        check_name: max(restored_compact_counts[check_name], trace_counts[check_name])
+        for check_name in QUALITY_SCORED_JUDGE_CHECKS
+    }
 
 
 def existing_path(value: str | None) -> str | None:
@@ -122,7 +242,7 @@ def media_for_clips(
     images = [path for clip in clips for path in clip_image_paths(clip)]
     if clips_require_frame_inputs(clips):
         return images, []
-    if backend == "openai-compatible-local" and not allow_openai_video_input:
+    if backend in {"openai-compatible-local", "openrouter"} and not allow_openai_video_input:
         return images, []
     return images if not videos else [], videos
 
@@ -216,7 +336,7 @@ def packet_with_temporal_reasoning_media(packet: dict[str, Any]) -> dict[str, An
 
     This is intentionally opt-in for temporal_reasoning mode. Other modes use
     the input packet unchanged, so no original_timestamp metadata leaks into
-    neutral/baseline/discovery prompts or media traces.
+    neutral/baseline prompts or media traces. Discovery modes are archived.
     """
 
     updated = dict(packet)
@@ -262,7 +382,9 @@ def video_evidence_for_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
                 "time_token": clip.get("time_token"),
                 "clip_clock": clip.get("clip_clock"),
                 "duration_seconds": clip.get("duration_seconds"),
+                "segment_count": clip.get("segment_count"),
                 "video_url": clip.get("video_url"),
+                "source_video_urls": clip.get("source_video_urls"),
                 "local_video": local_video,
                 "local_video_exists": bool(existing_path(local_video)),
                 "source_local_video": clip.get("source_local_video"),
@@ -275,7 +397,9 @@ def video_evidence_for_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
                 "temporal_pruning": clip.get("temporal_pruning"),
                 "temporal_reasoning": clip.get("temporal_reasoning"),
                 "gaze_url": clip.get("gaze_url"),
+                "source_gaze_urls": clip.get("source_gaze_urls"),
                 "gaze_summary": clip.get("gaze_summary"),
+                "source_segments": clip.get("source_segments"),
                 "sampled_frames": [
                     {
                         "timestamp_seconds": frame.get("timestamp_seconds"),
@@ -320,6 +444,10 @@ def complete_generator_metadata(
 ) -> dict[str, Any]:
     """Fill review metadata that the generator may omit before the real gates run."""
 
+    # Category selection is an offline analysis concern. Strip legacy or
+    # hallucinated category keys so production artifacts remain category-free.
+    qa.pop("category", None)
+    qa.pop("category_rationale", None)
     required_users = list(packet.get("required_users") or qa.get("required_users") or [])
     qa["question_type"] = question_type
     qa["required_users"] = required_users
@@ -422,8 +550,12 @@ def condition_media_for_clips(
     }
 
 
-def qa_for_judger_prompt(qa: dict[str, Any]) -> dict[str, Any]:
-    """Return only the generated question-answer fields the judger needs to evaluate."""
+def qa_for_judger_prompt(
+    qa: dict[str, Any],
+    *,
+    include_generator_rationale: bool = True,
+) -> dict[str, Any]:
+    """Return candidate fields, optionally withholding the generator rationale."""
 
     wanted = [
         "qa_id",
@@ -434,15 +566,19 @@ def qa_for_judger_prompt(qa: dict[str, Any]) -> dict[str, Any]:
         "correct",
         "answer",
         "required_users",
-        "evidence",
-        "single_user_answerability",
-        "combined_answerability",
-        "generator_rationale",
-        "why_two_users_needed",
-        "per_user_evidence_claims",
-        "referred_timestamps",
-        "review",
+        # Other generator-authored evidence fields remain archived because they can anchor
+        # judges to a mistaken interpretation instead of letting them inspect the media
+        # independently. The rationale is included to expose the intended question relation.
+        # "evidence",
+        # "single_user_answerability",
+        # "combined_answerability",
+        # "why_two_users_needed",
+        # "per_user_evidence_claims",
+        # "referred_timestamps",
+        # "review",
     ]
+    if include_generator_rationale:
+        wanted.append("generator_rationale")
     return {key: qa[key] for key in wanted if key in qa}
 
 
@@ -706,7 +842,7 @@ def schema_formality_branch(schema_errors: list[str]) -> dict[str, Any]:
 
 
 def decision_uncertainty_from_choice_logits(signal: dict[str, Any] | None) -> dict[str, Any]:
-    """Normalize the judge's PASS/FAIL status logits and compute binary entropy."""
+    """Legacy offline helper for archived PASS/FAIL entropy experiments."""
 
     statuses = ("PASS", "FAIL")
     if not isinstance(signal, dict):
@@ -808,7 +944,7 @@ def attach_decision_uncertainty(
 ) -> dict[str, Any]:
     """Attach entropy metadata without overriding the effective gate status."""
 
-    if check_name not in DECISION_ENTROPY_JUDGE_CHECKS:
+    if check_name not in LEGACY_DECISION_ENTROPY_JUDGE_CHECKS:
         return check
     existing = check.get("decision_uncertainty")
     uncertainty = (
@@ -832,14 +968,11 @@ def attach_decision_uncertainty(
 
 
 def failed_single_judge(check_name: str, reason: str, *, raw_output: str | None = None) -> dict[str, Any]:
-    failed_check = attach_decision_uncertainty(
-        {
-            "status": "FAIL",
-            "reason": reason,
-            "fix": f"Repair the question-answer item so the {check_name} judge can pass.",
-        },
-        check_name,
-    )
+    failed_check = {
+        "status": "FAIL",
+        "reason": reason,
+        "fix": f"Repair the question-answer item so the {check_name} judge can pass.",
+    }
     judge = {
         "review_passed": False,
         "checks": {
@@ -854,6 +987,66 @@ def failed_single_judge(check_name: str, reason: str, *, raw_output: str | None 
     return judge
 
 
+def single_judge_output_errors(judge: dict[str, Any], check_name: str) -> list[str]:
+    """Validate the production JSON contract before a judge result reaches the merger."""
+
+    errors = []
+    if not isinstance(judge.get("review_passed"), bool):
+        errors.append("review_passed must be boolean")
+    checks = judge.get("checks")
+    check = checks.get(check_name) if isinstance(checks, dict) else None
+    if not isinstance(check, dict):
+        errors.append(f"checks.{check_name} must be an object")
+    else:
+        status = str(check.get("status") or "").strip().upper()
+        if status not in {"PASS", "FAIL"}:
+            errors.append(f"checks.{check_name}.status must be PASS or FAIL")
+        reason = check.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            errors.append(f"checks.{check_name}.reason must be a non-empty string")
+        fix = check.get("fix")
+        if not isinstance(fix, str):
+            errors.append(f"checks.{check_name}.fix must be a string")
+        if check_name == "qa_formality":
+            semantic_subchecks = check.get("semantic_subchecks")
+            if not isinstance(semantic_subchecks, dict):
+                errors.append("checks.qa_formality.semantic_subchecks must be an object")
+            else:
+                for subcheck_name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES:
+                    subcheck = semantic_subchecks.get(subcheck_name)
+                    if not isinstance(subcheck, dict):
+                        errors.append(
+                            f"checks.qa_formality.semantic_subchecks.{subcheck_name} "
+                            "must be an object"
+                        )
+                        continue
+                    subcheck_status = str(subcheck.get("status") or "").strip().upper()
+                    if subcheck_status not in {"PASS", "FAIL"}:
+                        errors.append(
+                            f"checks.qa_formality.semantic_subchecks.{subcheck_name}.status "
+                            "must be PASS or FAIL"
+                        )
+                    subcheck_reason = subcheck.get("reason")
+                    if not isinstance(subcheck_reason, str) or not subcheck_reason.strip():
+                        errors.append(
+                            f"checks.qa_formality.semantic_subchecks.{subcheck_name}.reason "
+                            "must be a non-empty string"
+                        )
+    if not isinstance(judge.get("blocking_failures"), list):
+        errors.append("blocking_failures must be an array")
+    if not isinstance(judge.get("feedback_to_generator"), str):
+        errors.append("feedback_to_generator must be a string")
+    return errors
+
+
+def parse_single_judge_output(raw: str, check_name: str) -> dict[str, Any]:
+    judge = extract_json_object(raw)
+    contract_errors = single_judge_output_errors(judge, check_name)
+    if contract_errors:
+        raise ValueError("judge JSON contract errors: " + "; ".join(contract_errors))
+    return judge
+
+
 def run_model_judge_branch(
     *,
     check_name: str,
@@ -864,7 +1057,10 @@ def run_model_judge_branch(
     evidence_id: Any,
     qa_id: Any,
     attempt: int,
+    collect_choice_logits: bool = False,
 ) -> dict[str, Any]:
+    # collect_choice_logits is a legacy opt-in retained for offline entropy analysis.
+    # Production callers use ordinary JSON generation and never emit the old logit artifact.
     stage = f"{check_name}_judge"
     stage_start = time.time()
     print(
@@ -875,7 +1071,8 @@ def run_model_judge_branch(
         flush=True,
     )
     generate_with_choice_logits = getattr(runner, "generate_with_choice_logits", None)
-    if callable(generate_with_choice_logits):
+    supports_choice_logits = getattr(runner, "supports_choice_logits", True)
+    if collect_choice_logits and callable(generate_with_choice_logits) and supports_choice_logits:
         generation = generate_with_choice_logits(
             prompt,
             image_paths=image_paths,
@@ -887,10 +1084,16 @@ def run_model_judge_branch(
         choice_signal = generation.get("choice_logits")
     else:
         raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
-        choice_signal = {
-            "available": False,
-            "reason": f"runner {type(runner).__name__} does not expose choice logits",
-        }
+        choice_signal = None
+        if collect_choice_logits:
+            choice_signal = {
+                "available": False,
+                "reason": (
+                    f"runner {type(runner).__name__} disables choice logits for this provider/model"
+                    if callable(generate_with_choice_logits) and not supports_choice_logits
+                    else f"runner {type(runner).__name__} does not expose choice logits"
+                ),
+            }
     print(
         "qa_stage_done "
         f"stage={stage} evidence_id={evidence_id} "
@@ -898,44 +1101,105 @@ def run_model_judge_branch(
         f"seconds={time.time() - stage_start:.1f}",
         flush=True,
     )
+    initial_raw = raw
+    final_raw = raw
+    format_repair = {
+        "attempted": False,
+        "succeeded": False,
+    }
     try:
-        judge = extract_json_object(raw)
-    except Exception as exc:
-        judge = failed_single_judge(check_name, f"{check_name} judge output was not valid JSON: {exc}")
-    judge["choice_logit_signal"] = choice_signal
-    judge["raw_output"] = raw
+        judge = parse_single_judge_output(raw, check_name)
+    except Exception as initial_exc:
+        format_repair = {
+            "attempted": True,
+            "succeeded": False,
+            "initial_error": f"{type(initial_exc).__name__}: {initial_exc}",
+        }
+        repair_prompt = build_judge_json_repair_prompt(
+            raw,
+            judge_schema_for_check(check_name, pass_fail_only=True),
+        )
+        repair_start = time.time()
+        print(
+            "qa_format_repair_start "
+            f"stage={stage} evidence_id={evidence_id} "
+            f"qa_id={qa_id} attempt={attempt}",
+            flush=True,
+        )
+        try:
+            final_raw = runner.generate(
+                repair_prompt,
+                image_paths=[],
+                video_paths=[],
+            )
+            judge = parse_single_judge_output(final_raw, check_name)
+            format_repair["succeeded"] = True
+        except OpenRouterRequestError:
+            raise
+        except Exception as repair_exc:
+            format_repair["repair_error"] = f"{type(repair_exc).__name__}: {repair_exc}"
+            judge = failed_single_judge(
+                check_name,
+                (
+                    f"{check_name} judge output remained invalid after one JSON repair attempt: "
+                    f"{repair_exc}"
+                ),
+            )
+        print(
+            "qa_format_repair_done "
+            f"stage={stage} evidence_id={evidence_id} "
+            f"qa_id={qa_id} attempt={attempt} "
+            f"succeeded={format_repair['succeeded']} "
+            f"seconds={time.time() - repair_start:.1f}",
+            flush=True,
+        )
+    if collect_choice_logits:
+        judge["choice_logit_signal"] = choice_signal
+    judge["raw_output"] = final_raw
+    if format_repair["attempted"]:
+        judge["initial_raw_output"] = initial_raw
+        judge["format_repair"] = format_repair
     return judge
 
 
-def check_from_single_judge(judge: dict[str, Any], check_name: str) -> dict[str, Any]:
+def check_from_single_judge(
+    judge: dict[str, Any],
+    check_name: str,
+    *,
+    include_decision_uncertainty: bool = False,
+) -> dict[str, Any]:
+    def finalize(check: dict[str, Any], *, emitted_status: Any = None) -> dict[str, Any]:
+        if not include_decision_uncertainty:
+            check.pop("decision_uncertainty", None)
+            check.pop("status_matches_effective_status", None)
+            return check
+        return attach_decision_uncertainty(
+            check,
+            check_name,
+            choice_signal=judge.get("choice_logit_signal"),
+            emitted_status=emitted_status,
+        )
+
     checks = judge.get("checks")
     if isinstance(checks, dict) and isinstance(checks.get(check_name), dict):
         check = dict(checks[check_name])
         status = str(check.get("status") or "").strip().upper()
         if status not in {"PASS", "FAIL"}:
-            return attach_decision_uncertainty(
+            return finalize(
                 {
                     "status": "FAIL",
                     "reason": f"{check_name} judge did not return status PASS or FAIL",
                     "fix": f"Return checks.{check_name}.status as PASS or FAIL.",
-                },
-                check_name,
-                choice_signal=judge.get("choice_logit_signal"),
+                }
             )
         check["status"] = status
-        return attach_decision_uncertainty(
-            check,
-            check_name,
-            choice_signal=judge.get("choice_logit_signal"),
-            emitted_status=status,
-        )
-    return attach_decision_uncertainty(
+        return finalize(check, emitted_status=status)
+    return finalize(
         {
             "status": "FAIL",
             "reason": f"{check_name} judge did not return checks.{check_name}",
             "fix": f"Return a valid {check_name} check object.",
-        },
-        check_name,
+        }
     )
 
 
@@ -945,40 +1209,53 @@ def merge_parallel_judges(
     evidence_groundedness_judge: dict[str, Any],
     answerability: dict[str, Any],
     schema_errors: list[str],
+    qa_item: dict[str, Any] | None = None,
+    participant_names: list[str] | tuple[str, ...] | None = None,
+    include_decision_uncertainty: bool = False,
+    quality_quota_by_check: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
+    schema_errors = qa_formality_errors(
+        qa_item or {},
+        schema_errors,
+        participant_names=participant_names,
+    )
     schema_branch = schema_formality_branch(schema_errors)
-    qa_formality_check = check_from_single_judge(qa_formality_judge, "qa_formality")
+    qa_formality_check = check_from_single_judge(
+        qa_formality_judge,
+        "qa_formality",
+        include_decision_uncertainty=include_decision_uncertainty,
+    )
     model_qa_formality_check = dict(qa_formality_check)
     semantic_subchecks = qa_formality_check.get("semantic_subchecks")
-    if isinstance(semantic_subchecks, dict):
-        other_activity = semantic_subchecks.get("other_person_activity_query")
-        if isinstance(other_activity, dict) and str(other_activity.get("status", "")).upper() == "FAIL":
-            qa_formality_check["status"] = "FAIL"
-            reason = str(other_activity.get("reason") or "")
-            qa_formality_check["reason"] = (
-                str(qa_formality_check.get("reason") or "")
-                + ("; " if qa_formality_check.get("reason") else "")
-                + "semantic_subchecks.other_person_activity_query failed"
-                + (f": {reason}" if reason else "")
+    semantic_failures = []
+    for subcheck_name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES:
+        subcheck = (
+            semantic_subchecks.get(subcheck_name)
+            if isinstance(semantic_subchecks, dict)
+            else None
+        )
+        if not isinstance(subcheck, dict):
+            semantic_failures.append(f"{subcheck_name} missing")
+            continue
+        status = str(subcheck.get("status") or "").strip().upper()
+        if status != "PASS":
+            detail = str(subcheck.get("reason") or "").strip()
+            semantic_failures.append(
+                f"{subcheck_name} {status.lower() if status else 'invalid'}"
+                + (f": {detail}" if detail else "")
             )
-            qa_formality_check["fix"] = (
-                "Replace the shallow concurrent-activity question with a concrete speaker-side "
-                "information need whose answer depends on the evidence provider's missing detail."
-            )
-        direct_name = semantic_subchecks.get("direct_name_leakage")
-        if isinstance(direct_name, dict) and str(direct_name.get("status", "")).upper() == "FAIL":
-            qa_formality_check["status"] = "FAIL"
-            reason = str(direct_name.get("reason") or "")
-            qa_formality_check["reason"] = (
-                str(qa_formality_check.get("reason") or "")
-                + ("; " if qa_formality_check.get("reason") else "")
-                + "semantic_subchecks.direct_name_leakage failed"
-                + (f": {reason}" if reason else "")
-            )
-            qa_formality_check["fix"] = (
-                "Remove direct person names from the question and preserve the first-person "
-                "or shared-memory perspective with pronouns, roles, or descriptions."
-            )
+    if semantic_failures:
+        qa_formality_check["status"] = "FAIL"
+        existing_reason = str(qa_formality_check.get("reason") or "").strip()
+        semantic_reason = "semantic subchecks failed: " + "; ".join(semantic_failures)
+        qa_formality_check["reason"] = (
+            f"{existing_reason}; {semantic_reason}" if existing_reason else semantic_reason
+        )
+        qa_formality_check["fix"] = (
+            "Repair every failed or missing formality subcheck: use natural first-person or "
+            "shared-memory wording, clarify references and options, express a concrete activity "
+            "relation, and remove participant names and timestamp citations."
+        )
     if schema_branch["status"] != "PASS":
         qa_formality_check["status"] = "FAIL"
         qa_formality_check["reason"] = (
@@ -988,13 +1265,32 @@ def merge_parallel_judges(
         )
         qa_formality_check["fix"] = (
             "Repair the generated JSON shape, multiple-choice options, correct letter, "
-            "answer text, required users, and required question-answer metadata."
+            "answer text, required users, required question-answer metadata, and any known "
+            "participant-name leakage."
         )
     qa_formality_check["schema_branch"] = schema_branch
     qa_formality_check["model_branch"] = model_qa_formality_check
-    qa_formality_check = attach_decision_uncertainty(qa_formality_check, "qa_formality")
+    if include_decision_uncertainty:
+        qa_formality_check = attach_decision_uncertainty(qa_formality_check, "qa_formality")
 
-    evidence_check = check_from_single_judge(evidence_groundedness_judge, "evidence_groundedness")
+    evidence_check = check_from_single_judge(
+        evidence_groundedness_judge,
+        "evidence_groundedness",
+        include_decision_uncertainty=include_decision_uncertainty,
+    )
+    if quality_quota_by_check:
+        qa_formality_quota = quality_quota_by_check.get("qa_formality")
+        if isinstance(qa_formality_quota, dict):
+            qa_formality_check = attach_quality_quota_metadata(
+                qa_formality_check,
+                quota_state=qa_formality_quota,
+            )
+        evidence_quota = quality_quota_by_check.get("evidence_groundedness")
+        if isinstance(evidence_quota, dict):
+            evidence_check = attach_quality_quota_metadata(
+                evidence_check,
+                quota_state=evidence_quota,
+            )
     answerability_check = answerability_check_from_gate(answerability)
 
     combined = {
@@ -1018,25 +1314,26 @@ def merge_parallel_judges(
         },
     }
 
-    entropy_by_check = {}
-    unavailable_entropy_checks = []
-    for check_name in sorted(DECISION_ENTROPY_JUDGE_CHECKS):
-        uncertainty = combined["checks"][check_name].get("decision_uncertainty") or {}
-        if uncertainty.get("available") is True:
-            entropy_by_check[check_name] = float(uncertainty["normalized_entropy"])
-        else:
-            unavailable_entropy_checks.append(check_name)
-    entropy_values = list(entropy_by_check.values())
-    combined["decision_uncertainty_summary"] = {
-        "available": not unavailable_entropy_checks,
-        "normalized_entropy_by_check": entropy_by_check,
-        "mean_normalized_entropy": (
-            round(sum(entropy_values) / len(entropy_values), 8) if entropy_values else None
-        ),
-        "max_normalized_entropy": round(max(entropy_values), 8) if entropy_values else None,
-        "unavailable_checks": unavailable_entropy_checks,
-        "note": "diagnostic only; this does not override PASS/FAIL gates",
-    }
+    if include_decision_uncertainty:
+        entropy_by_check = {}
+        unavailable_entropy_checks = []
+        for check_name in sorted(LEGACY_DECISION_ENTROPY_JUDGE_CHECKS):
+            uncertainty = combined["checks"][check_name].get("decision_uncertainty") or {}
+            if uncertainty.get("available") is True:
+                entropy_by_check[check_name] = float(uncertainty["normalized_entropy"])
+            else:
+                unavailable_entropy_checks.append(check_name)
+        entropy_values = list(entropy_by_check.values())
+        combined["decision_uncertainty_summary"] = {
+            "available": not unavailable_entropy_checks,
+            "normalized_entropy_by_check": entropy_by_check,
+            "mean_normalized_entropy": (
+                round(sum(entropy_values) / len(entropy_values), 8) if entropy_values else None
+            ),
+            "max_normalized_entropy": round(max(entropy_values), 8) if entropy_values else None,
+            "unavailable_checks": unavailable_entropy_checks,
+            "note": "diagnostic only; this does not override PASS/FAIL gates",
+        }
 
     feedback = []
     for check_name, check in combined["checks"].items():
@@ -1148,10 +1445,13 @@ def generator_decode_config(
 
 
 def dry_run_discovered_relation(packet: dict[str, Any], question_type: str) -> dict[str, Any]:
+    """Archived discovery-mode dry-run fixture for old artifact tests."""
+
     users = packet.get("required_users", [])[:2]
     speaker = users[0] if users else "User A"
     other = users[1] if len(users) > 1 else "User B"
     return {
+        "category": "reference_and_viewpoint_resolution",
         "need": "dry-run discovered cross-user information need",
         "speaker_user": speaker,
         "other_required_users": [other],
@@ -1268,23 +1568,12 @@ def run_answerability_eval(
             f"images={len(image_paths)} videos={len(video_paths)}",
             flush=True,
         )
-        generate_with_choice_logits = getattr(runner, "generate_with_choice_logits", None)
-        if callable(generate_with_choice_logits):
-            generation = generate_with_choice_logits(
-                prompt,
-                image_paths=image_paths,
-                video_paths=video_paths,
-                field_name="choice",
-                choices=tuple(OPTION_LETTERS),
-            )
-            raw = str(generation.get("text") or "")
-            choice_signal = generation.get("choice_logits")
-        else:
-            raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
-            choice_signal = {
-                "available": False,
-                "reason": f"runner {type(runner).__name__} does not expose choice logits",
-            }
+        # Archived inactive answerability-logit experiment:
+        # generation = runner.generate_with_choice_logits(..., choices=tuple(OPTION_LETTERS))
+        # choice_signal = generation.get("choice_logits")
+        # choice_uncertainty = answerability_uncertainty_from_choice_logits(choice_signal)
+        # Production answerability now uses ordinary JSON generation only.
+        raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
         print(
             "qa_stage_done "
             f"stage=answerability qa_id={qa_item.get('qa_id')} "
@@ -1300,24 +1589,10 @@ def run_answerability_eval(
                 "evidence_used": "",
                 "insufficient_reason": f"parse_failed: {exc}",
             }
-        choice_text = str(answer.get("choice") or "").strip().lower()
-        if choice_text == "insufficient":
-            choice_uncertainty = {
-                "available": False,
-                "reason": "choice was insufficient; direct A-E entropy is not applicable",
-            }
-        elif next(iter(answer), None) != "choice":
-            choice_uncertainty = {
-                "available": False,
-                "reason": "choice was not the first generated JSON field",
-            }
-        else:
-            choice_uncertainty = answerability_uncertainty_from_choice_logits(choice_signal)
         evaluations.append(
             {
                 **condition,
                 **answer,
-                "choice_uncertainty": choice_uncertainty,
                 "raw_output": raw,
                 "condition_media": condition_media_for_clips(
                     condition=condition,
@@ -1338,22 +1613,56 @@ def run_parallel_review_judges(
     packet: dict[str, Any],
     schema_errors: list[str],
     runner: Any,
+    qa_formality_runner: Any | None = None,
     media_backend: str,
     allow_openai_video_input: bool,
     prompt_rows: list[dict[str, Any]],
     full_image_paths: list[str],
     full_video_paths: list[str],
     attempt: int,
+    include_generator_rationale: bool = True,
+    pass_fail_only: bool = True,
+    quality_quota_counts: dict[str, int] | None = None,
+    quality_quota: int = DEFAULT_QUALITY_QUOTA,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Run qa_formality, evidence_groundedness, and answerability in parallel."""
 
-    qa_for_prompt = qa_for_judger_prompt(qa_item)
+    active_qa_formality_runner = qa_formality_runner or runner
+    participant_names = formality_participant_names(packet, qa_item)
+    schema_errors = qa_formality_errors(
+        qa_item,
+        schema_errors,
+        participant_names=participant_names,
+    )
+    # Production is unconditionally binary-only. Compatibility parameters remain so
+    # old offline callers still import cleanly, but cannot reactivate scoring here.
+    # Archived scored/quota activation:
+    # active_quota_counts = quality_quota_counts
+    # if not pass_fail_only:
+    #     active_quota_counts = active_quota_counts or {name: 0 for name in QUALITY_SCORED_JUDGE_CHECKS}
+    #     quality_quota_by_check = {
+    #         name: quality_quota_snapshot(active_quota_counts[name], quality_quota)
+    #         for name in QUALITY_SCORED_JUDGE_CHECKS
+    #     }
+    pass_fail_only = True
+    active_quota_counts: dict[str, int] | None = None
+    quality_quota_by_check: dict[str, dict[str, int]] | None = None
+    point_scoring_mode = "legacy_archived_not_active"
+    qa_for_prompt = qa_for_judger_prompt(
+        qa_item,
+        include_generator_rationale=include_generator_rationale,
+    )
     qa_formality_prompt = build_qa_formality_judge_prompt(
         qa_for_prompt,
         packet,
         schema_errors=schema_errors,
+        pass_fail_only=True,
     )
-    evidence_groundedness_prompt = build_evidence_groundedness_judge_prompt(qa_for_prompt, packet)
+    evidence_groundedness_prompt = build_evidence_groundedness_judge_prompt(
+        qa_for_prompt,
+        packet,
+        pass_fail_only=True,
+    )
     prompt_rows.append(
         {
             "stage": "qa_formality_judge",
@@ -1366,7 +1675,11 @@ def run_parallel_review_judges(
             "image_paths": [],
             "video_paths": [],
             "media_role": "text_only",
+            "model_id": getattr(active_qa_formality_runner, "model_id", None),
             "schema_branch": schema_formality_branch(schema_errors),
+            "generator_rationale_included": False,
+            "pass_fail_only": True,
+            "point_scoring": point_scoring_mode,
         }
     )
     prompt_rows.append(
@@ -1381,6 +1694,10 @@ def run_parallel_review_judges(
             "image_paths": full_image_paths,
             "video_paths": full_video_paths,
             "media_role": "full",
+            "model_id": getattr(runner, "model_id", None),
+            "generator_rationale_included": include_generator_rationale,
+            "pass_fail_only": True,
+            "point_scoring": point_scoring_mode,
         }
     )
 
@@ -1390,12 +1707,13 @@ def run_parallel_review_judges(
             run_model_judge_branch,
             check_name="qa_formality",
             prompt=qa_formality_prompt,
-            runner=runner,
+            runner=active_qa_formality_runner,
             image_paths=[],
             video_paths=[],
             evidence_id=packet.get("evidence_id"),
             qa_id=qa_item.get("qa_id"),
             attempt=attempt,
+            collect_choice_logits=False,
         )
         evidence_groundedness_future = executor.submit(
             run_model_judge_branch,
@@ -1407,6 +1725,7 @@ def run_parallel_review_judges(
             evidence_id=packet.get("evidence_id"),
             qa_id=qa_item.get("qa_id"),
             attempt=attempt,
+            collect_choice_logits=False,
         )
         answerability_future = executor.submit(
             run_answerability_eval,
@@ -1420,10 +1739,14 @@ def run_parallel_review_judges(
 
         try:
             qa_formality_judge = qa_formality_future.result()
+        except OpenRouterRequestError:
+            raise
         except Exception as exc:
             qa_formality_judge = failed_single_judge("qa_formality", f"qa_formality judge crashed: {exc}")
         try:
             evidence_groundedness_judge = evidence_groundedness_future.result()
+        except OpenRouterRequestError:
+            raise
         except Exception as exc:
             evidence_groundedness_judge = failed_single_judge(
                 "evidence_groundedness",
@@ -1431,6 +1754,8 @@ def run_parallel_review_judges(
             )
         try:
             answerability = answerability_future.result()
+        except OpenRouterRequestError:
+            raise
         except Exception as exc:
             answerability = {
                 "evaluations": [],
@@ -1448,23 +1773,58 @@ def run_parallel_review_judges(
         evidence_groundedness_judge=evidence_groundedness_judge,
         answerability=answerability,
         schema_errors=schema_errors,
+        qa_item=qa_item,
+        participant_names=participant_names,
+        include_decision_uncertainty=False,
+        quality_quota_by_check=None,
     )
+    for check_name in QUALITY_SCORED_JUDGE_CHECKS:
+        check = (judge.get("checks") or {}).get(check_name)
+        if not isinstance(check, dict):
+            continue
+        # Do not retain stray fields from the archived point/logit contracts even if
+        # a model emits them despite the binary production schema.
+        for archived_field in (
+            "quality_score",
+            "quality_flag",
+            "quality_reason",
+            "quota_rebuttal",
+            "quality_quota",
+            "quality_uncertainty",
+            "decision_uncertainty",
+            "status_matches_effective_status",
+        ):
+            check.pop(archived_field, None)
+    # Archived quota-counter update:
+    # if quality_quota_by_check and active_quota_counts is not None: ...
     trace = {
         "parallel": True,
         "schema_branch": schema_formality_branch(schema_errors),
+        "generator_rationale_included": include_generator_rationale,
+        "pass_fail_only": True,
+        "pass_fail_entropy_logits": "legacy_archived_not_collected",
+        "answerability_choice_logits": "legacy_archived_not_collected",
+        "point_scoring": point_scoring_mode,
         "qa_formality": {
+            "model_id": getattr(active_qa_formality_runner, "model_id", None),
+            "generator_rationale_included": False,
             "prompt": qa_formality_prompt,
             "raw_output": qa_formality_judge.get("raw_output"),
             "parsed": qa_formality_judge,
         },
         "evidence_groundedness": {
+            "model_id": getattr(runner, "model_id", None),
+            "generator_rationale_included": include_generator_rationale,
             "prompt": evidence_groundedness_prompt,
             "raw_output": evidence_groundedness_judge.get("raw_output"),
             "parsed": evidence_groundedness_judge,
         },
         "answerability": answerability,
+        "answerability_model_id": getattr(runner, "model_id", None),
         "merged": judge,
     }
+    # Archived quota trace emission:
+    # trace["quality_quota"] = {...}
     return judge, answerability, trace
 
 
@@ -1492,6 +1852,11 @@ def generate_video_qa_loop(
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
     judge_max_new_tokens: int | None = None,
+    judge_reasoning_effort: str | None = None,
+    qa_formality_use_generator: bool = False,
+    judge_include_generator_rationale: bool = True,
+    judge_pass_fail_only: bool = True,
+    judge_quality_quota: int = DEFAULT_QUALITY_QUOTA,
     dry_run: bool = False,
     generation_mode: str = "baseline",
     fixed_question_type_schedule: bool = False,
@@ -1502,10 +1867,17 @@ def generate_video_qa_loop(
     generator_top_p: float = DEFAULT_SAMPLING_TOP_P,
     generator_top_k: int | None = None,
 ) -> list[dict[str, Any]]:
+    # Archived scored/quota production switch:
+    # judge_pass_fail_only = caller-provided value
+    # judge_quality_quota = caller-provided value
+    # The live pipeline always uses ordinary JSON PASS/FAIL review.
+    judge_pass_fail_only = True
     if generation_mode not in GENERATION_MODES:
         raise ValueError(f"unknown generation_mode: {generation_mode}")
     if generator_decode_mode not in GENERATOR_DECODING_MODES:
         raise ValueError(f"unknown generator_decode_mode: {generator_decode_mode}")
+    # Archived scored-quota validation:
+    # if not judge_pass_fail_only and judge_quality_quota < 1: ...
     active_question_types = tuple(question_types or DEFAULT_QUESTION_TYPES)
     if not active_question_types:
         raise ValueError("question_types must include at least one question type")
@@ -1534,27 +1906,50 @@ def generate_video_qa_loop(
         disable_thinking=disable_thinking,
         api_key=api_key,
     )
+    effective_judge_model_id = judge_model_id or (
+        DEFAULT_JUDGE_MODEL_ID if active_judge_backend != active_backend else model_id
+    )
+    effective_judge_base_url = judge_base_url or base_url
+    effective_judge_max_new_tokens = judge_max_new_tokens or max_new_tokens
+    effective_judge_api_key = judge_api_key if judge_api_key is not None else api_key
+    judge_runner_matches_generator = (
+        active_judge_backend == active_backend
+        and effective_judge_model_id == model_id
+        and effective_judge_base_url == base_url
+        and effective_judge_max_new_tokens == max_new_tokens
+        and effective_judge_api_key == api_key
+        and not judge_reasoning_effort
+    )
     judge_runner = runner
-    if active_judge_backend != active_backend or judge_model_id or judge_base_url or judge_api_key or judge_max_new_tokens:
-        effective_judge_model_id = judge_model_id or (
-            DEFAULT_JUDGE_MODEL_ID if active_judge_backend != active_backend else model_id
-        )
+    if not judge_runner_matches_generator:
         judge_runner = make_runner(
             active_judge_backend,
             model_id=effective_judge_model_id,
-            base_url=judge_base_url or base_url,
-            max_new_tokens=judge_max_new_tokens or max_new_tokens,
+            base_url=effective_judge_base_url,
+            max_new_tokens=effective_judge_max_new_tokens,
             max_image_pixels=max_image_pixels,
             dtype=dtype,
             allow_cpu=allow_cpu,
             allow_openai_video_input=allow_openai_video_input,
             disable_thinking=disable_thinking,
-            api_key=judge_api_key if judge_api_key is not None else api_key,
+            api_key=effective_judge_api_key,
+            reasoning_effort=judge_reasoning_effort,
         )
+    qa_formality_runner = runner if qa_formality_use_generator else judge_runner
+    point_scoring_mode = "legacy_archived_not_active"
+    judge_contract = "binary_pass_fail"
     print(
         "qa_runner_config "
         f"generator_backend={active_backend} generator_model={runner.model_id} "
-        f"judge_backend={active_judge_backend} judge_model={judge_runner.model_id}",
+        f"qa_formality_model={qa_formality_runner.model_id} "
+        f"visual_judge_backend={active_judge_backend} visual_judge_model={judge_runner.model_id} "
+        f"judge_runner_shared_with_generator={judge_runner is runner} "
+        f"visual_judge_reasoning_effort={judge_reasoning_effort or 'provider_default'} "
+        f"generator_rationale_included={judge_include_generator_rationale} "
+        f"judge_contract={judge_contract} "
+        f"point_scoring={point_scoring_mode} "
+        "pass_fail_entropy_logits=legacy_archived_not_collected "
+        "answerability_choice_logits=legacy_archived_not_collected",
         flush=True,
     )
     prompts = StreamingJsonlRows(prompts_path, reset=not resume)
@@ -1566,6 +1961,10 @@ def generate_video_qa_loop(
         rejected.load_existing()
         prompts.load_existing()
         intermediate_rows.load_existing()
+    quality_quota_counts: dict[str, int] | None = None
+    # Archived resume-time quota restoration:
+    # quota_source_rows = list(intermediate_rows) or [*accepted, *rejected]
+    # quality_quota_counts = quality_quota_counts_from_rows(quota_source_rows)
     processed_evidence_ids = {
         str(row.get("evidence_id"))
         for row in [*accepted, *rejected]
@@ -1635,27 +2034,32 @@ def generate_video_qa_loop(
         feedback = None
         if dry_run:
             qa = dry_run_qa(packet, question_type, generation_mode=generation_mode)
-            discovery_prompt = None
-            discovered_relation = None
-            if generation_mode == "discovery":
-                discovery_prompt = build_relation_discovery_prompt(packet, question_type)
-                discovered_relation = dry_run_discovered_relation(packet, question_type)
-                gen_prompt = build_relation_mcq_prompt(packet, question_type, discovered_relation)
-            else:
-                gen_prompt = build_video_generation_prompt(
-                    packet,
-                    question_type,
-                    generation_mode=generation_mode,
-                )
-            schema_errors = validate_qa_item(qa)
+            # Archived discovery dry-run routing called build_relation_discovery_prompt
+            # followed by build_relation_mcq_prompt. Production is baseline-only.
+            gen_prompt = build_video_generation_prompt(
+                packet,
+                question_type,
+                generation_mode=generation_mode,
+            )
+            schema_errors = qa_formality_errors(
+                qa,
+                validate_qa_item(qa),
+                participant_names=formality_participant_names(packet, qa),
+            )
+            qa_for_prompt = qa_for_judger_prompt(
+                qa,
+                include_generator_rationale=judge_include_generator_rationale,
+            )
             qa_formality_prompt = build_qa_formality_judge_prompt(
-                qa_for_judger_prompt(qa),
+                qa_for_prompt,
                 packet,
                 schema_errors=schema_errors,
+                pass_fail_only=True,
             )
             evidence_groundedness_prompt = build_evidence_groundedness_judge_prompt(
-                qa_for_judger_prompt(qa),
+                qa_for_prompt,
                 packet,
+                pass_fail_only=True,
             )
             dry_trace = {
                 "evidence_id": packet.get("evidence_id"),
@@ -1673,39 +2077,31 @@ def generate_video_qa_loop(
                     "prepared_video_uploads": prepared_video_uploads,
                     "human_audit": human_audit_packet(packet),
                 },
-                "discovery": (
-                    {
-                        "prompt": discovery_prompt,
-                        "raw_output": None,
-                        "parsed": {"selected_relation": discovered_relation},
-                    }
-                    if generation_mode == "discovery"
-                    else {}
-                ),
                 "generation": {"prompt": gen_prompt, "raw_output": None},
                 "generator_decode": decode_config,
                 "judge": {
                     "parallel": True,
                     "schema_branch": schema_formality_branch(schema_errors),
-                    "qa_formality": {"prompt": qa_formality_prompt, "raw_output": None},
-                    "evidence_groundedness": {"prompt": evidence_groundedness_prompt, "raw_output": None},
+                    "generator_rationale_included": judge_include_generator_rationale,
+                    "pass_fail_only": True,
+                    "pass_fail_entropy_logits": "legacy_archived_not_collected",
+                    "answerability_choice_logits": "legacy_archived_not_collected",
+                    "point_scoring": point_scoring_mode,
+                    "qa_formality": {
+                        "generator_rationale_included": False,
+                        "prompt": qa_formality_prompt,
+                        "raw_output": None,
+                    },
+                    "evidence_groundedness": {
+                        "generator_rationale_included": judge_include_generator_rationale,
+                        "prompt": evidence_groundedness_prompt,
+                        "raw_output": None,
+                    },
                 },
                 "answerability": {"conditions": []},
                 "result": {"accepted": False, "dry_run": True},
             }
-            if generation_mode == "discovery":
-                prompts.append(
-                    {
-                        "stage": "discovery",
-                        "evidence_id": packet.get("evidence_id"),
-                        "question_type": question_type,
-                        "generation_mode": generation_mode,
-                        "attempt": 1,
-                        "prompt": discovery_prompt,
-                        "image_paths": image_paths,
-                        "video_paths": video_paths,
-                    }
-                )
+            # Archived discovery prompt-row emission removed from the production trace.
             prompts.append(
                 {
                     "stage": "generation",
@@ -1732,6 +2128,9 @@ def generate_video_qa_loop(
                     "video_paths": [],
                     "media_role": "text_only",
                     "schema_branch": schema_formality_branch(schema_errors),
+                    "generator_rationale_included": False,
+                    "pass_fail_only": True,
+                    "point_scoring": point_scoring_mode,
                 }
             )
             prompts.append(
@@ -1746,6 +2145,9 @@ def generate_video_qa_loop(
                     "image_paths": full_image_paths,
                     "video_paths": full_video_paths,
                     "media_role": "full",
+                    "generator_rationale_included": judge_include_generator_rationale,
+                    "pass_fail_only": True,
+                    "point_scoring": point_scoring_mode,
                 }
             )
             for condition in build_answerability_conditions(packet.get("required_users", [])):
@@ -1812,7 +2214,6 @@ def generate_video_qa_loop(
                     "prepared_video_uploads": prepared_video_uploads,
                     "human_audit": human_audit_packet(packet),
                 },
-                "discovery": {},
                 "generation": {},
                 "generator_decode": decode_config,
                 "judge": {},
@@ -1820,62 +2221,15 @@ def generate_video_qa_loop(
                 "result": {},
             }
             packet_trace.append(attempt_trace)
-            if generation_mode == "discovery":
-                discovery_prompt = build_relation_discovery_prompt(packet, question_type, feedback=feedback)
-                attempt_trace["discovery"]["prompt"] = discovery_prompt
-                prompts.append(
-                    {
-                        "stage": "discovery",
-                        "evidence_id": packet.get("evidence_id"),
-                        "question_type": question_type,
-                        "generation_mode": generation_mode,
-                        "attempt": attempt,
-                        "prompt": discovery_prompt,
-                        "image_paths": image_paths,
-                        "video_paths": video_paths,
-                    }
-                )
-                stage_start = time.time()
-                print(
-                    "qa_stage_start "
-                    f"stage=discovery evidence_id={packet.get('evidence_id')} "
-                    f"question_type={question_type} attempt={attempt} "
-                    f"images={len(image_paths)} videos={len(video_paths)}",
-                    flush=True,
-                )
-                raw_discovery = runner.generate(discovery_prompt, image_paths=image_paths, video_paths=video_paths)
-                print(
-                    "qa_stage_done "
-                    f"stage=discovery evidence_id={packet.get('evidence_id')} "
-                    f"question_type={question_type} attempt={attempt} "
-                    f"seconds={time.time() - stage_start:.1f}",
-                    flush=True,
-                )
-                attempt_trace["discovery"]["raw_output"] = raw_discovery
-                try:
-                    discovery = extract_json_object(raw_discovery)
-                except Exception as exc:
-                    feedback = f"Discovery output was not valid JSON: {exc}"
-                    attempt_trace["result"] = {"accepted": False, "reason": feedback}
-                    packet_rejections.append({"attempt": attempt, "reason": feedback, "raw_output": raw_discovery})
-                    continue
-                discovered_relation = discovery.get("selected_relation") if isinstance(discovery, dict) else None
-                if not isinstance(discovered_relation, dict) or not discovered_relation:
-                    discovered_relation = discovery
-                attempt_trace["discovery"]["parsed"] = discovery
-                gen_prompt = build_relation_mcq_prompt(
-                    packet,
-                    question_type,
-                    discovered_relation,
-                    feedback=feedback,
-                )
-            else:
-                gen_prompt = build_video_generation_prompt(
-                    packet,
-                    question_type,
-                    feedback=feedback,
-                    generation_mode=generation_mode,
-                )
+            # Archived discovery mode previously made a planning call here and then
+            # converted selected_relation with build_relation_mcq_prompt. Production
+            # now makes the single baseline generation call only.
+            gen_prompt = build_video_generation_prompt(
+                packet,
+                question_type,
+                feedback=feedback,
+                generation_mode=generation_mode,
+            )
             attempt_trace["generation"]["prompt"] = gen_prompt
             prompts.append(
                 {
@@ -1948,6 +2302,11 @@ def generate_video_qa_loop(
             qa["required_users"] = packet.get("required_users", qa.get("required_users", []))
             qa["model_id"] = runner.model_id
             qa["review_model_id"] = judge_runner.model_id
+            qa["review_model_ids"] = {
+                "qa_formality": qa_formality_runner.model_id,
+                "evidence_groundedness": judge_runner.model_id,
+                "answerability": judge_runner.model_id,
+            }
             qa["source_urls"] = packet.get("source_urls", {})
             qa["video_evidence"] = video_evidence_for_packet(packet)
             qa.setdefault("referred_timestamps", [])
@@ -1967,22 +2326,54 @@ def generate_video_qa_loop(
                 "review": qa.get("review"),
             }
 
-            schema_errors = validate_qa_item(qa)
+            schema_errors = qa_formality_errors(
+                qa,
+                validate_qa_item(qa),
+                participant_names=formality_participant_names(packet, qa),
+            )
             if schema_errors:
                 attempt_trace["schema_errors"] = schema_errors
 
-            judge, answerability, judge_trace = run_parallel_review_judges(
-                qa_item=qa,
-                packet=packet,
-                schema_errors=schema_errors,
-                runner=judge_runner,
-                media_backend=judge_media_backend,
-                allow_openai_video_input=allow_openai_video_input,
-                prompt_rows=prompts,
-                full_image_paths=full_image_paths,
-                full_video_paths=full_video_paths,
-                attempt=attempt,
-            )
+            try:
+                judge, answerability, judge_trace = run_parallel_review_judges(
+                    qa_item=qa,
+                    packet=packet,
+                    schema_errors=schema_errors,
+                    runner=judge_runner,
+                    qa_formality_runner=qa_formality_runner,
+                    media_backend=judge_media_backend,
+                    allow_openai_video_input=allow_openai_video_input,
+                    prompt_rows=prompts,
+                    full_image_paths=full_image_paths,
+                    full_video_paths=full_video_paths,
+                    attempt=attempt,
+                    include_generator_rationale=judge_include_generator_rationale,
+                    pass_fail_only=True,
+                    quality_quota_counts=None,
+                )
+            except OpenRouterRequestError as exc:
+                # This is an infrastructure failure, not a negative judgment. Preserve the
+                # generated candidate for recovery and stop instead of spending a new Qwen
+                # generation attempt on misleading "judge crashed" feedback.
+                reason = f"OpenRouter judge infrastructure failure after retries: {exc}"
+                attempt_trace["result"] = {
+                    "accepted": False,
+                    "infrastructure_error": True,
+                    "reason": reason,
+                }
+                qa["generation_trace"] = packet_trace
+                intermediate_rows.append(
+                    {
+                        "evidence_id": packet.get("evidence_id"),
+                        "qa_id": qa.get("qa_id"),
+                        "question_type": question_type,
+                        "generation_mode": generation_mode,
+                        "status": "judge_infrastructure_error",
+                        "reason": reason,
+                        "qa": qa,
+                    }
+                )
+                raise
             attempt_trace["judge"] = judge_trace
             attempt_trace["answerability"] = answerability
 
@@ -2073,7 +2464,7 @@ def generate_video_qa_loop(
 
 
 def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--backend", default="transformers-local", choices=["transformers-local", "openai-compatible-local", "gemini"])
+    parser.add_argument("--backend", default="transformers-local", choices=["transformers-local", "transformers-local-memory-safe", "openai-compatible-local", "openrouter", "gemini"])
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     parser.add_argument("--generation-mode", default="baseline", choices=GENERATION_MODES)
     parser.add_argument("--generator-decode-mode", default="greedy", choices=GENERATOR_DECODING_MODES)
@@ -2087,12 +2478,33 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--allow-cpu", action="store_true")
     parser.add_argument("--allow-openai-video-input", action="store_true")
     parser.add_argument("--disable-thinking", action="store_true")
-    parser.add_argument("--api-key", help="Provider API key; Gemini also reads GEMINI_API_KEY or GOOGLE_API_KEY")
-    parser.add_argument("--judge-backend", choices=["transformers-local", "openai-compatible-local", "gemini"])
+    parser.add_argument("--api-key", help="Provider API key; OpenRouter reads OPENROUTER_API_KEY and Gemini reads GEMINI_API_KEY or GOOGLE_API_KEY")
+    parser.add_argument("--judge-backend", choices=["transformers-local", "transformers-local-memory-safe", "openai-compatible-local", "openrouter", "gemini"])
     parser.add_argument("--judge-model-id", help=f"Model for review judges/evaluators; defaults to {DEFAULT_JUDGE_MODEL_ID} when judge backend differs")
     parser.add_argument("--judge-base-url")
     parser.add_argument("--judge-api-key")
     parser.add_argument("--judge-max-new-tokens", type=int)
+    parser.add_argument(
+        "--judge-reasoning-effort",
+        choices=OPENROUTER_REASONING_EFFORTS,
+        help="OpenRouter reasoning effort for the visual judges; omitted uses the provider default.",
+    )
+    parser.add_argument(
+        "--qa-formality-use-generator",
+        action="store_true",
+        help="Run the text-only qa_formality judge on the generator runner instead of the visual judge runner.",
+    )
+    parser.add_argument(
+        "--judge-hide-generator-rationale",
+        dest="judge_include_generator_rationale",
+        action="store_false",
+        default=True,
+        help="Withhold generator_rationale from both review judges.",
+    )
+    # Archived scored/quota CLI plumbing. Keeping these commented prevents an old
+    # launcher flag from reactivating score prompts in the production pipeline.
+    # parser.add_argument("--experimental-scored-judge", ...)
+    # parser.add_argument("--judge-quality-quota", ...)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--fixed-question-type-schedule", action="store_true")
     parser.add_argument(
@@ -2137,6 +2549,12 @@ def main(argv: list[str] | None = None) -> int:
         judge_base_url=args.judge_base_url,
         judge_api_key=args.judge_api_key,
         judge_max_new_tokens=args.judge_max_new_tokens,
+        judge_reasoning_effort=args.judge_reasoning_effort,
+        qa_formality_use_generator=args.qa_formality_use_generator,
+        judge_include_generator_rationale=args.judge_include_generator_rationale,
+        # Archived scored/quota CLI plumbing:
+        # judge_pass_fail_only=args.judge_pass_fail_only,
+        # judge_quality_quota=args.judge_quality_quota,
         dry_run=args.dry_run,
         generation_mode=args.generation_mode,
         fixed_question_type_schedule=args.fixed_question_type_schedule,

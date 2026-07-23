@@ -15,6 +15,14 @@
 
 set -euo pipefail
 
+# ARCHIVED LEGACY EXPERIMENT: this launcher required PASS/FAIL logit/entropy
+# JSON that the production pipeline no longer collects or accepts as a
+# requirement. Its remaining body is preserved below as the historical study
+# record; use run_clip_pruned_sampling_neutral_pf_50.sbatch for the current
+# binary PASS/FAIL production pipeline.
+echo "error=archived_pass_fail_entropy_experiment_not_a_production_pipeline" >&2
+exit 2
+
 PROJECT_ROOT="${QWEN3VL_PROJECT_ROOT:-/scratch/${USER}/Long-video-understanding-clip}"
 
 # Reuse existing CLIP-pruned video-pair packets.

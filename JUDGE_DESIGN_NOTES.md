@@ -19,20 +19,23 @@ are stored as `checks.qa_formality.schema_branch` and merged with the model
 qa_formality branch.
 
 The two model judges use the historical structured contract in which
-`checks.<judge>.status` is `PASS` or `FAIL`. At that answer-bearing decoding
-step the pipeline extracts the logits/log probabilities for the literal
-`PASS` and `FAIL` tokens and stores binary entropy under
-`check.decision_uncertainty`.
-`normalized_entropy` divides by `log(2)`. Entropy is diagnostic and does not
-alter acceptance or retry behavior. The active judge contract is binary
-PASS/FAIL; there is no proxy P/F output field.
+`checks.<judge>.status` is `PASS` or `FAIL`. Both receive the generator's
+`generator_rationale`, but must independently verify its claims. Production
+prompts and output rows do not request or retain 1/2/3 point scores, quality
+labels, quality rationales, quotas, or quota rebuttals. Those helpers remain
+only as archived offline experiment surfaces.
+
+PASS/FAIL logit collection and `check.decision_uncertainty` JSON are archived
+legacy experiment surfaces. The active production path does not request or
+attach them, and strict validation does not require them for acceptance. The
+offline helper and post-run analyzer remain available for previously generated
+artifacts. There is no proxy P/F output field.
 
 Each answerability condition uses `choice` as its answer-bearing JSON field.
-When the model directly chooses A-E, the pipeline captures all five choice weights and
-stores entropy under `evaluation.choice_uncertainty`, normalized by `log(5)`.
-An `insufficient` response has no A-E entropy and is marked unavailable. This
-metadata is diagnostic only; `answerability_gate()` continues to use only the
-parsed choice under the existing single-user/subset/combined rules.
+Production uses ordinary JSON generation and stores only the parsed response;
+the former A-E choice-weight and `evaluation.choice_uncertainty` path is
+archived. `answerability_gate()` uses the parsed choice under the existing
+single-user/subset/combined rules.
 
 Only the post-run analyzer computes `selection_sort_key` for evaluation and
 review prioritization. Sorting it ascending implements
@@ -40,11 +43,10 @@ review prioritization. Sorting it ascending implements
 boundary between high and low entropy. The generation loop never reads or
 stores this key, so it cannot affect model output, acceptance, or retries.
 
-<!-- Archived inactive 1/2/3 scoring pipeline:
-The rubric judges emitted `final_quality_score`, extracted weights for tokens
-`1`, `2`, and `3`, stored `quality_score`, `quality_flag`, `quality_reason`, and
-`quality_uncertainty`, and summarized them under `quality_uncertainty_summary`.
-The score and entropy did not override the independent PASS/FAIL gate.
+<!-- Archived inactive point/logit scoring pipeline:
+The old experiments emitted 1/2/3 scores and quota metadata or extracted token
+weights for PASS/FAIL, A-E, and 1/2/3 choices. Production calls none of those
+paths and stores none of their uncertainty JSON.
 -->
 
 # EgoLife Video-First QA Judger 设计说明

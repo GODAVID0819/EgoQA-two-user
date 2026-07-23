@@ -15,6 +15,13 @@
 
 set -euo pipefail
 
+# ARCHIVED LEGACY EXPERIMENT: this launcher validates 1/2/3 quality-score
+# rubrics that the production judges no longer request or retain. Its body is
+# preserved below as a historical record. Use
+# run_clip_pruned_sampling_neutral_pf_50.sbatch for the maintained binary path.
+echo "error=archived_scored_judge_experiment_not_a_production_pipeline" >&2
+exit 2
+
 PROJECT_ROOT="${QWEN3VL_PROJECT_ROOT:-/scratch/${USER}/Long-video-understanding-clip}"
 
 # Reuse the same CLIP-pruned video-pair packets as the 50-pair decode ablation.

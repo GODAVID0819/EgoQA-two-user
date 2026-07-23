@@ -24,7 +24,12 @@ EVAL_PACKET_COUNT="${EGOLIFE2U_EVAL_PACKET_COUNT:-${TARGET_COUNT}}"
 MAX_GROUPS="${EGOLIFE2U_MAX_GROUPS:-80}"
 MAX_ATTEMPTS="${EGOLIFE2U_MAX_ATTEMPTS:-3}"
 MAX_NEW_TOKENS="${EGOLIFE2U_MAX_NEW_TOKENS:-2048}"
-GENERATION_MODE="${EGOLIFE2U_GENERATION_MODE:-discovery_control}"
+GENERATION_MODE="${EGOLIFE2U_GENERATION_MODE:-baseline}"
+# Archived modes: clip_guided, discovery, and discovery_control.
+if [[ "${GENERATION_MODE}" != "baseline" ]]; then
+  echo "Archived generation mode requested: ${GENERATION_MODE}. Only baseline is active." >&2
+  exit 2
+fi
 RESUME_GENERATION="${EGOLIFE2U_RESUME_GENERATION:-0}"
 
 CLIP_MODEL_ID="${CLIP_MODEL_ID:-openai/clip-vit-base-patch32}"

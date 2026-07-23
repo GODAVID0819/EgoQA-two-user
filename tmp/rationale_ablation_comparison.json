@@ -1,0 +1,2092 @@
+{
+  "scope": "two_independent_full_generation_loops_all_attempts",
+  "packet_count": 50,
+  "same_evidence_order": true,
+  "with_rationale": {
+    "condition": "with_rationale",
+    "generator_rationale_included": true,
+    "scope": "all_attempts_and_final_packet_outcomes",
+    "packet_count": 50,
+    "accepted_count": 27,
+    "rejected_count": 23,
+    "acceptance_rate": 0.54,
+    "total_generation_attempts": 117,
+    "judged_attempts": 117,
+    "average_generation_attempts_per_packet": 2.34,
+    "generation_attempt_histogram": {
+      "1": 13,
+      "2": 7,
+      "3": 30
+    },
+    "accepted_by_attempt": {
+      "1": 13,
+      "2": 7,
+      "3": 7
+    },
+    "final_rejection_failure_counts": {
+      "answerability": 20,
+      "evidence_groundedness": 17,
+      "qa_formality": 4
+    },
+    "all_attempt_grounding_failure_count": 35,
+    "all_attempt_grounding_hallucination_mention_count": 19,
+    "evidence_ids": [
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11460000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_12213000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_20570000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_19100000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11520000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_20040000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_13460000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_21140000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10390000_A3_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_19220000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11133000_A4_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_21340000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_19320000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_15200000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_16533000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_23170000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_21120000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_17193000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_14383000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_12530000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_12083000_A2_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_22423000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_22480000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15283000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_13103000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_18220000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10570000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_12500000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_18360000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_12420000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_18003000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_13380000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_16390000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_16080000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_20330000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12410000_A5_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_14280000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_15333000_A3_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11400000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_12303000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_15050000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_16253000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_11360000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_18280000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_16093000_A2_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_20133000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_13553000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11073000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_15383000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_17340000_A3_A6_0-1"
+    ],
+    "checks": {
+      "qa_formality": {
+        "score_distribution": {
+          "1": 22,
+          "3": 95
+        },
+        "pass_fail_distribution": {
+          "FAIL": 22,
+          "PASS": 95
+        },
+        "quality_reason_present_count": 117,
+        "quality_reason_missing_count": 0,
+        "three_point_assignment_count": 95,
+        "three_point_positions": [
+          {
+            "judged_attempt": 1,
+            "packet_index": 1,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 2,
+            "packet_index": 1,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 3,
+            "packet_index": 1,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 4,
+            "packet_index": 2,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 5,
+            "packet_index": 2,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 6,
+            "packet_index": 2,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 7,
+            "packet_index": 3,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 8,
+            "packet_index": 3,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 9,
+            "packet_index": 3,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 11,
+            "packet_index": 4,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 12,
+            "packet_index": 4,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 13,
+            "packet_index": 5,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 15,
+            "packet_index": 6,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 16,
+            "packet_index": 6,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 17,
+            "packet_index": 7,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 19,
+            "packet_index": 7,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 20,
+            "packet_index": 8,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 21,
+            "packet_index": 8,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 22,
+            "packet_index": 8,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 23,
+            "packet_index": 9,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 24,
+            "packet_index": 9,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 25,
+            "packet_index": 9,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 27,
+            "packet_index": 10,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 28,
+            "packet_index": 11,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 29,
+            "packet_index": 12,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 30,
+            "packet_index": 12,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 31,
+            "packet_index": 12,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 32,
+            "packet_index": 13,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 33,
+            "packet_index": 14,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 35,
+            "packet_index": 14,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 36,
+            "packet_index": 15,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 37,
+            "packet_index": 16,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 40,
+            "packet_index": 17,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 41,
+            "packet_index": 18,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 42,
+            "packet_index": 18,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 43,
+            "packet_index": 19,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 44,
+            "packet_index": 20,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 45,
+            "packet_index": 21,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 46,
+            "packet_index": 21,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 47,
+            "packet_index": 21,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 48,
+            "packet_index": 22,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 49,
+            "packet_index": 22,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 52,
+            "packet_index": 23,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 53,
+            "packet_index": 24,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 56,
+            "packet_index": 25,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 57,
+            "packet_index": 26,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 58,
+            "packet_index": 27,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 59,
+            "packet_index": 28,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 60,
+            "packet_index": 28,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 61,
+            "packet_index": 28,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 63,
+            "packet_index": 29,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 64,
+            "packet_index": 29,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 65,
+            "packet_index": 30,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 66,
+            "packet_index": 31,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 67,
+            "packet_index": 31,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 68,
+            "packet_index": 31,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 69,
+            "packet_index": 32,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 70,
+            "packet_index": 32,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 71,
+            "packet_index": 32,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 72,
+            "packet_index": 33,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 73,
+            "packet_index": 33,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 74,
+            "packet_index": 33,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 75,
+            "packet_index": 34,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 76,
+            "packet_index": 34,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 77,
+            "packet_index": 34,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 78,
+            "packet_index": 35,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 79,
+            "packet_index": 36,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 80,
+            "packet_index": 36,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 81,
+            "packet_index": 36,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 82,
+            "packet_index": 37,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 83,
+            "packet_index": 37,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 84,
+            "packet_index": 38,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 85,
+            "packet_index": 38,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 86,
+            "packet_index": 38,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 87,
+            "packet_index": 39,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 88,
+            "packet_index": 39,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 90,
+            "packet_index": 40,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 92,
+            "packet_index": 41,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 93,
+            "packet_index": 41,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 94,
+            "packet_index": 41,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 95,
+            "packet_index": 42,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 96,
+            "packet_index": 42,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 97,
+            "packet_index": 42,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 99,
+            "packet_index": 43,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 100,
+            "packet_index": 43,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 103,
+            "packet_index": 44,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 104,
+            "packet_index": 45,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 105,
+            "packet_index": 45,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 107,
+            "packet_index": 46,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 108,
+            "packet_index": 47,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 110,
+            "packet_index": 48,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 111,
+            "packet_index": 48,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 115,
+            "packet_index": 50,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 116,
+            "packet_index": 50,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 117,
+            "packet_index": 50,
+            "attempt": 3
+          }
+        ],
+        "last_three_point_position": {
+          "judged_attempt": 117,
+          "packet_index": 50,
+          "attempt": 3
+        },
+        "quota_rebuttal_required_count": 0,
+        "quota_rebuttal_present_count": 0,
+        "quota_rebuttal_present_when_required_count": 0,
+        "quota_rebuttal_missing_when_required_count": 0,
+        "quota_exceedance_records": [],
+        "quota_metadata_mismatch_records": []
+      },
+      "evidence_groundedness": {
+        "score_distribution": {
+          "1": 35,
+          "2": 2,
+          "3": 80
+        },
+        "pass_fail_distribution": {
+          "FAIL": 35,
+          "PASS": 82
+        },
+        "quality_reason_present_count": 117,
+        "quality_reason_missing_count": 0,
+        "three_point_assignment_count": 80,
+        "three_point_positions": [
+          {
+            "judged_attempt": 1,
+            "packet_index": 1,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 2,
+            "packet_index": 1,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 4,
+            "packet_index": 2,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 5,
+            "packet_index": 2,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 8,
+            "packet_index": 3,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 9,
+            "packet_index": 3,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 13,
+            "packet_index": 5,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 14,
+            "packet_index": 6,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 15,
+            "packet_index": 6,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 20,
+            "packet_index": 8,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 21,
+            "packet_index": 8,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 23,
+            "packet_index": 9,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 27,
+            "packet_index": 10,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 28,
+            "packet_index": 11,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 29,
+            "packet_index": 12,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 30,
+            "packet_index": 12,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 31,
+            "packet_index": 12,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 32,
+            "packet_index": 13,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 34,
+            "packet_index": 14,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 36,
+            "packet_index": 15,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 37,
+            "packet_index": 16,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 38,
+            "packet_index": 16,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 39,
+            "packet_index": 16,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 40,
+            "packet_index": 17,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 42,
+            "packet_index": 18,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 43,
+            "packet_index": 19,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 44,
+            "packet_index": 20,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 46,
+            "packet_index": 21,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 47,
+            "packet_index": 21,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 51,
+            "packet_index": 23,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 52,
+            "packet_index": 23,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 53,
+            "packet_index": 24,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 54,
+            "packet_index": 25,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 55,
+            "packet_index": 25,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 56,
+            "packet_index": 25,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 57,
+            "packet_index": 26,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 58,
+            "packet_index": 27,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 59,
+            "packet_index": 28,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 60,
+            "packet_index": 28,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 63,
+            "packet_index": 29,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 65,
+            "packet_index": 30,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 66,
+            "packet_index": 31,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 67,
+            "packet_index": 31,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 68,
+            "packet_index": 31,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 70,
+            "packet_index": 32,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 72,
+            "packet_index": 33,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 73,
+            "packet_index": 33,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 74,
+            "packet_index": 33,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 76,
+            "packet_index": 34,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 78,
+            "packet_index": 35,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 80,
+            "packet_index": 36,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 82,
+            "packet_index": 37,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 83,
+            "packet_index": 37,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 85,
+            "packet_index": 38,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 87,
+            "packet_index": 39,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 88,
+            "packet_index": 39,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 89,
+            "packet_index": 40,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 90,
+            "packet_index": 40,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 93,
+            "packet_index": 41,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 94,
+            "packet_index": 41,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 95,
+            "packet_index": 42,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 96,
+            "packet_index": 42,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 97,
+            "packet_index": 42,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 98,
+            "packet_index": 43,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 99,
+            "packet_index": 43,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 101,
+            "packet_index": 44,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 102,
+            "packet_index": 44,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 103,
+            "packet_index": 44,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 105,
+            "packet_index": 45,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 106,
+            "packet_index": 46,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 107,
+            "packet_index": 46,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 108,
+            "packet_index": 47,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 109,
+            "packet_index": 48,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 110,
+            "packet_index": 48,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 111,
+            "packet_index": 48,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 112,
+            "packet_index": 49,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 113,
+            "packet_index": 49,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 114,
+            "packet_index": 49,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 115,
+            "packet_index": 50,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 117,
+            "packet_index": 50,
+            "attempt": 3
+          }
+        ],
+        "last_three_point_position": {
+          "judged_attempt": 117,
+          "packet_index": 50,
+          "attempt": 3
+        },
+        "quota_rebuttal_required_count": 0,
+        "quota_rebuttal_present_count": 0,
+        "quota_rebuttal_present_when_required_count": 0,
+        "quota_rebuttal_missing_when_required_count": 0,
+        "quota_exceedance_records": [],
+        "quota_metadata_mismatch_records": []
+      }
+    }
+  },
+  "without_rationale": {
+    "condition": "without_rationale",
+    "generator_rationale_included": false,
+    "scope": "all_attempts_and_final_packet_outcomes",
+    "packet_count": 50,
+    "accepted_count": 25,
+    "rejected_count": 25,
+    "acceptance_rate": 0.5,
+    "total_generation_attempts": 122,
+    "judged_attempts": 120,
+    "average_generation_attempts_per_packet": 2.44,
+    "generation_attempt_histogram": {
+      "1": 10,
+      "2": 8,
+      "3": 32
+    },
+    "accepted_by_attempt": {
+      "1": 10,
+      "2": 8,
+      "3": 7
+    },
+    "final_rejection_failure_counts": {
+      "answerability": 22,
+      "evidence_groundedness": 10,
+      "qa_formality": 5
+    },
+    "all_attempt_grounding_failure_count": 39,
+    "all_attempt_grounding_hallucination_mention_count": 22,
+    "evidence_ids": [
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11460000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_12213000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_20570000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_19100000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11520000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_20040000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_13460000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_21140000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10390000_A3_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_19220000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11133000_A4_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_21340000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_19320000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_15200000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_16533000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_23170000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_21120000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_17193000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_14383000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_12530000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_12083000_A2_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_22423000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_22480000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15283000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_13103000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_18220000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10570000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_12500000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_18360000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_12420000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_18003000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_13380000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_16390000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_16080000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_20330000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12410000_A5_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_14280000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_15333000_A3_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11400000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_12303000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_15050000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_16253000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_11360000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_18280000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_16093000_A2_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_20133000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_13553000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11073000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_15383000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_17340000_A3_A6_0-1"
+    ],
+    "checks": {
+      "qa_formality": {
+        "score_distribution": {
+          "1": 24,
+          "2": 1,
+          "3": 95
+        },
+        "pass_fail_distribution": {
+          "FAIL": 24,
+          "PASS": 96
+        },
+        "quality_reason_present_count": 120,
+        "quality_reason_missing_count": 0,
+        "three_point_assignment_count": 95,
+        "three_point_positions": [
+          {
+            "judged_attempt": 1,
+            "packet_index": 1,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 2,
+            "packet_index": 1,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 3,
+            "packet_index": 1,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 4,
+            "packet_index": 2,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 5,
+            "packet_index": 2,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 6,
+            "packet_index": 2,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 7,
+            "packet_index": 3,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 8,
+            "packet_index": 3,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 10,
+            "packet_index": 4,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 14,
+            "packet_index": 5,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 18,
+            "packet_index": 6,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 20,
+            "packet_index": 7,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 21,
+            "packet_index": 7,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 22,
+            "packet_index": 8,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 24,
+            "packet_index": 8,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 25,
+            "packet_index": 9,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 26,
+            "packet_index": 10,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 27,
+            "packet_index": 11,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 28,
+            "packet_index": 12,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 29,
+            "packet_index": 13,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 30,
+            "packet_index": 13,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 31,
+            "packet_index": 13,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 32,
+            "packet_index": 14,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 33,
+            "packet_index": 14,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 34,
+            "packet_index": 14,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 35,
+            "packet_index": 15,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 37,
+            "packet_index": 15,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 38,
+            "packet_index": 16,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 39,
+            "packet_index": 17,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 40,
+            "packet_index": 17,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 41,
+            "packet_index": 17,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 42,
+            "packet_index": 18,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 44,
+            "packet_index": 18,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 45,
+            "packet_index": 19,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 46,
+            "packet_index": 19,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 47,
+            "packet_index": 19,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 48,
+            "packet_index": 20,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 49,
+            "packet_index": 20,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 50,
+            "packet_index": 21,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 51,
+            "packet_index": 21,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 52,
+            "packet_index": 21,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 53,
+            "packet_index": 22,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 55,
+            "packet_index": 22,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 56,
+            "packet_index": 23,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 57,
+            "packet_index": 24,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 59,
+            "packet_index": 25,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 62,
+            "packet_index": 26,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 64,
+            "packet_index": 27,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 65,
+            "packet_index": 28,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 67,
+            "packet_index": 28,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 68,
+            "packet_index": 29,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 69,
+            "packet_index": 29,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 70,
+            "packet_index": 30,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 71,
+            "packet_index": 31,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 72,
+            "packet_index": 31,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 74,
+            "packet_index": 32,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 76,
+            "packet_index": 32,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 77,
+            "packet_index": 33,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 78,
+            "packet_index": 33,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 79,
+            "packet_index": 33,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 80,
+            "packet_index": 34,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 81,
+            "packet_index": 34,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 82,
+            "packet_index": 34,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 83,
+            "packet_index": 35,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 84,
+            "packet_index": 36,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 85,
+            "packet_index": 36,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 86,
+            "packet_index": 36,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 89,
+            "packet_index": 37,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 90,
+            "packet_index": 38,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 91,
+            "packet_index": 38,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 92,
+            "packet_index": 38,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 93,
+            "packet_index": 39,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 94,
+            "packet_index": 39,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 95,
+            "packet_index": 39,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 96,
+            "packet_index": 40,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 97,
+            "packet_index": 40,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 98,
+            "packet_index": 40,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 99,
+            "packet_index": 41,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 101,
+            "packet_index": 41,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 102,
+            "packet_index": 42,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 104,
+            "packet_index": 42,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 105,
+            "packet_index": 43,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 106,
+            "packet_index": 43,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 107,
+            "packet_index": 43,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 108,
+            "packet_index": 44,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 109,
+            "packet_index": 44,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 110,
+            "packet_index": 45,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 111,
+            "packet_index": 45,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 112,
+            "packet_index": 45,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 113,
+            "packet_index": 46,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 114,
+            "packet_index": 47,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 116,
+            "packet_index": 48,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 117,
+            "packet_index": 49,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 118,
+            "packet_index": 50,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 120,
+            "packet_index": 50,
+            "attempt": 3
+          }
+        ],
+        "last_three_point_position": {
+          "judged_attempt": 120,
+          "packet_index": 50,
+          "attempt": 3
+        },
+        "quota_rebuttal_required_count": 0,
+        "quota_rebuttal_present_count": 0,
+        "quota_rebuttal_present_when_required_count": 0,
+        "quota_rebuttal_missing_when_required_count": 0,
+        "quota_exceedance_records": [],
+        "quota_metadata_mismatch_records": []
+      },
+      "evidence_groundedness": {
+        "score_distribution": {
+          "1": 39,
+          "2": 1,
+          "3": 80
+        },
+        "pass_fail_distribution": {
+          "FAIL": 39,
+          "PASS": 81
+        },
+        "quality_reason_present_count": 120,
+        "quality_reason_missing_count": 0,
+        "three_point_assignment_count": 80,
+        "three_point_positions": [
+          {
+            "judged_attempt": 1,
+            "packet_index": 1,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 2,
+            "packet_index": 1,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 4,
+            "packet_index": 2,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 5,
+            "packet_index": 2,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 8,
+            "packet_index": 3,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 9,
+            "packet_index": 3,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 12,
+            "packet_index": 4,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 13,
+            "packet_index": 5,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 15,
+            "packet_index": 5,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 16,
+            "packet_index": 6,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 18,
+            "packet_index": 6,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 19,
+            "packet_index": 7,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 23,
+            "packet_index": 8,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 24,
+            "packet_index": 8,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 25,
+            "packet_index": 9,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 26,
+            "packet_index": 10,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 27,
+            "packet_index": 11,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 28,
+            "packet_index": 12,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 29,
+            "packet_index": 13,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 30,
+            "packet_index": 13,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 31,
+            "packet_index": 13,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 32,
+            "packet_index": 14,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 33,
+            "packet_index": 14,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 35,
+            "packet_index": 15,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 36,
+            "packet_index": 15,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 38,
+            "packet_index": 16,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 41,
+            "packet_index": 17,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 43,
+            "packet_index": 18,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 44,
+            "packet_index": 18,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 47,
+            "packet_index": 19,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 49,
+            "packet_index": 20,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 50,
+            "packet_index": 21,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 52,
+            "packet_index": 21,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 54,
+            "packet_index": 22,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 55,
+            "packet_index": 22,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 56,
+            "packet_index": 23,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 57,
+            "packet_index": 24,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 58,
+            "packet_index": 25,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 59,
+            "packet_index": 25,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 60,
+            "packet_index": 25,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 61,
+            "packet_index": 26,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 62,
+            "packet_index": 26,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 63,
+            "packet_index": 27,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 64,
+            "packet_index": 27,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 65,
+            "packet_index": 28,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 67,
+            "packet_index": 28,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 69,
+            "packet_index": 29,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 70,
+            "packet_index": 30,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 71,
+            "packet_index": 31,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 72,
+            "packet_index": 31,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 73,
+            "packet_index": 31,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 74,
+            "packet_index": 32,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 75,
+            "packet_index": 32,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 77,
+            "packet_index": 33,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 79,
+            "packet_index": 33,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 83,
+            "packet_index": 35,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 84,
+            "packet_index": 36,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 86,
+            "packet_index": 36,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 87,
+            "packet_index": 37,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 88,
+            "packet_index": 37,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 93,
+            "packet_index": 39,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 94,
+            "packet_index": 39,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 95,
+            "packet_index": 39,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 97,
+            "packet_index": 40,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 101,
+            "packet_index": 41,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 103,
+            "packet_index": 42,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 104,
+            "packet_index": 42,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 105,
+            "packet_index": 43,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 108,
+            "packet_index": 44,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 109,
+            "packet_index": 44,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 110,
+            "packet_index": 45,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 112,
+            "packet_index": 45,
+            "attempt": 3
+          },
+          {
+            "judged_attempt": 113,
+            "packet_index": 46,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 114,
+            "packet_index": 47,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 115,
+            "packet_index": 48,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 116,
+            "packet_index": 48,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 117,
+            "packet_index": 49,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 118,
+            "packet_index": 50,
+            "attempt": 1
+          },
+          {
+            "judged_attempt": 119,
+            "packet_index": 50,
+            "attempt": 2
+          },
+          {
+            "judged_attempt": 120,
+            "packet_index": 50,
+            "attempt": 3
+          }
+        ],
+        "last_three_point_position": {
+          "judged_attempt": 120,
+          "packet_index": 50,
+          "attempt": 3
+        },
+        "quota_rebuttal_required_count": 0,
+        "quota_rebuttal_present_count": 0,
+        "quota_rebuttal_present_when_required_count": 0,
+        "quota_rebuttal_missing_when_required_count": 0,
+        "quota_exceedance_records": [],
+        "quota_metadata_mismatch_records": []
+      }
+    }
+  },
+  "final_packet_outcome_pairs": {
+    "without_accepted__with_accepted": 17,
+    "without_accepted__with_rejected": 8,
+    "without_rejected__with_accepted": 10,
+    "without_rejected__with_rejected": 15
+  },
+  "acceptance_rate_delta_with_minus_without": 0.04,
+  "acceptance_rate_delta_percentage_points": 4.0,
+  "generation_attempt_delta_with_minus_without": -5,
+  "first_attempt_generation_pairing": {
+    "shared_parseable_raw_output_count": 50,
+    "exact_match_count": 3,
+    "mismatch_count": 47,
+    "mismatch_evidence_ids": [
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11400000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11520000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_13380000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_13553000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_17193000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_18003000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_19320000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_12420000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_13103000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_13460000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_16080000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_18360000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY2_21140000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_12083000_A2_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_15333000_A3_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_20040000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_22423000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY3_22480000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_11360000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_12500000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_15383000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_16533000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_18220000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_18280000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY4_21340000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12410000_A5_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15283000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_16253000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_23170000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10390000_A3_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10570000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11073000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11133000_A4_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_12530000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_15200000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_16093000_A2_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_16390000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_17340000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_20133000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_20330000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_21120000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_12303000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_14280000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_14383000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_15050000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_19100000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY7_19220000_A1_A2_0-1"
+    ]
+  },
+  "interpretation_note": "Both conditions regenerate from the same videos with the same seed and settings. The treatment is whether judges see generator_rationale. Retry trajectories may diverge after a different judgment or feedback message, so the primary endpoints are full-loop acceptance, attempt usage, and all-attempt judge behavior."
+}

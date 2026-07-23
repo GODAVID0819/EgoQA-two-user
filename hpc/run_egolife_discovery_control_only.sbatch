@@ -15,6 +15,14 @@
 
 set -euo pipefail
 
+echo "This launcher is archived: discovery and discovery_control generation modes are inactive." >&2
+echo "Use the maintained baseline launcher instead." >&2
+exit 2
+
+# Archived implementation retained below for historical reproducibility. The
+# production CLI rejects discovery_control before any model call.
+: <<'ARCHIVED_DISCOVERY_CONTROL_IMPLEMENTATION'
+
 PROJECT_ROOT="${QWEN3VL_PROJECT_ROOT:-/scratch/${USER}/Long-video-understanding-clip}"
 OUTDIR="${EGOLIFE2U_OUTPUT_ROOT:-egolife_two_user_qa/outputs/discovery_control_5}"
 CACHE_DIR="${EGOLIFE2U_CACHE_DIR:-/scratch/${USER}/egolife_two_user_qa_cache}"
@@ -155,3 +163,4 @@ printf "mode\teval_packets\taccepted\trejected_or_failed\n" > "${SUMMARY_PATH}"
 printf "discovery_control\t%s\t%s\t%s\n" "${eval_count}" "${accepted_count}" "${rejected_count}" >> "${SUMMARY_PATH}"
 
 echo "date_done=$(date --iso-8601=seconds)"
+ARCHIVED_DISCOVERY_CONTROL_IMPLEMENTATION

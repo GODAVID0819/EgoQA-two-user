@@ -43,6 +43,8 @@ VIDEO_FIRST_JUDGE_CHECKS = {
     "evidence_groundedness",
     "answerability",
 }
+# Legacy-only schema surface for archived PASS/FAIL entropy artifacts. Production
+# validation leaves this disabled and does not require decision_uncertainty JSON.
 DECISION_ENTROPY_JUDGE_CHECKS = {
     "qa_formality",
     "evidence_groundedness",
@@ -82,7 +84,12 @@ def normalize_correct(value: Any) -> str:
     raise ValueError(f"Invalid correct option: {value!r}")
 
 
-def validate_qa_item(item: dict[str, Any], *, strict_review: bool = False) -> list[str]:
+def validate_qa_item(
+    item: dict[str, Any],
+    *,
+    strict_review: bool = False,
+    require_decision_entropy: bool = False,
+) -> list[str]:
     errors: list[str] = []
     missing = sorted(REQUIRED_QA_FIELDS - set(item))
     if missing:
@@ -177,13 +184,18 @@ def validate_qa_item(item: dict[str, Any], *, strict_review: bool = False) -> li
                     # if check_name in QUALITY_SCORED_JUDGE_CHECKS:
                     #     require quality_score in {1, 2, 3}, its quality_flag and
                     #     quality_reason, plus available 1/2/3 quality_uncertainty.
-                    if check_name in DECISION_ENTROPY_JUDGE_CHECKS:
+                    # Legacy opt-in validation for old entropy experiment outputs.
+                    # This block is intentionally outside the production acceptance contract.
+                    if (
+                        require_decision_entropy
+                        and check_name in DECISION_ENTROPY_JUDGE_CHECKS
+                    ):
                         uncertainty = check_value.get("decision_uncertainty")
-                        if not isinstance(uncertainty, dict) or uncertainty.get("available") is not True:
+                        if not isinstance(uncertainty, dict):
                             errors.append(
-                                f"judge check {check_name} must include available PASS/FAIL status entropy"
+                                f"judge check {check_name} must include PASS/FAIL status entropy metadata"
                             )
-                        else:
+                        elif uncertainty.get("available") is True:
                             probabilities = uncertainty.get("probabilities")
                             if not isinstance(probabilities, dict) or any(
                                 choice not in probabilities for choice in ("PASS", "FAIL")
@@ -196,6 +208,15 @@ def validate_qa_item(item: dict[str, Any], *, strict_review: bool = False) -> li
                                 errors.append(
                                     f"judge check {check_name} must include normalized_entropy in [0, 1]"
                                 )
+                        elif uncertainty.get("available") is False:
+                            if not str(uncertainty.get("reason") or "").strip():
+                                errors.append(
+                                    f"judge check {check_name} unavailable entropy must include a reason"
+                                )
+                        else:
+                            errors.append(
+                                f"judge check {check_name} entropy availability must be true or false"
+                            )
 
         answerability = review.get("answerability")
         if not isinstance(answerability, dict):

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=egolife_3modes
+#SBATCH --job-name=egolife_baseline
 #SBATCH --account=torch_pr_111_tandon_advanced
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -19,7 +19,8 @@ PROJECT_ROOT="${QWEN3VL_PROJECT_ROOT:-/scratch/${USER}/Long-video-understanding-
 OUTDIR="${EGOLIFE2U_OUTPUT_ROOT:-egolife_two_user_qa/outputs/three_mode_ablation_30}"
 CACHE_DIR="${EGOLIFE2U_CACHE_DIR:-/scratch/${USER}/egolife_two_user_qa_cache}"
 
-# Prepare and attempt the same evidence packets for all generation modes.
+# Historical filename retained for compatibility. The discovery, discovery-control,
+# and CLIP-guided generation modes are archived; this launcher now runs baseline only.
 EVAL_PACKET_COUNT="${EGOLIFE2U_EVAL_PACKET_COUNT:-${EGOLIFE2U_TARGET_COUNT:-30}}"
 EVIDENCE_TARGET_COUNT="${EGOLIFE2U_EVIDENCE_TARGET_COUNT:-${EVAL_PACKET_COUNT}}"
 MAX_ATTEMPTS="${EGOLIFE2U_MAX_ATTEMPTS:-3}"
@@ -161,34 +162,21 @@ run_mode() {
     --output-dir "${mode_dir}/review_videos"
 }
 
-case "${START_MODE}" in
-  baseline)
-    run_mode baseline
-    run_mode clip_guided
-    run_mode discovery
-    run_mode discovery_control
-    ;;
-  clip_guided)
-    run_mode clip_guided
-    run_mode discovery
-    run_mode discovery_control
-    ;;
-  discovery)
-    run_mode discovery
-    run_mode discovery_control
-    ;;
-  discovery_control)
-    run_mode discovery_control
-    ;;
-  *)
-    echo "Unknown EGOLIFE2U_START_MODE=${START_MODE}; expected baseline, clip_guided, discovery, or discovery_control" >&2
-    exit 2
-    ;;
-esac
+if [[ "${START_MODE}" != "baseline" ]]; then
+  echo "Archived generation mode requested: ${START_MODE}. Only baseline is active." >&2
+  exit 2
+fi
 
-SUMMARY_PATH="${OUTDIR}/three_mode_acceptance_summary.tsv"
+run_mode baseline
+
+# Archived multi-mode sequence:
+# run_mode clip_guided
+# run_mode discovery
+# run_mode discovery_control
+
+SUMMARY_PATH="${OUTDIR}/baseline_acceptance_summary.tsv"
 printf "mode\teval_packets\taccepted\trejected_or_failed\n" > "${SUMMARY_PATH}"
-for mode in baseline clip_guided discovery discovery_control; do
+for mode in baseline; do
   mode_dir="${OUTDIR}/${mode}"
   if [[ -s "${mode_dir}/qa_mcq.jsonl" ]]; then
     accepted_count="$(wc -l < "${mode_dir}/qa_mcq.jsonl")"

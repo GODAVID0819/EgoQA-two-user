@@ -6,7 +6,7 @@ import argparse
 import copy
 from pathlib import Path
 
-from .evidence import local_cache_path, prepare_evidence
+from .evidence import DEFAULT_EVIDENCE_DURATION_SECONDS, local_cache_path, prepare_evidence
 from .io_utils import iter_jsonl
 from .manifest import build_manifest
 from .candidate_mining import mine_candidates
@@ -17,6 +17,21 @@ from .clip_gap_demo import (
 )
 from .clip_exclusive_mining import mine_clip_exclusive_candidates
 from .group_relative_clip_sampling import mine_group_relative_clip_candidates
+from .pruning_k_grid import (
+    DEFAULT_K_VALUES,
+    DEFAULT_RANDOM_SEED,
+    parse_k_values,
+    run_pruning_k_grid,
+)
+from .pruning_ablation import (
+    DEFAULT_FPS_VALUES as DEFAULT_PRUNING_ABLATION_FPS_VALUES,
+    DEFAULT_RANDOM_SEED as DEFAULT_PRUNING_ABLATION_RANDOM_SEED,
+    DEFAULT_TEMPORAL_POLICIES,
+    DEFAULT_THRESHOLD_VALUES,
+    parse_float_values as parse_pruning_ablation_float_values,
+    parse_temporal_policies,
+    run_pruning_ablation,
+)
 from .observations import observe_clips
 from .object_hints import (
     DEFAULT_LOCAL_BASE_URL,
@@ -201,6 +216,12 @@ def main(argv: list[str] | None = None) -> int:
     evidence.add_argument("--target-count", type=int, default=20)
     evidence.add_argument("--users-per-case", type=int, default=2)
     evidence.add_argument("--frames-per-clip", type=int, default=3)
+    evidence.add_argument(
+        "--evidence-duration-seconds",
+        type=float,
+        default=DEFAULT_EVIDENCE_DURATION_SECONDS,
+        help="Complete synchronized evidence-window duration (default: 30 seconds)",
+    )
     evidence.add_argument("--aria-calibration-dir")
     evidence.add_argument("--max-groups", type=int)
     evidence.add_argument("--no-download-media", action="store_true")
@@ -296,11 +317,103 @@ def main(argv: list[str] | None = None) -> int:
         default="reject",
     )
     benchmark.add_argument("--min-pruned-video-percent", type=float)
+    benchmark.add_argument(
+        "--max-pair-time-difference-seconds",
+        type=float,
+        help=(
+            "Only prune high-similarity centroid pairs whose timestamps differ by at most "
+            "this many seconds; omit for timestamp-agnostic pruning"
+        ),
+    )
     benchmark.add_argument("--compare-all-pairs", action="store_true")
     benchmark.add_argument("--random-seed", type=int, default=42)
     benchmark.add_argument("--ffmpeg-binary", default="ffmpeg")
     benchmark.add_argument("--download-media", action="store_true")
     benchmark.add_argument("--review-dir")
+
+    k_grid = sub.add_parser(
+        "run_pruning_k_grid",
+        help="Sample fixed synchronized pairs and materialize clustered-pruning variants across K",
+    )
+    k_grid.add_argument("--manifest", required=True)
+    k_grid.add_argument("--output-dir", required=True)
+    k_grid.add_argument("--cache-dir", default=".cache/egolife_two_user_qa")
+    k_grid.add_argument("--pair-count", type=int, default=10)
+    k_grid.add_argument("--max-groups", type=int)
+    k_grid.add_argument("--min-group-size", type=int, default=2)
+    k_grid.add_argument("--k-values", default=",".join(str(value) for value in DEFAULT_K_VALUES))
+    k_grid.add_argument("--model-id", default="openai/clip-vit-base-patch32")
+    k_grid.add_argument("--duration-seconds", type=float, default=30.0)
+    k_grid.add_argument("--sample-interval-seconds", type=float, default=1.0)
+    k_grid.add_argument("--start-seconds", type=float, default=0.0)
+    k_grid.add_argument("--high-similarity-interval-threshold", type=float, default=0.82)
+    k_grid.add_argument("--preserve-shared-anchor-seconds", type=float, default=0.0)
+    k_grid.add_argument("--min-pruned-video-seconds", type=float, default=8.0)
+    k_grid.add_argument(
+        "--pruning-protection-mode",
+        choices=["reject", "min_seconds", "min_percent"],
+        default="min_seconds",
+    )
+    k_grid.add_argument("--min-pruned-video-percent", type=float)
+    k_grid.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED)
+    k_grid.add_argument("--ffmpeg-binary", default="ffmpeg")
+    k_grid.add_argument("--download-media", action="store_true")
+
+    pruning_ablation = sub.add_parser(
+        "run_pruning_ablation",
+        help=(
+            "Run separate temporal-policy, similarity-threshold, sampling-rate, and K sweeps "
+            "on fixed synchronized 30-second pairs"
+        ),
+    )
+    pruning_ablation.add_argument("--manifest", required=True)
+    pruning_ablation.add_argument("--output-dir", required=True)
+    pruning_ablation.add_argument("--cache-dir", default=".cache/egolife_two_user_qa")
+    pruning_ablation.add_argument("--pair-count", type=int, default=10)
+    pruning_ablation.add_argument("--max-groups", type=int)
+    pruning_ablation.add_argument("--min-group-size", type=int, default=2)
+    pruning_ablation.add_argument("--model-id", default="openai/clip-vit-base-patch32")
+    pruning_ablation.add_argument("--duration-seconds", type=float, default=30.0)
+    pruning_ablation.add_argument("--start-seconds", type=float, default=0.0)
+    pruning_ablation.add_argument("--baseline-fps", type=float, default=1.0)
+    pruning_ablation.add_argument("--baseline-k", type=int, default=12)
+    pruning_ablation.add_argument("--baseline-threshold", type=float, default=0.82)
+    pruning_ablation.add_argument(
+        "--baseline-temporal-policy",
+        choices=list(DEFAULT_TEMPORAL_POLICIES),
+        default="current",
+    )
+    pruning_ablation.add_argument(
+        "--fps-values",
+        default=",".join(f"{value:g}" for value in DEFAULT_PRUNING_ABLATION_FPS_VALUES),
+    )
+    pruning_ablation.add_argument(
+        "--k-values",
+        default=",".join(str(value) for value in DEFAULT_K_VALUES),
+    )
+    pruning_ablation.add_argument(
+        "--threshold-values",
+        default=",".join(f"{value:.2f}" for value in DEFAULT_THRESHOLD_VALUES),
+    )
+    pruning_ablation.add_argument(
+        "--temporal-policies",
+        default=",".join(DEFAULT_TEMPORAL_POLICIES),
+    )
+    pruning_ablation.add_argument("--preserve-shared-anchor-seconds", type=float, default=0.0)
+    pruning_ablation.add_argument("--min-pruned-video-seconds", type=float, default=8.0)
+    pruning_ablation.add_argument(
+        "--pruning-protection-mode",
+        choices=["reject", "min_seconds", "min_percent"],
+        default="min_seconds",
+    )
+    pruning_ablation.add_argument("--min-pruned-video-percent", type=float)
+    pruning_ablation.add_argument(
+        "--random-seed",
+        type=int,
+        default=DEFAULT_PRUNING_ABLATION_RANDOM_SEED,
+    )
+    pruning_ablation.add_argument("--ffmpeg-binary", default="ffmpeg")
+    pruning_ablation.add_argument("--download-media", action="store_true")
 
     video_gen = sub.add_parser(
         "generate_video_qa_loop",
@@ -404,6 +517,7 @@ def main(argv: list[str] | None = None) -> int:
             target_count=args.target_count,
             users_per_case=args.users_per_case,
             frames_per_clip=args.frames_per_clip,
+            evidence_duration_seconds=args.evidence_duration_seconds,
             aria_calibration_dir=args.aria_calibration_dir,
             max_groups=args.max_groups,
             download_media=not args.no_download_media,
@@ -548,6 +662,7 @@ def main(argv: list[str] | None = None) -> int:
             min_pruned_video_seconds=args.min_pruned_video_seconds,
             pruning_protection_mode=args.pruning_protection_mode,
             min_pruned_video_percent=args.min_pruned_video_percent,
+            max_pair_time_difference_seconds=args.max_pair_time_difference_seconds,
             random_pair_first=not args.compare_all_pairs,
             random_seed=args.random_seed,
             ffmpeg_binary=args.ffmpeg_binary,
@@ -555,6 +670,74 @@ def main(argv: list[str] | None = None) -> int:
             review_dir=args.review_dir,
         )
         print(f"wrote {len(rows)} CLIP-pruned benchmark evidence packets to {args.output}")
+        return 0
+    if args.command == "run_pruning_k_grid":
+        summary = run_pruning_k_grid(
+            manifest_path=args.manifest,
+            output_dir=args.output_dir,
+            cache_dir=args.cache_dir,
+            pair_count=args.pair_count,
+            max_groups=args.max_groups,
+            min_group_size=args.min_group_size,
+            k_values=parse_k_values(args.k_values),
+            model_id=args.model_id,
+            duration_seconds=args.duration_seconds,
+            sample_interval_seconds=args.sample_interval_seconds,
+            start_seconds=args.start_seconds,
+            high_similarity_threshold=args.high_similarity_interval_threshold,
+            preserve_shared_anchor_seconds=args.preserve_shared_anchor_seconds,
+            min_pruned_video_seconds=args.min_pruned_video_seconds,
+            pruning_protection_mode=args.pruning_protection_mode,
+            min_pruned_video_percent=args.min_pruned_video_percent,
+            random_seed=args.random_seed,
+            ffmpeg_binary=args.ffmpeg_binary,
+            download_media=args.download_media,
+        )
+        print(
+            f"wrote {summary['pair_count']} synchronized pairs and "
+            f"{summary['variant_count']} K-grid variants to {args.output_dir}"
+        )
+        return 0
+    if args.command == "run_pruning_ablation":
+        summary = run_pruning_ablation(
+            manifest_path=args.manifest,
+            output_dir=args.output_dir,
+            cache_dir=args.cache_dir,
+            pair_count=args.pair_count,
+            max_groups=args.max_groups,
+            min_group_size=args.min_group_size,
+            model_id=args.model_id,
+            duration_seconds=args.duration_seconds,
+            start_seconds=args.start_seconds,
+            baseline_fps=args.baseline_fps,
+            baseline_k=args.baseline_k,
+            baseline_threshold=args.baseline_threshold,
+            baseline_temporal_policy=args.baseline_temporal_policy,
+            fps_values=parse_pruning_ablation_float_values(
+                args.fps_values,
+                name="FPS",
+                minimum=1e-9,
+            ),
+            k_values=parse_k_values(args.k_values),
+            threshold_values=parse_pruning_ablation_float_values(
+                args.threshold_values,
+                name="threshold",
+                minimum=-1.0,
+                maximum=1.0,
+            ),
+            temporal_policies=parse_temporal_policies(args.temporal_policies),
+            preserve_shared_anchor_seconds=args.preserve_shared_anchor_seconds,
+            min_pruned_video_seconds=args.min_pruned_video_seconds,
+            pruning_protection_mode=args.pruning_protection_mode,
+            min_pruned_video_percent=args.min_pruned_video_percent,
+            random_seed=args.random_seed,
+            ffmpeg_binary=args.ffmpeg_binary,
+            download_media=args.download_media,
+        )
+        print(
+            f"wrote {summary['pair_count']} synchronized pairs and "
+            f"{summary['variant_count']} controlled pruning variants to {args.output_dir}"
+        )
         return 0
     if args.command == "add_object_hints":
         rows = enrich_evidence_with_object_hints(
@@ -610,6 +793,12 @@ def main(argv: list[str] | None = None) -> int:
             judge_base_url=args.judge_base_url,
             judge_api_key=args.judge_api_key,
             judge_max_new_tokens=args.judge_max_new_tokens,
+            judge_reasoning_effort=args.judge_reasoning_effort,
+            qa_formality_use_generator=args.qa_formality_use_generator,
+            judge_include_generator_rationale=args.judge_include_generator_rationale,
+            # Archived point-scoring CLI plumbing:
+            # judge_pass_fail_only=args.judge_pass_fail_only,
+            # judge_quality_quota=args.judge_quality_quota,
             dry_run=args.dry_run,
             generation_mode=args.generation_mode,
             fixed_question_type_schedule=args.fixed_question_type_schedule,

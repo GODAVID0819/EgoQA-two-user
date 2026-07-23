@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import base64
+import gc
+import hashlib
+import inspect
 import json
 import mimetypes
 import os
 import re
+import subprocess
 import threading
 import time
 import urllib.error
@@ -21,7 +25,22 @@ DEFAULT_GEMINI_MODEL_ID = "gemini-3.5-flash"
 DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_GEMINI_UPLOAD_URL = "https://generativelanguage.googleapis.com/upload/v1beta"
 DEFAULT_GEMINI_503_RETRY_DELAY_SECONDS = 60.0
+DEFAULT_OPENROUTER_MODEL_ID = "google/gemini-2.5-flash"
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_OPENROUTER_MAX_RETRIES = 4
+DEFAULT_OPENROUTER_RETRY_DELAY_SECONDS = 2.0
+OPENROUTER_REASONING_EFFORTS = ("max", "xhigh", "high", "medium", "low", "minimal", "none")
 DEFAULT_MAX_IMAGE_PIXELS = 262144
+DEFAULT_VIDEO_FPS = 1.0
+MEMORY_SAFE_BACKEND = "transformers-local-memory-safe"
+MEMORY_SAFE_DEFAULT_VIDEO_FPS = 1.0
+MEMORY_SAFE_DEFAULT_MAX_INPUT_TOKENS = 131_072
+MEMORY_SAFE_DEFAULT_MIN_FREE_GIB = 5.0
+MEMORY_SAFE_DEFAULT_KV_BYTES_PER_TOKEN = 65_536
+MEMORY_SAFE_DEFAULT_MIN_AVAILABLE_RAM_GIB = 16.0
+MEMORY_SAFE_DEFAULT_TRANSCODE_MAX_EDGE = 512
+MEMORY_SAFE_DEFAULT_TRANSCODE_CRF = 23
+MEMORY_SAFE_DEFAULT_ATTN_IMPLEMENTATION = "flash_attention_2"
 GENERATOR_DECODING_MODES = ("greedy", "sampling")
 DEFAULT_SAMPLING_TEMPERATURE = 0.7
 DEFAULT_SAMPLING_TOP_P = 0.9
@@ -30,6 +49,23 @@ DEFAULT_SAMPLING_TOP_P = 0.9
 # DEFAULT_SCORE_CHOICES = ("1", "2", "3")
 DEFAULT_CHOICE_FIELD = "status"
 DEFAULT_DECISION_CHOICES = ("PASS", "FAIL")
+
+
+class OpenRouterRequestError(RuntimeError):
+    """An OpenRouter transport/provider failure, not a model judgment."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: int | None = None,
+        error_type: str | None = None,
+        retryable: bool = True,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.error_type = error_type
+        self.retryable = retryable
 
 
 def locate_choice_token(
@@ -195,6 +231,59 @@ def cuda_available() -> bool:
         return False
 
 
+def available_host_memory_bytes() -> int | None:
+    """Return the tightest system/cgroup host-memory availability estimate."""
+
+    candidates: list[int] = []
+    try:
+        import psutil
+
+        candidates.append(int(psutil.virtual_memory().available))
+    except (ImportError, AttributeError, OSError, ValueError):
+        pass
+
+    meminfo = Path("/proc/meminfo")
+    if meminfo.is_file():
+        try:
+            fields = {}
+            for line in meminfo.read_text(encoding="utf-8").splitlines():
+                key, value = line.split(":", 1)
+                fields[key] = value.strip()
+            available_kib = int(fields["MemAvailable"].split()[0])
+            candidates.append(available_kib * 1024)
+        except (KeyError, OSError, TypeError, ValueError):
+            pass
+
+    cgroup_file = Path("/proc/self/cgroup")
+    if cgroup_file.is_file():
+        try:
+            for line in cgroup_file.read_text(encoding="utf-8").splitlines():
+                _, controllers, relative = line.split(":", 2)
+                relative_path = relative.lstrip("/")
+                if controllers == "":
+                    base = Path("/sys/fs/cgroup") / relative_path
+                    limit_path = base / "memory.max"
+                    usage_path = base / "memory.current"
+                elif "memory" in controllers.split(","):
+                    base = Path("/sys/fs/cgroup/memory") / relative_path
+                    limit_path = base / "memory.limit_in_bytes"
+                    usage_path = base / "memory.usage_in_bytes"
+                else:
+                    continue
+                limit_text = limit_path.read_text(encoding="utf-8").strip()
+                if limit_text == "max":
+                    continue
+                limit = int(limit_text)
+                usage = int(usage_path.read_text(encoding="utf-8").strip())
+                # Very large v1 limits conventionally mean "unlimited".
+                if limit < 2**60:
+                    candidates.append(max(0, limit - usage))
+        except (OSError, TypeError, ValueError):
+            pass
+
+    return min(candidates) if candidates else None
+
+
 def normalize_video_kwargs(video_kwargs: dict[str, Any]) -> dict[str, Any]:
     """Keep Qwen video kwargs compatible across qwen-vl-utils/Transformers versions."""
 
@@ -264,7 +353,13 @@ def split_video_inputs_and_metadata(
     return fixed_video_inputs, normalized_kwargs
 
 
-def load_transformers_model(model_id: str, dtype: str = "bfloat16"):
+def load_transformers_model(
+    model_id: str,
+    dtype: str = "bfloat16",
+    *,
+    attn_implementation: str = "sdpa",
+    device_map: str = "auto",
+):
     try:
         import torch
         from transformers import AutoModelForImageTextToText
@@ -276,8 +371,8 @@ def load_transformers_model(model_id: str, dtype: str = "bfloat16"):
             "float32": torch.float32,
         }.get(dtype, torch.bfloat16)
         kwargs: dict[str, Any] = {
-            "device_map": "auto",
-            "attn_implementation": "sdpa",
+            "device_map": device_map,
+            "attn_implementation": attn_implementation,
             "trust_remote_code": True,
         }
 
@@ -314,12 +409,35 @@ def load_transformers_model(model_id: str, dtype: str = "bfloat16"):
         ) from exc
 
 
+def supports_structured_chat_template_kwargs(processor: Any) -> bool:
+    """Detect the newer ProcessorMixin ``template_kwargs`` routing contract."""
+
+    try:
+        kwargs_parameter = inspect.signature(processor.apply_chat_template).parameters.get("kwargs")
+    except (TypeError, ValueError):
+        return False
+    if kwargs_parameter is None:
+        return False
+    return "AllKwargsForChatTemplate" in str(kwargs_parameter.annotation)
+
+
 def apply_chat_template_compat(processor: Any, messages: list[dict[str, Any]], *, disable_thinking: bool) -> str:
     kwargs = {
         "tokenize": False,
         "add_generation_prompt": True,
     }
     if disable_thinking:
+        if supports_structured_chat_template_kwargs(processor):
+            try:
+                return processor.apply_chat_template(
+                    messages,
+                    **kwargs,
+                    template_kwargs={"enable_thinking": False},
+                )
+            except TypeError:
+                # Some intermediate Transformers versions advertise the structured
+                # annotation but still implement the legacy direct-template route.
+                pass
         try:
             return processor.apply_chat_template(
                 messages,
@@ -343,6 +461,13 @@ class Qwen3VLTransformersRunner:
         dtype: str = "bfloat16",
         allow_cpu: bool = False,
         disable_thinking: bool = False,
+        video_fps: float = DEFAULT_VIDEO_FPS,
+        max_input_tokens: int | None = None,
+        min_free_gib: float = 0.0,
+        kv_bytes_per_token: int = 0,
+        min_available_ram_gib: float = 0.0,
+        attn_implementation: str = "sdpa",
+        device_map: str = "auto",
     ) -> None:
         if not allow_cpu and not cuda_available():
             raise RuntimeError(
@@ -357,17 +482,69 @@ class Qwen3VLTransformersRunner:
         self.max_new_tokens = max_new_tokens
         self.max_image_pixels = max_image_pixels
         self.disable_thinking = disable_thinking
+        self.video_fps = float(video_fps)
+        self.max_input_tokens = max_input_tokens
+        self.min_free_gib = float(min_free_gib)
+        self.kv_bytes_per_token = int(kv_bytes_per_token)
+        self.min_available_ram_gib = float(min_available_ram_gib)
+        self.attn_implementation = attn_implementation
+        self.device_map = device_map
+        if self.video_fps <= 0:
+            raise ValueError("video_fps must be positive")
+        if self.max_input_tokens is not None and self.max_input_tokens <= 0:
+            raise ValueError("max_input_tokens must be positive when set")
+        if self.min_free_gib < 0:
+            raise ValueError("min_free_gib must be non-negative")
+        if self.kv_bytes_per_token < 0:
+            raise ValueError("kv_bytes_per_token must be non-negative")
+        if self.min_available_ram_gib < 0:
+            raise ValueError("min_available_ram_gib must be non-negative")
         self.process_vision_info = process_vision_info
         start = time.time()
         print(f"loading_processor={model_id}", flush=True)
         self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
         print(f"loading_model={model_id}", flush=True)
-        self.model = load_transformers_model(model_id, dtype=dtype)
+        self.model = load_transformers_model(
+            model_id,
+            dtype=dtype,
+            attn_implementation=attn_implementation,
+            device_map=device_map,
+        )
         self.model.eval()
         self.device = next(self.model.parameters()).device
         self.torch = torch
         print(f"model_first_param_device={self.device}", flush=True)
         print(f"model_loaded_seconds={time.time() - start:.1f}", flush=True)
+
+    def _enforce_available_host_memory(self, *, stage: str) -> None:
+        if self.min_available_ram_gib <= 0:
+            return
+        available_bytes = available_host_memory_bytes()
+        if available_bytes is None:
+            raise RuntimeError(
+                "Cannot determine available host RAM for memory-safe inference"
+            )
+        available_gib = available_bytes / 1024**3
+        print(
+            "qwen_host_ram "
+            f"stage={stage} available_gib={available_gib:.3f} "
+            f"required_available_gib={self.min_available_ram_gib:.3f}",
+            flush=True,
+        )
+        if available_gib < self.min_available_ram_gib:
+            raise RuntimeError(
+                "Insufficient available host RAM for memory-safe inference: "
+                f"stage={stage} available_gib={available_gib:.3f} "
+                f"required_available_gib={self.min_available_ram_gib:.3f}"
+            )
+
+    def _estimated_kv_gib(self, *, input_tokens: int) -> float:
+        return (
+            (input_tokens + self.max_new_tokens) * self.kv_bytes_per_token / 1024**3
+        )
+
+    def _required_free_vram_gib(self, *, input_tokens: int) -> float:
+        return self._estimated_kv_gib(input_tokens=input_tokens) + self.min_free_gib
 
     def generate(
         self,
@@ -409,6 +586,31 @@ class Qwen3VLTransformersRunner:
             choices=choices,
         )
 
+    def generate_content(
+        self,
+        content: list[dict[str, Any]],
+        *,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
+    ) -> str:
+        """Generate from explicitly interleaved text/image/video content.
+
+        Grouped comparative review uses this path so each candidate label sits
+        immediately beside that candidate's full videos in the multimodal prompt.
+        """
+
+        result = self._generate(
+            "",
+            decoding_mode=decoding_mode,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            multimodal_content=content,
+        )
+        return str(result["text"])
+
     def _generate(
         self,
         prompt: str,
@@ -421,24 +623,40 @@ class Qwen3VLTransformersRunner:
         *,
         choice_field: str | None = None,
         choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
+        multimodal_content: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         image_paths = image_paths or []
         video_paths = video_paths or []
-        content: list[dict[str, Any]] = [
-            {"type": "image", "image": image_path, "max_pixels": self.max_image_pixels}
-            for image_path in image_paths
-        ]
-        content.extend(
-            {"type": "video", "video": video_path, "max_pixels": self.max_image_pixels, "fps": 1.0}
-            for video_path in video_paths
+        if multimodal_content is None:
+            content: list[dict[str, Any]] = [
+                {"type": "image", "image": image_path, "max_pixels": self.max_image_pixels}
+                for image_path in image_paths
+            ]
+            content.extend(
+                {
+                    "type": "video",
+                    "video": video_path,
+                    "max_pixels": self.max_image_pixels,
+                    "fps": self.video_fps,
+                }
+                for video_path in video_paths
+            )
+            content.append({"type": "text", "text": prompt})
+        else:
+            content = [dict(item) for item in multimodal_content]
+            image_paths = [str(item.get("image")) for item in content if item.get("type") == "image"]
+            video_paths = [str(item.get("video")) for item in content if item.get("type") == "video"]
+        prompt_chars = sum(
+            len(str(item.get("text", "")))
+            for item in content
+            if item.get("type") == "text"
         )
-        content.append({"type": "text", "text": prompt})
         messages = [{"role": "user", "content": content}]
         start = time.time()
         print(
             "qwen_generate_start "
             f"images={len(image_paths)} videos={len(video_paths)} "
-            f"prompt_chars={len(prompt)} disable_thinking={self.disable_thinking} "
+            f"prompt_chars={prompt_chars} disable_thinking={self.disable_thinking} "
             f"decoding_mode={decoding_mode}",
             flush=True,
         )
@@ -473,7 +691,12 @@ class Qwen3VLTransformersRunner:
             padding=True,
             return_tensors="pt",
             **video_kwargs,
-        ).to(self.device)
+        )
+        del image_inputs, video_inputs, video_kwargs
+        if self.min_available_ram_gib > 0:
+            gc.collect()
+        self._enforce_available_host_memory(stage="after_processor")
+        inputs = inputs.to(self.device)
         encode_seconds = time.time() - start
         input_tokens = int(inputs.input_ids.shape[-1]) if hasattr(inputs, "input_ids") else -1
         inputs.pop("video_metadata", None)
@@ -481,6 +704,32 @@ class Qwen3VLTransformersRunner:
             f"qwen_processor_encoded_seconds={encode_seconds:.1f} input_tokens={input_tokens}",
             flush=True,
         )
+        if self.max_input_tokens is not None and input_tokens > self.max_input_tokens:
+            raise RuntimeError(
+                "Qwen input exceeds the memory-safe token ceiling: "
+                f"input_tokens={input_tokens} max_input_tokens={self.max_input_tokens}. "
+                "Reduce video FPS or max image pixels before retrying."
+            )
+        if (self.min_free_gib > 0 or self.kv_bytes_per_token > 0) and self.torch.cuda.is_available():
+            free_bytes, total_bytes = self.torch.cuda.mem_get_info(self.device)
+            free_gib = free_bytes / 1024**3
+            estimated_kv_gib = self._estimated_kv_gib(input_tokens=input_tokens)
+            required_free_gib = self._required_free_vram_gib(input_tokens=input_tokens)
+            print(
+                "qwen_pre_generate_vram "
+                f"free_gib={free_gib:.3f} total_gib={total_bytes / 1024**3:.3f} "
+                f"estimated_kv_gib={estimated_kv_gib:.3f} "
+                f"workspace_reserve_gib={self.min_free_gib:.3f} "
+                f"required_free_gib={required_free_gib:.3f}",
+                flush=True,
+            )
+            if free_gib < required_free_gib:
+                raise RuntimeError(
+                    "Insufficient free CUDA memory for memory-safe generation: "
+                    f"free_gib={free_gib:.3f} required_free_gib={required_free_gib:.3f} "
+                    f"estimated_kv_gib={estimated_kv_gib:.3f} "
+                    f"workspace_reserve_gib={self.min_free_gib:.3f}"
+                )
         generate_kwargs = generation_kwargs(
             max_new_tokens=self.max_new_tokens,
             decoding_mode=decoding_mode,
@@ -597,8 +846,266 @@ class Qwen3VLTransformersRunner:
         return result
 
 
+class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
+    """Serialized, guarded local inference for long-video Qwen3.6-27B runs.
+
+    This is deliberately a separate backend. The historical ``transformers-local``
+    runner keeps its 1-FPS, SDPA, non-serialized behavior unchanged.
+    """
+
+    def __init__(
+        self,
+        model_id: str = DEFAULT_MODEL_ID,
+        *,
+        max_new_tokens: int = 1024,
+        max_image_pixels: int = DEFAULT_MAX_IMAGE_PIXELS,
+        dtype: str = "bfloat16",
+        allow_cpu: bool = False,
+        disable_thinking: bool = False,
+    ) -> None:
+        video_fps = float(
+            os.getenv("QWEN_MEMORY_SAFE_VIDEO_FPS", str(MEMORY_SAFE_DEFAULT_VIDEO_FPS))
+        )
+        max_input_tokens = int(
+            os.getenv(
+                "QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS",
+                str(MEMORY_SAFE_DEFAULT_MAX_INPUT_TOKENS),
+            )
+        )
+        min_free_gib = float(
+            os.getenv(
+                "QWEN_MEMORY_SAFE_GPU_RESERVE_GIB",
+                os.getenv(
+                    "QWEN_MEMORY_SAFE_MIN_FREE_GIB",
+                    str(MEMORY_SAFE_DEFAULT_MIN_FREE_GIB),
+                ),
+            )
+        )
+        min_available_ram_gib = float(
+            os.getenv(
+                "QWEN_MEMORY_SAFE_MIN_AVAILABLE_RAM_GIB",
+                str(MEMORY_SAFE_DEFAULT_MIN_AVAILABLE_RAM_GIB),
+            )
+        )
+        attn_implementation = os.getenv(
+            "QWEN_MEMORY_SAFE_ATTN_IMPLEMENTATION",
+            MEMORY_SAFE_DEFAULT_ATTN_IMPLEMENTATION,
+        )
+        self.transcode_local_videos = os.getenv(
+            "QWEN_MEMORY_SAFE_TRANSCODE_LOCAL_VIDEOS", "1"
+        ).strip().lower() not in {"0", "false", "no"}
+        self.transcode_max_edge = int(
+            os.getenv(
+                "QWEN_MEMORY_SAFE_TRANSCODE_MAX_EDGE",
+                str(MEMORY_SAFE_DEFAULT_TRANSCODE_MAX_EDGE),
+            )
+        )
+        self.transcode_crf = int(
+            os.getenv(
+                "QWEN_MEMORY_SAFE_TRANSCODE_CRF",
+                str(MEMORY_SAFE_DEFAULT_TRANSCODE_CRF),
+            )
+        )
+        self.transcode_cache_dir = Path(
+            os.getenv(
+                "QWEN_MEMORY_SAFE_VIDEO_CACHE_DIR",
+                ".qwen_memory_safe_video_cache",
+            )
+        )
+        if self.transcode_max_edge <= 0:
+            raise ValueError("QWEN_MEMORY_SAFE_TRANSCODE_MAX_EDGE must be positive")
+        if not 0 <= self.transcode_crf <= 51:
+            raise ValueError("QWEN_MEMORY_SAFE_TRANSCODE_CRF must be between 0 and 51")
+        super().__init__(
+            model_id,
+            max_new_tokens=max_new_tokens,
+            max_image_pixels=max_image_pixels,
+            dtype=dtype,
+            allow_cpu=allow_cpu,
+            disable_thinking=disable_thinking,
+            video_fps=video_fps,
+            max_input_tokens=max_input_tokens,
+            min_free_gib=min_free_gib,
+            kv_bytes_per_token=MEMORY_SAFE_DEFAULT_KV_BYTES_PER_TOKEN,
+            min_available_ram_gib=min_available_ram_gib,
+            attn_implementation=attn_implementation,
+        )
+        self._inference_lock = threading.Lock()
+        print(
+            "qwen_memory_safe_config "
+            f"model_id={self.model_id} video_fps={self.video_fps:g} "
+            f"max_image_pixels={self.max_image_pixels} "
+            f"max_input_tokens={self.max_input_tokens} "
+            f"gpu_workspace_reserve_gib={self.min_free_gib:g} "
+            f"kv_bytes_per_token={self.kv_bytes_per_token} "
+            f"min_available_ram_gib={self.min_available_ram_gib:g} "
+            f"transcode_local_videos={str(self.transcode_local_videos).lower()} "
+            f"transcode_max_edge={self.transcode_max_edge} "
+            f"attn_implementation={self.attn_implementation} serialized=true",
+            flush=True,
+        )
+
+    def _prepare_video_for_memory_safe_decode(self, path: str | Path) -> str:
+        source = Path(path).resolve()
+        if not self.transcode_local_videos:
+            return str(source)
+        stat = source.stat()
+        cache_key = "|".join(
+            (
+                str(source),
+                str(stat.st_size),
+                str(stat.st_mtime_ns),
+                str(self.video_fps),
+                str(self.transcode_max_edge),
+                str(self.transcode_crf),
+            )
+        )
+        digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:20]
+        output = self.transcode_cache_dir / f"{source.stem}.{digest}.mp4"
+        if output.is_file() and output.stat().st_size > 0:
+            return str(output)
+        self.transcode_cache_dir.mkdir(parents=True, exist_ok=True)
+        temporary = self.transcode_cache_dir / (
+            f".{source.stem}.{digest}.{threading.get_ident()}.tmp.mp4"
+        )
+        filters = (
+            f"fps={self.video_fps:g}",
+            (
+                f"scale={self.transcode_max_edge}:{self.transcode_max_edge}:"
+                "force_original_aspect_ratio=decrease"
+            ),
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        )
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-vf",
+            ",".join(filters),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            str(self.transcode_crf),
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(temporary),
+        ]
+        print(
+            "qwen_memory_safe_video_transcode_start "
+            f"source={source} source_bytes={stat.st_size} "
+            f"fps={self.video_fps:g} max_edge={self.transcode_max_edge} "
+            f"crf={self.transcode_crf}",
+            flush=True,
+        )
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            if not temporary.is_file() or temporary.stat().st_size <= 0:
+                raise RuntimeError(f"ffmpeg did not create a usable file: {temporary}")
+            temporary.replace(output)
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "ffmpeg is required by the memory-safe long-video backend"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            detail = str(exc.stderr or exc.stdout or exc).strip()[-2000:]
+            raise RuntimeError(f"memory-safe video ffmpeg transcode failed: {detail}") from exc
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        print(
+            "qwen_memory_safe_video_transcode_done "
+            f"output={output} output_bytes={output.stat().st_size}",
+            flush=True,
+        )
+        return str(output)
+
+    def _generate(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        multimodal_content = kwargs.get("multimodal_content")
+        if multimodal_content is not None:
+            guarded_content = []
+            for original_item in multimodal_content:
+                item = dict(original_item)
+                if item.get("type") == "video":
+                    requested_fps = float(item.get("fps", self.video_fps))
+                    requested_pixels = int(item.get("max_pixels", self.max_image_pixels))
+                    item["fps"] = min(requested_fps, self.video_fps)
+                    item["max_pixels"] = min(requested_pixels, self.max_image_pixels)
+                guarded_content.append(item)
+            kwargs = {**kwargs, "multimodal_content": guarded_content}
+        queued_at = time.time()
+        with self._inference_lock:
+            wait_seconds = time.time() - queued_at
+            self._enforce_available_host_memory(stage="before_video_transcode")
+            args = list(args)
+            if len(args) > 2 and args[2]:
+                args[2] = [
+                    self._prepare_video_for_memory_safe_decode(path) for path in args[2]
+                ]
+            elif kwargs.get("video_paths"):
+                kwargs = {
+                    **kwargs,
+                    "video_paths": [
+                        self._prepare_video_for_memory_safe_decode(path)
+                        for path in kwargs["video_paths"]
+                    ],
+                }
+            if kwargs.get("multimodal_content") is not None:
+                prepared_content = []
+                for original_item in kwargs["multimodal_content"]:
+                    item = dict(original_item)
+                    if item.get("type") == "video" and item.get("video"):
+                        item["video"] = self._prepare_video_for_memory_safe_decode(
+                            item["video"]
+                        )
+                    prepared_content.append(item)
+                kwargs = {**kwargs, "multimodal_content": prepared_content}
+            cuda_active = bool(self.torch.cuda.is_available())
+            if cuda_active:
+                self.torch.cuda.synchronize(self.device)
+                self.torch.cuda.reset_peak_memory_stats(self.device)
+                allocated_before = self.torch.cuda.memory_allocated(self.device)
+            else:
+                allocated_before = 0
+            print(
+                "qwen_memory_safe_inference_start "
+                f"lock_wait_seconds={wait_seconds:.3f}",
+                flush=True,
+            )
+            try:
+                self._enforce_available_host_memory(stage="before_video_decode")
+                return super()._generate(*args, **kwargs)
+            finally:
+                if cuda_active:
+                    self.torch.cuda.synchronize(self.device)
+                    peak_allocated = self.torch.cuda.max_memory_allocated(self.device)
+                    allocated_after = self.torch.cuda.memory_allocated(self.device)
+                    print(
+                        "qwen_memory_safe_vram "
+                        f"allocated_before_gib={allocated_before / 1024**3:.3f} "
+                        f"peak_allocated_gib={peak_allocated / 1024**3:.3f} "
+                        f"allocated_after_gib={allocated_after / 1024**3:.3f}",
+                        flush=True,
+                    )
+                    gc.collect()
+                    self.torch.cuda.empty_cache()
+                print("qwen_memory_safe_inference_done", flush=True)
+
+
 class OpenAICompatibleLocalRunner:
     """Call a local vLLM/SGLang/llama.cpp OpenAI-compatible server."""
+
+    supports_choice_logits = True
 
     def __init__(
         self,
@@ -634,6 +1141,7 @@ class OpenAICompatibleLocalRunner:
             decoding_mode=decoding_mode,
             temperature=temperature,
             top_p=top_p,
+            top_k=top_k,
         )
         return data["choices"][0]["message"]["content"].strip()
 
@@ -680,6 +1188,7 @@ class OpenAICompatibleLocalRunner:
         decoding_mode: str = "greedy",
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
         *,
         include_logprobs: bool = False,
     ) -> dict[str, Any]:
@@ -703,9 +1212,12 @@ class OpenAICompatibleLocalRunner:
         }
         if decoding_mode == "sampling":
             payload["top_p"] = top_p
+            if top_k is not None:
+                payload["top_k"] = top_k
         if include_logprobs:
             payload["logprobs"] = True
             payload["top_logprobs"] = 20
+        payload.update(self._extra_request_payload())
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
@@ -718,6 +1230,317 @@ class OpenAICompatibleLocalRunner:
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data
+
+    def _extra_request_payload(self) -> dict[str, Any]:
+        """Provider-specific request fields for OpenAI-compatible APIs."""
+
+        return {}
+
+
+class OpenRouterRunner(OpenAICompatibleLocalRunner):
+    """Call a multimodal model through OpenRouter's OpenAI-compatible API."""
+
+    # Gemini 2.5 Flash does not advertise logprobs/top_logprobs through OpenRouter.
+    # Judges still emit their PASS/FAIL or A-E decision; only entropy diagnostics are absent.
+    supports_choice_logits = False
+
+    def __init__(
+        self,
+        model_id: str = DEFAULT_OPENROUTER_MODEL_ID,
+        *,
+        base_url: str = DEFAULT_OPENROUTER_BASE_URL,
+        max_new_tokens: int = 1024,
+        timeout: int = 600,
+        api_key: str | None = None,
+        allow_video_input: bool = False,
+        reasoning_effort: str | None = None,
+        max_retries: int | None = None,
+        retry_delay_seconds: float | None = None,
+    ) -> None:
+        if reasoning_effort not in (None, *OPENROUTER_REASONING_EFFORTS):
+            raise ValueError(f"unsupported OpenRouter reasoning effort: {reasoning_effort}")
+        effective_api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+        if not effective_api_key:
+            raise RuntimeError("OpenRouter backend requires --api-key or OPENROUTER_API_KEY")
+        super().__init__(
+            model_id,
+            base_url=base_url,
+            max_new_tokens=max_new_tokens,
+            timeout=timeout,
+            api_key=effective_api_key,
+            allow_video_input=allow_video_input,
+        )
+        self.reasoning_effort = reasoning_effort
+        self.max_retries = int(
+            os.getenv("OPENROUTER_MAX_RETRIES", str(DEFAULT_OPENROUTER_MAX_RETRIES))
+            if max_retries is None
+            else max_retries
+        )
+        self.retry_delay_seconds = float(
+            os.getenv(
+                "OPENROUTER_RETRY_DELAY_SECONDS",
+                str(DEFAULT_OPENROUTER_RETRY_DELAY_SECONDS),
+            )
+            if retry_delay_seconds is None
+            else retry_delay_seconds
+        )
+        if self.max_retries < 0:
+            raise ValueError("OpenRouter max_retries must be non-negative")
+        if self.retry_delay_seconds < 0:
+            raise ValueError("OpenRouter retry_delay_seconds must be non-negative")
+        self.video_max_edge = int(os.getenv("OPENROUTER_VIDEO_MAX_EDGE", "0"))
+        self.video_fps = float(os.getenv("OPENROUTER_VIDEO_FPS", "0"))
+        self.video_crf = int(os.getenv("OPENROUTER_VIDEO_CRF", "28"))
+        self.video_cache_dir = Path(
+            os.getenv("OPENROUTER_VIDEO_CACHE_DIR", ".openrouter_video_cache")
+        )
+        self._video_cache_lock = threading.Lock()
+        if self.video_max_edge < 0:
+            raise ValueError("OPENROUTER_VIDEO_MAX_EDGE must be non-negative")
+        if self.video_fps < 0:
+            raise ValueError("OPENROUTER_VIDEO_FPS must be non-negative")
+        if not 0 <= self.video_crf <= 51:
+            raise ValueError("OPENROUTER_VIDEO_CRF must be between 0 and 51")
+
+    def _prepare_video_for_upload(self, path: str | Path) -> str:
+        """Create and cache a smaller MP4 before OpenRouter base64 encoding."""
+
+        source = Path(path).resolve()
+        if self.video_max_edge == 0 and self.video_fps == 0:
+            return str(source)
+        stat = source.stat()
+        cache_key = "|".join(
+            (
+                str(source),
+                str(stat.st_size),
+                str(stat.st_mtime_ns),
+                str(self.video_max_edge),
+                str(self.video_fps),
+                str(self.video_crf),
+            )
+        )
+        digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:20]
+        output = self.video_cache_dir / f"{source.stem}.{digest}.mp4"
+        with self._video_cache_lock:
+            if output.is_file() and output.stat().st_size > 0:
+                return str(output)
+            self.video_cache_dir.mkdir(parents=True, exist_ok=True)
+            temporary = self.video_cache_dir / f".{source.stem}.{digest}.{threading.get_ident()}.tmp.mp4"
+            filters = []
+            if self.video_fps > 0:
+                filters.append(f"fps={self.video_fps:g}")
+            if self.video_max_edge > 0:
+                filters.extend(
+                    (
+                        f"scale={self.video_max_edge}:{self.video_max_edge}:force_original_aspect_ratio=decrease",
+                        "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                    )
+                )
+            command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source),
+                "-map",
+                "0:v:0",
+                "-an",
+            ]
+            if filters:
+                command.extend(("-vf", ",".join(filters)))
+            command.extend(
+                (
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    str(self.video_crf),
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(temporary),
+                )
+            )
+            print(
+                "openrouter_video_transcode_start "
+                f"source={source} source_bytes={stat.st_size} "
+                f"max_edge={self.video_max_edge} fps={self.video_fps:g} crf={self.video_crf}",
+                flush=True,
+            )
+            try:
+                subprocess.run(command, check=True, capture_output=True, text=True)
+                if not temporary.is_file() or temporary.stat().st_size <= 0:
+                    raise RuntimeError(f"ffmpeg did not create a usable file: {temporary}")
+                temporary.replace(output)
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "ffmpeg is required when OpenRouter video compression is enabled"
+                ) from exc
+            except subprocess.CalledProcessError as exc:
+                detail = str(exc.stderr or exc.stdout or exc).strip()[-2000:]
+                raise RuntimeError(f"OpenRouter video ffmpeg transcode failed: {detail}") from exc
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
+            print(
+                "openrouter_video_transcode_done "
+                f"source={source} output={output} output_bytes={output.stat().st_size}",
+                flush=True,
+            )
+        return str(output)
+
+    @staticmethod
+    def _response_error(data: Any, *, status: int | None = None) -> OpenRouterRequestError | None:
+        if not isinstance(data, dict):
+            return OpenRouterRequestError(
+                "OpenRouter returned a non-object response",
+                code=status,
+                retryable=True,
+            )
+        error = data.get("error")
+        if isinstance(error, dict):
+            metadata = error.get("metadata") if isinstance(error.get("metadata"), dict) else {}
+            raw_code = error.get("code", status)
+            try:
+                code = int(raw_code) if raw_code is not None else None
+            except (TypeError, ValueError):
+                code = status
+            error_type = str(metadata.get("error_type") or "").strip() or None
+            message = str(error.get("message") or "OpenRouter provider error").strip()
+            retryable_types = {
+                "rate_limit_exceeded",
+                "provider_unavailable",
+                "provider_timeout",
+                "server_error",
+                "upstream_error",
+            }
+            nonretryable_types = {
+                "authentication",
+                "permission_denied",
+                "payment_required",
+                "invalid_request",
+                "context_length_exceeded",
+                "max_tokens_exceeded",
+                "token_limit_exceeded",
+                "string_too_long",
+            }
+            # Unknown provider-side errors are treated as transient. Only known request,
+            # account, and permission problems fail immediately because retries cannot fix them.
+            retryable = True
+            if code is not None and 400 <= code < 500 and code not in {408, 429}:
+                retryable = False
+            if error_type in retryable_types:
+                retryable = True
+            if error_type in nonretryable_types:
+                retryable = False
+            details = [f"code={code}" if code is not None else "code=unknown"]
+            if error_type:
+                details.append(f"type={error_type}")
+            return OpenRouterRequestError(
+                f"OpenRouter error ({', '.join(details)}): {message}",
+                code=code,
+                error_type=error_type,
+                retryable=retryable,
+            )
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return OpenRouterRequestError(
+                "OpenRouter returned no choices and no structured error",
+                code=status,
+                retryable=True,
+            )
+        first_choice = choices[0]
+        message = first_choice.get("message") if isinstance(first_choice, dict) else None
+        if not isinstance(message, dict) or message.get("content") is None:
+            return OpenRouterRequestError(
+                "OpenRouter returned a choice without message content",
+                code=status,
+                retryable=True,
+            )
+        return None
+
+    def _generate_response(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
+        *,
+        include_logprobs: bool = False,
+    ) -> dict[str, Any]:
+        prepared_video_paths = [self._prepare_video_for_upload(path) for path in (video_paths or [])]
+        attempts = self.max_retries + 1
+        last_error: OpenRouterRequestError | None = None
+        for attempt_index in range(attempts):
+            try:
+                data = super()._generate_response(
+                    prompt,
+                    image_paths=image_paths,
+                    video_paths=prepared_video_paths,
+                    decoding_mode=decoding_mode,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    include_logprobs=include_logprobs,
+                )
+                response_error = self._response_error(data)
+                if response_error is not None:
+                    raise response_error
+                return data
+            except urllib.error.HTTPError as exc:
+                try:
+                    raw_body = exc.read().decode("utf-8", errors="replace")
+                    body = json.loads(raw_body)
+                except Exception:
+                    body = {"error": {"code": exc.code, "message": str(exc)}}
+                last_error = self._response_error(body, status=exc.code) or OpenRouterRequestError(
+                    f"OpenRouter HTTP error {exc.code}: {exc.reason}",
+                    code=exc.code,
+                    retryable=exc.code == 408 or exc.code == 429 or exc.code >= 500,
+                )
+            except OpenRouterRequestError as exc:
+                last_error = exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                last_error = OpenRouterRequestError(
+                    f"OpenRouter transport error: {exc}",
+                    retryable=True,
+                )
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                last_error = OpenRouterRequestError(
+                    f"OpenRouter returned an unreadable JSON response: {exc}",
+                    retryable=True,
+                )
+
+            assert last_error is not None
+            if not last_error.retryable or attempt_index + 1 >= attempts:
+                raise last_error
+            delay = self.retry_delay_seconds * (2**attempt_index)
+            print(
+                "openrouter_retry "
+                f"model={self.model_id} attempt={attempt_index + 2}/{attempts} "
+                f"delay_seconds={delay:.1f} reason={last_error}",
+                flush=True,
+            )
+            if delay:
+                time.sleep(delay)
+        raise last_error or OpenRouterRequestError("OpenRouter request failed")
+
+    def _extra_request_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"provider": {"allow_fallbacks": True}}
+        if self.reasoning_effort is not None:
+            payload["reasoning"] = {
+                "effort": self.reasoning_effort,
+                # The judges need only the final JSON; do not return their private scratchpad.
+                "exclude": True,
+            }
+        return payload
 
 
 class GeminiRunner:
@@ -1087,9 +1910,33 @@ def make_runner(
     allow_openai_video_input: bool = False,
     disable_thinking: bool = False,
     api_key: str | None = None,
+    reasoning_effort: str | None = None,
+    video_fps: float = DEFAULT_VIDEO_FPS,
+    max_input_tokens: int | None = None,
+    min_free_gib: float = 0.0,
+    kv_bytes_per_token: int = 0,
+    min_available_ram_gib: float = 0.0,
+    attn_implementation: str = "sdpa",
+    device_map: str = "auto",
 ) -> Generator:
     if backend == "transformers-local":
         return Qwen3VLTransformersRunner(
+            model_id,
+            max_new_tokens=max_new_tokens,
+            max_image_pixels=max_image_pixels,
+            dtype=dtype,
+            allow_cpu=allow_cpu,
+            disable_thinking=disable_thinking,
+            video_fps=video_fps,
+            max_input_tokens=max_input_tokens,
+            min_free_gib=min_free_gib,
+            kv_bytes_per_token=kv_bytes_per_token,
+            min_available_ram_gib=min_available_ram_gib,
+            attn_implementation=attn_implementation,
+            device_map=device_map,
+        )
+    if backend == MEMORY_SAFE_BACKEND:
+        return Qwen3VLMemorySafeTransformersRunner(
             model_id,
             max_new_tokens=max_new_tokens,
             max_image_pixels=max_image_pixels,
@@ -1104,6 +1951,23 @@ def make_runner(
             max_new_tokens=max_new_tokens,
             api_key=api_key,
             allow_video_input=allow_openai_video_input,
+        )
+    if backend == "openrouter":
+        effective_base_url = (
+            DEFAULT_OPENROUTER_BASE_URL
+            if base_url == "http://127.0.0.1:8000/v1"
+            else base_url
+        )
+        effective_model_id = (
+            DEFAULT_OPENROUTER_MODEL_ID if model_id == DEFAULT_MODEL_ID else model_id
+        )
+        return OpenRouterRunner(
+            effective_model_id,
+            base_url=effective_base_url,
+            max_new_tokens=max_new_tokens,
+            api_key=api_key,
+            allow_video_input=allow_openai_video_input,
+            reasoning_effort=reasoning_effort,
         )
     if backend == "gemini":
         effective_base_url = (

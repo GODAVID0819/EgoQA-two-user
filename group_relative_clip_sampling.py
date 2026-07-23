@@ -357,32 +357,60 @@ def _side_best_frame_matches(
     matrix: list[list[float]],
     *,
     side: str,
+    left_frames: list[dict[str, Any]] | None = None,
+    right_frames: list[dict[str, Any]] | None = None,
+    max_pair_time_difference_seconds: float | None = None,
 ) -> dict[int, dict[str, Any]]:
     """Return each sampled frame's best cross-video match from a similarity matrix."""
 
+    if max_pair_time_difference_seconds is not None:
+        if max_pair_time_difference_seconds < 0:
+            raise ValueError("max_pair_time_difference_seconds must be non-negative")
+        if left_frames is None or right_frames is None:
+            raise ValueError("frame timestamps are required for time-gated matching")
+
+    def eligible(left_index: int, right_index: int) -> bool:
+        if max_pair_time_difference_seconds is None:
+            return True
+        left_timestamp = float(left_frames[left_index].get("timestamp_seconds", 0.0))
+        right_timestamp = float(right_frames[right_index].get("timestamp_seconds", 0.0))
+        return abs(left_timestamp - right_timestamp) <= max_pair_time_difference_seconds + 1e-9
+
     if side == "left":
-        return {
-            left_index: {
-                "best_match_index": int(max(enumerate(row), key=lambda item: item[1])[0]),
-                "best_match_similarity": float(max(row)),
+        matches = {}
+        for left_index, row in enumerate(matrix):
+            choices = [
+                (right_index, similarity)
+                for right_index, similarity in enumerate(row)
+                if eligible(left_index, right_index)
+            ]
+            if not choices:
+                continue
+            right_index, similarity = max(choices, key=lambda item: item[1])
+            matches[left_index] = {
+                "best_match_index": int(right_index),
+                "best_match_similarity": float(similarity),
             }
-            for left_index, row in enumerate(matrix)
-            if row
-        }
+        return matches
     if side == "right":
         if not matrix:
             return {}
         width = len(matrix[0])
-        return {
-            right_index: {
-                "best_match_index": int(max(
-                    ((left_index, matrix[left_index][right_index]) for left_index in range(len(matrix))),
-                    key=lambda item: item[1],
-                )[0]),
-                "best_match_similarity": float(max(matrix[left_index][right_index] for left_index in range(len(matrix)))),
+        matches = {}
+        for right_index in range(width):
+            choices = [
+                (left_index, matrix[left_index][right_index])
+                for left_index in range(len(matrix))
+                if eligible(left_index, right_index)
+            ]
+            if not choices:
+                continue
+            left_index, similarity = max(choices, key=lambda item: item[1])
+            matches[right_index] = {
+                "best_match_index": int(left_index),
+                "best_match_similarity": float(similarity),
             }
-            for right_index in range(width)
-        }
+        return matches
     raise ValueError(f"unknown side: {side}")
 
 
@@ -509,6 +537,8 @@ def clustered_frame_representatives(
     embeddings: list[list[float]],
     *,
     cluster_count: int,
+    split_noncontiguous_clusters: bool = False,
+    max_member_gap_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Cluster one video's sampled frame embeddings and expose medoid frames."""
 
@@ -518,37 +548,74 @@ def clustered_frame_representatives(
         raise ValueError("cannot cluster an empty frame list")
     if cluster_count <= 0:
         raise ValueError("cluster_count must be positive")
+    if split_noncontiguous_clusters and (
+        max_member_gap_seconds is None or max_member_gap_seconds <= 0
+    ):
+        raise ValueError("a positive max_member_gap_seconds is required when splitting clusters")
 
     labels, medoids = cluster_embedding_medoids(embeddings, cluster_count)
     representatives = []
     representative_embeddings = []
-    for cluster_index, frame_index in enumerate(medoids):
-        member_indices = [
+    output_labels = [-1 for _ in frames]
+    for visual_cluster_index, frame_index in enumerate(medoids):
+        visual_member_indices = [
             index
             for index, label in enumerate(labels)
-            if int(label) == int(cluster_index)
+            if int(label) == int(visual_cluster_index)
         ]
-        frame = frames[frame_index]
-        representatives.append(
-            {
-                "cluster_index": int(cluster_index),
-                "frame_index": int(frame_index),
-                "timestamp_seconds": frame.get("timestamp_seconds"),
-                "path": frame.get("path"),
-                "member_indices": member_indices,
-                "member_timestamps": [
-                    frames[index].get("timestamp_seconds")
-                    for index in member_indices
-                ],
-                "member_count": len(member_indices),
-            }
-        )
-        representative_embeddings.append(embeddings[frame_index])
+        components = [visual_member_indices]
+        if split_noncontiguous_clusters:
+            ordered = sorted(
+                visual_member_indices,
+                key=lambda index: (float(frames[index].get("timestamp_seconds", 0.0)), index),
+            )
+            components = []
+            for member_index in ordered:
+                if not components:
+                    components.append([member_index])
+                    continue
+                previous_index = components[-1][-1]
+                previous_timestamp = float(frames[previous_index].get("timestamp_seconds", 0.0))
+                timestamp = float(frames[member_index].get("timestamp_seconds", 0.0))
+                if timestamp - previous_timestamp > float(max_member_gap_seconds) + 1e-9:
+                    components.append([member_index])
+                else:
+                    components[-1].append(member_index)
+
+        for component_index, member_indices in enumerate(components):
+            if split_noncontiguous_clusters:
+                component_embeddings = [embeddings[index] for index in member_indices]
+                _, component_medoids = cluster_embedding_medoids(component_embeddings, 1)
+                frame_index = member_indices[component_medoids[0]]
+            cluster_index = len(representatives)
+            for member_index in member_indices:
+                output_labels[member_index] = cluster_index
+            frame = frames[frame_index]
+            representatives.append(
+                {
+                    "cluster_index": int(cluster_index),
+                    "visual_cluster_index": int(visual_cluster_index),
+                    "temporal_component_index": int(component_index),
+                    "frame_index": int(frame_index),
+                    "timestamp_seconds": frame.get("timestamp_seconds"),
+                    "path": frame.get("path"),
+                    "member_indices": member_indices,
+                    "member_timestamps": [
+                        frames[index].get("timestamp_seconds")
+                        for index in member_indices
+                    ],
+                    "member_count": len(member_indices),
+                }
+            )
+            representative_embeddings.append(embeddings[frame_index])
 
     return {
         "cluster_count_requested": cluster_count,
         "cluster_count": len(representatives),
-        "labels": [int(label) for label in labels],
+        "visual_cluster_count": len(medoids),
+        "split_noncontiguous_clusters": split_noncontiguous_clusters,
+        "max_member_gap_seconds": max_member_gap_seconds,
+        "labels": output_labels,
         "representatives": representatives,
         "representative_embeddings": representative_embeddings,
     }
@@ -569,6 +636,10 @@ def clustered_temporal_similarity_pruning(
     min_pruned_video_seconds: float = 8.0,
     pruning_protection_mode: str = "reject",
     min_pruned_video_percent: float | None = None,
+    max_pair_time_difference_seconds: float | None = None,
+    mutual_nearest_only: bool = False,
+    split_noncontiguous_clusters: bool = False,
+    max_cluster_member_gap_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Prune high-similarity clusters using representative sampled frames.
 
@@ -582,6 +653,10 @@ def clustered_temporal_similarity_pruning(
         raise ValueError("duration_seconds must be positive")
     if sample_interval_seconds <= 0:
         raise ValueError("sample_interval_seconds must be positive")
+    if max_pair_time_difference_seconds is not None and max_pair_time_difference_seconds < 0:
+        raise ValueError("max_pair_time_difference_seconds must be non-negative")
+    if split_noncontiguous_clusters and max_cluster_member_gap_seconds is None:
+        max_cluster_member_gap_seconds = 1.5 * float(sample_interval_seconds)
 
     window_start = float(start_seconds)
     window_end = round(window_start + float(duration_seconds), 3)
@@ -595,23 +670,70 @@ def clustered_temporal_similarity_pruning(
         left_frames,
         left_embeddings,
         cluster_count=cluster_count,
+        split_noncontiguous_clusters=split_noncontiguous_clusters,
+        max_member_gap_seconds=max_cluster_member_gap_seconds,
     )
     right_clusters = clustered_frame_representatives(
         right_frames,
         right_embeddings,
         cluster_count=cluster_count,
+        split_noncontiguous_clusters=split_noncontiguous_clusters,
+        max_member_gap_seconds=max_cluster_member_gap_seconds,
     )
     matrix = frame_similarity_matrix(
         left_clusters["representative_embeddings"],
         right_clusters["representative_embeddings"],
     )
 
+    def representative_time_difference(left_index: int, right_index: int) -> float:
+        left_timestamp = float(
+            left_clusters["representatives"][left_index].get("timestamp_seconds", 0.0)
+        )
+        right_timestamp = float(
+            right_clusters["representatives"][right_index].get("timestamp_seconds", 0.0)
+        )
+        return abs(left_timestamp - right_timestamp)
+
+    def representative_pair_is_eligible(left_index: int, right_index: int) -> bool:
+        return (
+            max_pair_time_difference_seconds is None
+            or representative_time_difference(left_index, right_index)
+            <= max_pair_time_difference_seconds + 1e-9
+        )
+
+    left_best: dict[int, int] = {}
+    for left_cluster_index, row in enumerate(matrix):
+        choices = [
+            (right_cluster_index, float(similarity))
+            for right_cluster_index, similarity in enumerate(row)
+            if representative_pair_is_eligible(left_cluster_index, right_cluster_index)
+        ]
+        if choices:
+            left_best[left_cluster_index] = max(choices, key=lambda item: item[1])[0]
+    right_best: dict[int, int] = {}
+    if matrix:
+        for right_cluster_index in range(len(matrix[0])):
+            choices = [
+                (left_cluster_index, float(matrix[left_cluster_index][right_cluster_index]))
+                for left_cluster_index in range(len(matrix))
+                if representative_pair_is_eligible(left_cluster_index, right_cluster_index)
+            ]
+            if choices:
+                right_best[right_cluster_index] = max(choices, key=lambda item: item[1])[0]
+
     high_pairs = []
     left_marked_clusters: set[int] = set()
     right_marked_clusters: set[int] = set()
     for left_cluster_index, row in enumerate(matrix):
         for right_cluster_index, similarity in enumerate(row):
+            if not representative_pair_is_eligible(left_cluster_index, right_cluster_index):
+                continue
             if float(similarity) < high_similarity_threshold:
+                continue
+            if mutual_nearest_only and not (
+                left_best.get(left_cluster_index) == right_cluster_index
+                and right_best.get(right_cluster_index) == left_cluster_index
+            ):
                 continue
             left_marked_clusters.add(left_cluster_index)
             right_marked_clusters.add(right_cluster_index)
@@ -626,6 +748,10 @@ def clustered_temporal_similarity_pruning(
                     "right_representative_frame_index": right_rep["frame_index"],
                     "left_representative_timestamp_seconds": left_rep.get("timestamp_seconds"),
                     "right_representative_timestamp_seconds": right_rep.get("timestamp_seconds"),
+                    "timestamp_difference_seconds": round(
+                        representative_time_difference(left_cluster_index, right_cluster_index),
+                        6,
+                    ),
                 }
             )
 
@@ -657,7 +783,13 @@ def clustered_temporal_similarity_pruning(
     left_protection = _apply_pruning_duration_protection(
         left_frames,
         left_marked_indices,
-        _side_best_frame_matches(full_frame_matrix, side="left"),
+        _side_best_frame_matches(
+            full_frame_matrix,
+            side="left",
+            left_frames=left_frames,
+            right_frames=right_frames,
+            max_pair_time_difference_seconds=max_pair_time_difference_seconds,
+        ),
         side="left",
         window_start=window_start,
         window_end=window_end,
@@ -669,7 +801,13 @@ def clustered_temporal_similarity_pruning(
     right_protection = _apply_pruning_duration_protection(
         right_frames,
         right_marked_indices,
-        _side_best_frame_matches(full_frame_matrix, side="right"),
+        _side_best_frame_matches(
+            full_frame_matrix,
+            side="right",
+            left_frames=left_frames,
+            right_frames=right_frames,
+            max_pair_time_difference_seconds=max_pair_time_difference_seconds,
+        ),
         side="right",
         window_start=window_start,
         window_end=window_end,
@@ -721,6 +859,10 @@ def clustered_temporal_similarity_pruning(
         "cluster_count": cluster_count,
         "left_cluster_count": left_clusters["cluster_count"],
         "right_cluster_count": right_clusters["cluster_count"],
+        "max_pair_time_difference_seconds": max_pair_time_difference_seconds,
+        "mutual_nearest_only": mutual_nearest_only,
+        "split_noncontiguous_clusters": split_noncontiguous_clusters,
+        "max_cluster_member_gap_seconds": max_cluster_member_gap_seconds,
         "preserve_shared_anchor_seconds": preserve_shared_anchor_seconds,
         "min_pruned_video_seconds": min_pruned_video_seconds,
         "pruning_protection_mode": pruning_protection_mode,
@@ -999,6 +1141,7 @@ def score_video_pairs(
     min_pruned_video_seconds: float = 8.0,
     pruning_protection_mode: str = "reject",
     min_pruned_video_percent: float | None = None,
+    max_pair_time_difference_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Filter video pairs using clustered-frame representatives and overlap metrics."""
 
@@ -1027,6 +1170,7 @@ def score_video_pairs(
                 min_pruned_video_seconds=min_pruned_video_seconds,
                 pruning_protection_mode=pruning_protection_mode,
                 min_pruned_video_percent=min_pruned_video_percent,
+                max_pair_time_difference_seconds=max_pair_time_difference_seconds,
             )
             matrix = temporal_pruning["representative_similarity_matrix"]
             values = _flatten_matrix(matrix)
@@ -1102,6 +1246,7 @@ def score_video_pairs(
             "min_pruned_video_seconds": min_pruned_video_seconds,
             "pruning_protection_mode": pruning_protection_mode,
             "min_pruned_video_percent": min_pruned_video_percent,
+            "max_pair_time_difference_seconds": max_pair_time_difference_seconds,
             "pair_count": len(pair_scores),
             "kept_pair_count": len(kept_pairs),
             "interpretation": (
@@ -1388,6 +1533,7 @@ def analyze_group_relative_similarity(
     min_pruned_video_seconds: float = 8.0,
     pruning_protection_mode: str = "reject",
     min_pruned_video_percent: float | None = None,
+    max_pair_time_difference_seconds: float | None = None,
     random_pair_first: bool = True,
     rng: random.Random | None = None,
     ffmpeg_binary: str = "ffmpeg",
@@ -1446,6 +1592,7 @@ def analyze_group_relative_similarity(
         min_pruned_video_seconds=min_pruned_video_seconds,
         pruning_protection_mode=pruning_protection_mode,
         min_pruned_video_percent=min_pruned_video_percent,
+        max_pair_time_difference_seconds=max_pair_time_difference_seconds,
     )
     surviving_pairs = pair_analysis["surviving_pairs"]
     if not surviving_pairs:
@@ -1496,6 +1643,7 @@ def analyze_group_relative_similarity(
             "min_pruned_video_seconds": min_pruned_video_seconds,
             "pruning_protection_mode": pruning_protection_mode,
             "min_pruned_video_percent": min_pruned_video_percent,
+            "max_pair_time_difference_seconds": max_pair_time_difference_seconds,
             "selected_indices": selected_indices,
             "selected_agents": [clip.get("agent_dir") for clip in selected_clips],
             "selected_users": [clip.get("agent_name") for clip in selected_clips],
@@ -1786,6 +1934,7 @@ def mine_group_relative_clip_candidates(
     min_pruned_video_seconds: float = 8.0,
     pruning_protection_mode: str = "reject",
     min_pruned_video_percent: float | None = None,
+    max_pair_time_difference_seconds: float | None = None,
     random_pair_first: bool = True,
     random_seed: int | None = 42,
     ffmpeg_binary: str = "ffmpeg",
@@ -1838,6 +1987,7 @@ def mine_group_relative_clip_candidates(
                 min_pruned_video_seconds=min_pruned_video_seconds,
                 pruning_protection_mode=pruning_protection_mode,
                 min_pruned_video_percent=min_pruned_video_percent,
+                max_pair_time_difference_seconds=max_pair_time_difference_seconds,
                 random_pair_first=random_pair_first,
                 rng=rng,
                 ffmpeg_binary=ffmpeg_binary,
@@ -1903,6 +2053,7 @@ def mine_group_relative_clip_candidates(
                 "min_pruned_video_seconds": min_pruned_video_seconds,
                 "pruning_protection_mode": pruning_protection_mode,
                 "min_pruned_video_percent": min_pruned_video_percent,
+                "max_pair_time_difference_seconds": max_pair_time_difference_seconds,
                 "random_pair_first": random_pair_first,
                 "random_seed": random_seed,
                 "download_media": download_media,
@@ -1998,6 +2149,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Minimum retained percentage of the input window when --pruning-protection-mode=min_percent",
     )
     parser.add_argument(
+        "--max-pair-time-difference-seconds",
+        type=float,
+        help=(
+            "Only prune high-similarity centroid pairs whose timestamps differ by at most "
+            "this many seconds; omit for timestamp-agnostic pruning"
+        ),
+    )
+    parser.add_argument(
         "--compare-all-pairs",
         action="store_true",
         help="Embed every video in each synchronized group and compare all pairs; slower than the default random-pair-first path",
@@ -2032,6 +2191,7 @@ def main(argv: list[str] | None = None) -> int:
         min_pruned_video_seconds=args.min_pruned_video_seconds,
         pruning_protection_mode=args.pruning_protection_mode,
         min_pruned_video_percent=args.min_pruned_video_percent,
+        max_pair_time_difference_seconds=args.max_pair_time_difference_seconds,
         random_pair_first=not args.compare_all_pairs,
         random_seed=args.random_seed,
         ffmpeg_binary=args.ffmpeg_binary,
