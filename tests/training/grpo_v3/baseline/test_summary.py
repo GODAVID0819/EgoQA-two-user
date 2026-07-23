@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from training.grpo_v3_summary import summarize_run
+from training.grpo_v3.baseline.summary import summarize_run
 
 
 class V3SummaryTests(unittest.TestCase):

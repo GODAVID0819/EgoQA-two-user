@@ -56,7 +56,7 @@ grep -- '--tuner_type' "${OUTPUT_DIR}/swift_rlhf_help.txt" >/dev/null
 if [[ -z "${GATE2_DIR:-}" ]]; then GATE2_DIR="$(head -n 1 "${GRPO_V3_ROOT}/latest_gate2_output.txt")"; fi
 GATE0_DIR="${GATE0_DIR:-$(head -n 1 "${GRPO_V3_ROOT}/latest_gate0_output.txt")}"; DATASET="${GATE0_DIR}/train_native_video.jsonl"
 ADAPTER_DIR="$(${PYTHON} -c 'import json,sys; from pathlib import Path; r=json.load(open(Path(sys.argv[1])/"gate2_result.json")); m=json.load(open(Path(sys.argv[1])/"run_manifest.json")); assert r["status"]=="passed"; assert m["reward_revision"]=="json_three_tier_v1"; p=Path(m["adapter_dir"]); assert p.is_dir(); print(p)' "${GATE2_DIR}")"
-"${PYTHON}" -m training.grpo_v3_preflight --dataset "${DATASET}" --check-repo-reward --output "${OUTPUT_DIR}/cpu_preflight.json"
+"${PYTHON}" -m training.grpo_v3.baseline.preflight --dataset "${DATASET}" --check-repo-reward --output "${OUTPUT_DIR}/cpu_preflight.json"
 : > "${EGOQA_GRPO_V3_REWARD_TRACE}"
 
 GPU_MONITOR_PID=""; REVIEW_PID=""
@@ -71,7 +71,7 @@ for _ in $(seq 1 240); do curl --fail --silent "${REVIEW_BASE_URL}/models" >/dev
 curl --fail --silent "${REVIEW_BASE_URL}/models" >/dev/null
 
 CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf --rlhf_type grpo --model "${POLICY_MODEL}" --adapters "${ADAPTER_DIR}" \
-  --dataset "${DATASET}" --external_plugins "${PROJECT_ROOT}/training/grpo_v3_reward_plugin.py" \
+  --dataset "${DATASET}" --external_plugins "${PROJECT_ROOT}/training/grpo_v3/runtime/reward_plugin.py" \
   --reward_funcs egoqa_repo_native_judge --tuner_type lora --torch_dtype bfloat16 --freeze_vit true --freeze_aligner true \
   --target_modules q_proj v_proj --lora_rank 8 --lora_alpha 16 --use_vllm false --num_generations 4 \
   --per_device_train_batch_size 4 --gradient_accumulation_steps 1 --gradient_checkpointing true \
@@ -81,12 +81,12 @@ CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf --rlhf_type grpo --model "${POLICY_MODEL}
   --output_dir "${OUTPUT_DIR}/swift"
 
 CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3.shared.adapter_reload --model-path "${POLICY_MODEL}" --search-root "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/adapter_reload.json"
-"${PYTHON}" -m training.grpo_v3_convergence --gate 3 --trace "${EGOQA_GRPO_V3_REWARD_TRACE}" --training-output "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/convergence_metrics.json"
+"${PYTHON}" -m training.grpo_v3.baseline.convergence --gate 3 --trace "${EGOQA_GRPO_V3_REWARD_TRACE}" --training-output "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/convergence_metrics.json"
 set +e
-"${PYTHON}" -m training.grpo_v3_gate_validate --output-dir "${OUTPUT_DIR}" --gate 3
+"${PYTHON}" -m training.grpo_v3.baseline.gate_validate --output-dir "${OUTPUT_DIR}" --gate 3
 GATE_VALIDATE_STATUS=$?
 set -e
-"${PYTHON}" -m training.grpo_v3_summary --output-dir "${OUTPUT_DIR}" --gate 3 --dataset "${DATASET}" \
+"${PYTHON}" -m training.grpo_v3.baseline.summary --output-dir "${OUTPUT_DIR}" --gate 3 --dataset "${DATASET}" \
   --policy-model "${POLICY_MODEL}" --reviewer-model "${REVIEW_MODEL}" --job-id "${SLURM_JOB_ID}" --parent-run "${GATE2_DIR}" \
   --slurm-stdout "${PROJECT_ROOT}/logs/grpo-v3-gate3-${SLURM_JOB_ID}.out" --slurm-stderr "${PROJECT_ROOT}/logs/grpo-v3-gate3-${SLURM_JOB_ID}.err" --reviewer-log "${REVIEW_LOG}"
 if (( GATE_VALIDATE_STATUS != 0 )); then

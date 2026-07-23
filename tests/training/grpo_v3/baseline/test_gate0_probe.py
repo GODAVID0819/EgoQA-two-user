@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from training.grpo_v3_gate0_probe import assert_framework_version, build_gate0_result, collate_encoded_batch
+from training.grpo_v3.baseline.gate0_probe import assert_framework_version, build_gate0_result, collate_encoded_batch
 
 
 class Gate0ResultTests(unittest.TestCase):

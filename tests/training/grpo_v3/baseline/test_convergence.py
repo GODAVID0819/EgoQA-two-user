@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from training.grpo_v3_convergence import analyze_convergence
+from training.grpo_v3.baseline.convergence import analyze_convergence
 
 
 def _group(call_index: int, phase: str, evidence_id: str, mean: float, spread: bool = True) -> list[dict]:

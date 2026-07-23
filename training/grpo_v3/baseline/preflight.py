@@ -11,16 +11,16 @@ from training.grpo_v3.shared.contract import DEFAULTS, validate_formal_config
 from training.grpo_v3.shared.data import read_jsonl, validate_swift_row
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REPO_REWARD_SOURCE_PATHS = (
     PROJECT_ROOT / "video_qa_loop.py",
     PROJECT_ROOT / "prompts.py",
     PROJECT_ROOT / "schema.py",
     PROJECT_ROOT / "qwen3vl_runner.py",
     PROJECT_ROOT / "grpo_judge_reward",
-    PROJECT_ROOT / "training" / "grpo_v3_json_format.py",
-    PROJECT_ROOT / "training" / "grpo_v3_repo_reward.py",
-    PROJECT_ROOT / "training" / "grpo_v3_reward_plugin.py",
+    PROJECT_ROOT / "training" / "grpo_v3" / "shared" / "json_format.py",
+    PROJECT_ROOT / "training" / "grpo_v3" / "baseline" / "repo_reward.py",
+    PROJECT_ROOT / "training" / "grpo_v3" / "runtime" / "reward_plugin.py",
 )
 CONFLICT_MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
 
@@ -54,7 +54,7 @@ def validate_repo_reward_sources(
                 raise ValueError(f"{relative}:{line_number} 存在未解决的 Git 冲突标记: {line}")
         compile(source, str(path), "exec")
     if import_modules:
-        from training.grpo_v3_repo_reward import _repo_modules
+        from training.grpo_v3.baseline.repo_reward import _repo_modules
 
         modules = _repo_modules()
         required = {

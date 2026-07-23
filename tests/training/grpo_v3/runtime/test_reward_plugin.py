@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from training.grpo_v3_reward_plugin import ControlledGateReward, RepoNativeJudgeReward
+from training.grpo_v3.runtime.reward_plugin import ControlledGateReward, RepoNativeJudgeReward
 
 
 class StubAnswerMarginScoreFn:
@@ -210,7 +210,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         }
 
     def test_registers_exact_orm_name_and_expands_existing_fields(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward, orms
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward, orms
 
         score_fn = StubAnswerMarginScoreFn()
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,7 +237,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertTrue(all(len(row["video_inputs"]) == 2 for row in rows))
 
     def test_infrastructure_error_is_masked_traced_then_reraised(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         error = TimeoutError("answer scorer timeout")
         with tempfile.TemporaryDirectory() as tmp:
@@ -259,7 +259,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(rows[0]["failure_stage"], "scoring")
 
     def test_partial_group_failure_writes_each_processed_candidate_once(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         with tempfile.TemporaryDirectory() as tmp:
             trace = Path(tmp) / "answer_margin.jsonl"
@@ -273,7 +273,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual([row["candidate_index"] for row in rows], [0, 1])
 
     def test_wrong_condition_is_masked_traced_then_aborts_before_scorer(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         score_fn = StubAnswerMarginScoreFn()
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
@@ -292,7 +292,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(len(rows[0]["video_inputs"]), 2)
 
     def test_missing_global_step_is_masked_not_silently_fabricated(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         with tempfile.TemporaryDirectory() as tmp:
             kwargs = self._kwargs(Path(tmp))
@@ -307,7 +307,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(len(row["video_inputs"]), 2)
 
     def test_global_step_alignment_error_is_traced_then_reraised(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         with tempfile.TemporaryDirectory() as tmp:
             kwargs = self._kwargs(Path(tmp))
@@ -324,7 +324,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(rows[0]["available_metadata"]["global_step"], [0, 1])
 
     def test_missing_packet_json_is_traced_then_original_keyerror_is_reraised(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         with tempfile.TemporaryDirectory() as tmp:
             kwargs = self._kwargs(Path(tmp))
@@ -339,7 +339,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(row["experiment_condition_id"], "t05")
 
     def test_evidence_alignment_error_does_not_fabricate_candidate_identity(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         with tempfile.TemporaryDirectory() as tmp:
             kwargs = self._kwargs(Path(tmp))
@@ -354,7 +354,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(row["available_metadata"]["evidence_id"], ["E1", "E2"])
 
     def test_requires_exactly_four_completions_and_traces_empty_or_short_group(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward, CompletionGroupSizeError
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward, CompletionGroupSizeError
 
         for completions in ([], ["a", "b", "c"]):
             with self.subTest(count=len(completions)), tempfile.TemporaryDirectory() as tmp:
@@ -370,7 +370,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
             self.assertEqual(rows[0]["actual_completion_count"], len(completions))
 
     def test_path_metadata_snapshot_cannot_replace_original_alignment_error(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         with tempfile.TemporaryDirectory() as tmp:
             kwargs = self._kwargs(Path(tmp))
@@ -388,7 +388,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(row["available_metadata"]["question_type"][0]["values"]["type"], "set")
 
     def test_nonfinite_reward_with_unsafe_prior_record_is_traced_before_original_error(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         def nonfinite_score(**_kwargs):
             return {
@@ -420,7 +420,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(row["record"]["infrastructure_error"]["type"], "NonFiniteRewardError")
 
     def test_rejects_mixed_group_identity_before_any_scorer_call(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward, GroupIdentityError
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward, GroupIdentityError
 
         def mutations(kwargs):
             packet_rows = kwargs["packet_json"] * 4
@@ -451,7 +451,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
             self.assertEqual(len(rows[0]["group_identity"]["packet_sha256"]), 4)
 
     def test_equivalent_packet_json_key_orders_share_one_group_identity(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         with tempfile.TemporaryDirectory() as tmp:
             kwargs = self._kwargs(Path(tmp))
@@ -470,7 +470,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertEqual(len(scorer.calls), 4)
 
     def test_cyclic_metadata_snapshot_preserves_original_alignment_error(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         cyclic_dict = {}
         cyclic_dict["self"] = cyclic_dict
@@ -496,7 +496,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
             self.assertIn(f'"container_type": "{expected_type}"', serialized)
 
     def test_shared_noncyclic_metadata_is_not_marked_as_cycle(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         shared = {"value": 1}
         with tempfile.TemporaryDirectory() as tmp:
@@ -514,7 +514,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
         self.assertNotIn('"type": "cycle"', json.dumps(snapshot))
 
     def test_deep_noncyclic_metadata_is_bounded_without_covering_original_error(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         deep_list = []
         cursor = deep_list
@@ -548,7 +548,7 @@ class AnswerMarginPluginTests(unittest.TestCase):
             self.assertIn(f'"container_type": "{expected_type}"', serialized)
 
     def test_client_configuration_requires_explicit_environment(self):
-        from training.grpo_v3_reward_plugin import AnswerMarginReward
+        from training.grpo_v3.runtime.reward_plugin import AnswerMarginReward
 
         with patch.dict("os.environ", {}, clear=True), self.assertRaisesRegex(RuntimeError, "EGOQA_ANSWER_SCORER_BASE_URL"):
             AnswerMarginReward(trace_path=Path("unused.jsonl"))

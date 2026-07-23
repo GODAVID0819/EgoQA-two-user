@@ -4,12 +4,12 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[4]
 
 
 class V3SlurmContractTests(unittest.TestCase):
     def _script(self, gate: int) -> str:
-        return (ROOT / "hpc" / f"grpo_v3_ms_swift_gate{gate}.sbatch").read_text(encoding="utf-8").lower()
+        return (ROOT / "hpc" / "grpo_v3" / "baseline" / f"gate{gate}.sbatch").read_text(encoding="utf-8").lower()
 
     def test_all_gate_scripts_pin_native_video_bf16_lora(self) -> None:
         for gate in (0, 1, 2, 3, 4):
@@ -113,8 +113,8 @@ class V3SlurmContractTests(unittest.TestCase):
     def test_gate3_and_gate4_keep_failure_manifests_before_exiting(self) -> None:
         for gate in (3, 4):
             text = self._script(gate)
-            validate = f"training.grpo_v3_gate_validate --output-dir \"${{output_dir}}\" --gate {gate}"
-            summary = f"training.grpo_v3_summary --output-dir \"${{output_dir}}\" --gate {gate}"
+            validate = f"training.grpo_v3.baseline.gate_validate --output-dir \"${{output_dir}}\" --gate {gate}"
+            summary = f"training.grpo_v3.baseline.summary --output-dir \"${{output_dir}}\" --gate {gate}"
             failure_exit = 'exit "${gate_validate_status}"'
             latest = f'latest_gate{gate}_output.txt'
             self.assertIn("set +e", text)
@@ -136,7 +136,7 @@ class V3SlurmContractTests(unittest.TestCase):
         self.assertNotIn("latest_grpo_evidence.txt", gate0)
 
     def test_gate3_v2_is_audit_gated_multi_evidence_temperature_point_three(self) -> None:
-        text = (ROOT / "hpc" / "grpo_v3_ms_swift_gate3_v2.sbatch").read_text(encoding="utf-8").lower()
+        text = (ROOT / "hpc" / "grpo_v3" / "baseline" / "gate3_v2.sbatch").read_text(encoding="utf-8").lower()
         for required in (
             "ms-swift==4.2.2",
             "qwen3-vl-2b-instruct",
@@ -159,7 +159,7 @@ class V3SlurmContractTests(unittest.TestCase):
         self.assertNotIn("qlora", text)
 
     def test_lora_greedy_eval_is_fixed_one_shot_native_video_job(self) -> None:
-        text = (ROOT / "hpc" / "grpo_v3_lora_greedy_eval.sbatch").read_text(encoding="utf-8").lower()
+        text = (ROOT / "hpc" / "grpo_v3" / "baseline" / "greedy_eval.sbatch").read_text(encoding="utf-8").lower()
         for required in (
             "qwen3-vl-2b-instruct",
             "qwen3-vl-8b-instruct",

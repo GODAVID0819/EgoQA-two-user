@@ -57,7 +57,7 @@ done
 [[ -s "${EVAL_DATASET}" ]] || { echo "固定评估集为空" >&2; exit 2; }
 "${PYTHON}" -c 'import importlib.metadata as m; assert m.version("ms-swift") == "4.2.2"'
 "${PYTHON}" -m pip freeze > "${OUTPUT_DIR}/dependencies.txt"
-"${PYTHON}" -m training.grpo_v3_preflight --dataset "${EVAL_DATASET}" --output "${OUTPUT_DIR}/cpu_preflight.json"
+"${PYTHON}" -m training.grpo_v3.baseline.preflight --dataset "${EVAL_DATASET}" --output "${OUTPUT_DIR}/cpu_preflight.json"
 
 GPU_MONITOR_PID=""
 REVIEW_PID=""

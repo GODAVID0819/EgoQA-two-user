@@ -27,5 +27,17 @@ class GrpoV3StructureTests(unittest.TestCase):
             with self.subTest(old=name):
                 self.assertFalse((ROOT / "training" / name).exists())
 
+    def test_baseline_and_runtime_are_not_flat(self) -> None:
+        expected = (
+            ROOT / "training/grpo_v3/runtime/reward_plugin.py",
+            ROOT / "training/grpo_v3/baseline/preflight.py",
+            ROOT / "training/grpo_v3/baseline/repo_reward.py",
+            ROOT / "hpc/grpo_v3/baseline/gate0.sbatch",
+            ROOT / "hpc/grpo_v3/baseline/gate4.sbatch",
+        )
+        for path in expected:
+            with self.subTest(path=path):
+                self.assertTrue(path.is_file())
+
 if __name__ == "__main__":
     unittest.main()

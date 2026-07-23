@@ -70,7 +70,7 @@ fi
 GATE0_DIR="${GATE0_DIR:-$(head -n 1 "${GRPO_V3_ROOT}/latest_gate0_output.txt")}"
 DATASET="${DATASET:-${GATE0_DIR}/train_native_video.jsonl}"
 ADAPTER_DIR="$(${PYTHON} -c 'import json,sys; from pathlib import Path; d=Path(sys.argv[1]); r=json.load(open(d/"gate2_result.json")); m=json.load(open(d/"run_manifest.json")); assert r["status"]=="passed"; assert m["reward_revision"]=="json_three_tier_v1"; p=Path(m["adapter_dir"]); assert p.is_dir(); print(p)' "${GATE2_DIR}")"
-"${PYTHON}" -m training.grpo_v3_preflight --dataset "${DATASET}" --output "${OUTPUT_DIR}/cpu_preflight.json"
+"${PYTHON}" -m training.grpo_v3.baseline.preflight --dataset "${DATASET}" --output "${OUTPUT_DIR}/cpu_preflight.json"
 : > "${EGOQA_GRPO_V3_REWARD_TRACE}"
 
 GPU_MONITOR_PID=""
@@ -95,7 +95,7 @@ done
 curl --fail --silent "${REVIEW_BASE_URL}/models" >/dev/null
 
 CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf --rlhf_type grpo --model "${POLICY_MODEL}" --adapters "${ADAPTER_DIR}" \
-  --dataset "${DATASET}" --external_plugins "${PROJECT_ROOT}/training/grpo_v3_reward_plugin.py" \
+  --dataset "${DATASET}" --external_plugins "${PROJECT_ROOT}/training/grpo_v3/runtime/reward_plugin.py" \
   --reward_funcs egoqa_qa_formality_confidence --tuner_type lora --torch_dtype bfloat16 \
   --freeze_vit true --freeze_aligner true --target_modules q_proj v_proj --lora_rank 8 --lora_alpha 16 \
   --use_vllm false --num_generations 4 --per_device_train_batch_size 4 --gradient_accumulation_steps 1 \

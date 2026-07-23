@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from training.grpo_v3_repo_reward import (
+from training.grpo_v3.baseline.repo_reward import (
     apply_content_reward_revision,
     make_repo_score_fn,
     validate_groundedness_audit_approval,

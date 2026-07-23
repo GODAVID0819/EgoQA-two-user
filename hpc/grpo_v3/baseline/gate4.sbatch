@@ -47,8 +47,8 @@ ADAPTER_DIR="$(${PYTHON} -c 'import json,sys; from pathlib import Path; d=Path(s
 "${PYTHON}" -c 'import json,sys; m=json.load(open(sys.argv[1])); a=set(m["train_evidence_ids"]); b=set(m["eval_evidence_ids"]); assert m["train_count"]==40 and m["eval_count"]==10 and len(a)==40 and len(b)==10 and not a&b and m["intersection_count"]==0' "${SPLIT_MANIFEST}"
 cp "${SPLIT_MANIFEST}" "${OUTPUT_DIR}/split_manifest.json"
 EGOQA_EVAL_EVIDENCE_IDS="$(${PYTHON} -c 'import json,sys; print(",".join(json.load(open(sys.argv[1]))["eval_evidence_ids"]))' "${SPLIT_MANIFEST}")"; export EGOQA_EVAL_EVIDENCE_IDS
-"${PYTHON}" -m training.grpo_v3_preflight --dataset "${TRAIN_DATASET}" --check-repo-reward --output "${OUTPUT_DIR}/cpu_preflight_train.json"
-"${PYTHON}" -m training.grpo_v3_preflight --dataset "${EVAL_DATASET}" --check-repo-reward --output "${OUTPUT_DIR}/cpu_preflight_eval.json"
+"${PYTHON}" -m training.grpo_v3.baseline.preflight --dataset "${TRAIN_DATASET}" --check-repo-reward --output "${OUTPUT_DIR}/cpu_preflight_train.json"
+"${PYTHON}" -m training.grpo_v3.baseline.preflight --dataset "${EVAL_DATASET}" --check-repo-reward --output "${OUTPUT_DIR}/cpu_preflight_eval.json"
 : > "${EGOQA_GRPO_V3_REWARD_TRACE}"
 
 GPU_MONITOR_PID=""; REVIEW_PID=""
@@ -63,7 +63,7 @@ for _ in $(seq 1 240); do curl --fail --silent "${REVIEW_BASE_URL}/models" >/dev
 curl --fail --silent "${REVIEW_BASE_URL}/models" >/dev/null
 
 CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf --rlhf_type grpo --model "${POLICY_MODEL}" --adapters "${ADAPTER_DIR}" \
-  --dataset "${TRAIN_DATASET}" --val_dataset "${EVAL_DATASET}" --external_plugins "${PROJECT_ROOT}/training/grpo_v3_reward_plugin.py" \
+  --dataset "${TRAIN_DATASET}" --val_dataset "${EVAL_DATASET}" --external_plugins "${PROJECT_ROOT}/training/grpo_v3/runtime/reward_plugin.py" \
   --reward_funcs egoqa_repo_native_judge --tuner_type lora --torch_dtype bfloat16 --freeze_vit true --freeze_aligner true \
   --target_modules q_proj v_proj --lora_rank 8 --lora_alpha 16 --use_vllm false --num_generations 4 \
   --per_device_train_batch_size 4 --per_device_eval_batch_size 4 --gradient_accumulation_steps 1 --gradient_checkpointing true \
@@ -73,12 +73,12 @@ CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf --rlhf_type grpo --model "${POLICY_MODEL}
   --dataset_num_proc 1 --dataloader_num_workers 0 --report_to none --output_dir "${OUTPUT_DIR}/swift"
 
 CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3.shared.adapter_reload --model-path "${POLICY_MODEL}" --search-root "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/adapter_reload.json"
-"${PYTHON}" -m training.grpo_v3_convergence --gate 4 --trace "${EGOQA_GRPO_V3_REWARD_TRACE}" --training-output "${OUTPUT_DIR}" --split-manifest "${SPLIT_MANIFEST}" --output "${OUTPUT_DIR}/convergence_metrics.json"
+"${PYTHON}" -m training.grpo_v3.baseline.convergence --gate 4 --trace "${EGOQA_GRPO_V3_REWARD_TRACE}" --training-output "${OUTPUT_DIR}" --split-manifest "${SPLIT_MANIFEST}" --output "${OUTPUT_DIR}/convergence_metrics.json"
 set +e
-"${PYTHON}" -m training.grpo_v3_gate_validate --output-dir "${OUTPUT_DIR}" --gate 4
+"${PYTHON}" -m training.grpo_v3.baseline.gate_validate --output-dir "${OUTPUT_DIR}" --gate 4
 GATE_VALIDATE_STATUS=$?
 set -e
-"${PYTHON}" -m training.grpo_v3_summary --output-dir "${OUTPUT_DIR}" --gate 4 --dataset "${TRAIN_DATASET}" --eval-dataset "${EVAL_DATASET}" --split-manifest "${SPLIT_MANIFEST}" \
+"${PYTHON}" -m training.grpo_v3.baseline.summary --output-dir "${OUTPUT_DIR}" --gate 4 --dataset "${TRAIN_DATASET}" --eval-dataset "${EVAL_DATASET}" --split-manifest "${SPLIT_MANIFEST}" \
   --policy-model "${POLICY_MODEL}" --reviewer-model "${REVIEW_MODEL}" --job-id "${SLURM_JOB_ID}" --parent-run "${GATE3_DIR}" \
   --slurm-stdout "${PROJECT_ROOT}/logs/grpo-v3-gate4-${SLURM_JOB_ID}.out" --slurm-stderr "${PROJECT_ROOT}/logs/grpo-v3-gate4-${SLURM_JOB_ID}.err" --reviewer-log "${REVIEW_LOG}"
 if (( GATE_VALIDATE_STATUS != 0 )); then

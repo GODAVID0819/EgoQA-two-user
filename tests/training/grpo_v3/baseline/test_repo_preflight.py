@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3_preflight import REPO_REWARD_SOURCE_PATHS, validate_repo_reward_sources
-from training.grpo_v3_repo_reward import _repo_modules
+from training.grpo_v3.baseline.preflight import REPO_REWARD_SOURCE_PATHS, validate_repo_reward_sources
+from training.grpo_v3.baseline.repo_reward import _repo_modules
 
 
 class RepoRewardSourcePreflightTests(unittest.TestCase):
@@ -37,9 +37,9 @@ class RepoRewardSourcePreflightTests(unittest.TestCase):
     def test_repo_reward_preflight_includes_three_tier_format_sources(self) -> None:
         names = {path.name for path in REPO_REWARD_SOURCE_PATHS}
 
-        self.assertIn("grpo_v3_json_format.py", names)
-        self.assertIn("grpo_v3_repo_reward.py", names)
-        self.assertIn("grpo_v3_reward_plugin.py", names)
+        self.assertIn("json_format.py", names)
+        self.assertIn("repo_reward.py", names)
+        self.assertIn("reward_plugin.py", names)
 
 
 if __name__ == "__main__":

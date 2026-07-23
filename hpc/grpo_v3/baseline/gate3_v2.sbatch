@@ -87,7 +87,7 @@ assert audit["reviewer_pass_completed"] >= 8 and audit["reviewer_fail_completed"
 PY
 cp "${AUDIT_SUMMARY}" "${OUTPUT_DIR}/groundedness_audit_summary.json"
 cp "${SPLIT_MANIFEST}" "${OUTPUT_DIR}/gate3_v2_split_manifest.json"
-"${PYTHON}" -m training.grpo_v3_preflight --dataset "${DATASET}" --check-repo-reward --output "${OUTPUT_DIR}/cpu_preflight.json"
+"${PYTHON}" -m training.grpo_v3.baseline.preflight --dataset "${DATASET}" --check-repo-reward --output "${OUTPUT_DIR}/cpu_preflight.json"
 : > "${EGOQA_GRPO_V3_REWARD_TRACE}"
 
 GPU_MONITOR_PID=""
@@ -112,7 +112,7 @@ done
 curl --fail --silent "${REVIEW_BASE_URL}/models" >/dev/null
 
 CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf --rlhf_type grpo --model "${POLICY_MODEL}" --adapters "${ADAPTER_DIR}" \
-  --dataset "${DATASET}" --external_plugins "${PROJECT_ROOT}/training/grpo_v3_reward_plugin.py" \
+  --dataset "${DATASET}" --external_plugins "${PROJECT_ROOT}/training/grpo_v3/runtime/reward_plugin.py" \
   --reward_funcs egoqa_repo_native_judge --tuner_type lora --torch_dtype bfloat16 \
   --freeze_vit true --freeze_aligner true --target_modules q_proj v_proj --lora_rank 8 --lora_alpha 16 \
   --use_vllm false --num_generations 4 --per_device_train_batch_size 4 --gradient_accumulation_steps 1 \
@@ -124,13 +124,13 @@ CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf --rlhf_type grpo --model "${POLICY_MODEL}
 
 CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3.shared.adapter_reload \
   --model-path "${POLICY_MODEL}" --search-root "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/adapter_reload.json"
-"${PYTHON}" -m training.grpo_v3_convergence --gate 3 --trace "${EGOQA_GRPO_V3_REWARD_TRACE}" \
+"${PYTHON}" -m training.grpo_v3.baseline.convergence --gate 3 --trace "${EGOQA_GRPO_V3_REWARD_TRACE}" \
   --training-output "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/convergence_metrics.json"
 set +e
-"${PYTHON}" -m training.grpo_v3_gate_validate --output-dir "${OUTPUT_DIR}" --gate 3
+"${PYTHON}" -m training.grpo_v3.baseline.gate_validate --output-dir "${OUTPUT_DIR}" --gate 3
 GATE_VALIDATE_STATUS=$?
 set -e
-"${PYTHON}" -m training.grpo_v3_summary --output-dir "${OUTPUT_DIR}" --gate 3 --dataset "${DATASET}" \
+"${PYTHON}" -m training.grpo_v3.baseline.summary --output-dir "${OUTPUT_DIR}" --gate 3 --dataset "${DATASET}" \
   --split-manifest "${SPLIT_MANIFEST}" --policy-model "${POLICY_MODEL}" --reviewer-model "${REVIEW_MODEL}" \
   --job-id "${SLURM_JOB_ID}" --parent-run "${GATE2_DIR}" \
   --slurm-stdout "${PROJECT_ROOT}/logs/grpo-v3-gate3-v2-${SLURM_JOB_ID}.out" \

@@ -16,7 +16,7 @@ from training.grpo_v3.shared.json_format import (
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CONTENT_REWARD_REVISIONS = {"repo_native_v1", "ground_answer_gap_v1"}
 
 

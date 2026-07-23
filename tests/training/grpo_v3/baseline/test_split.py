@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3_split import split_packets
+from training.grpo_v3.baseline.split import split_packets
 
 
 class Gate4SplitTests(unittest.TestCase):

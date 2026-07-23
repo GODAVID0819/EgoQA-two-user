@@ -10,7 +10,7 @@ from typing import Any, Callable, Iterable
 
 from training.grpo_v3.shared.adapter_reload import discover_adapter_dir
 from training.grpo_v3.shared.data import read_jsonl
-from training.grpo_v3_repo_reward import make_repo_score_fn
+from training.grpo_v3.baseline.repo_reward import make_repo_score_fn
 
 
 def _prompt(row: dict[str, Any]) -> str:

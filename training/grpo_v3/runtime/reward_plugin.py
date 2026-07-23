@@ -183,7 +183,7 @@ class RepoNativeJudgeReward(ORM):
 
     @staticmethod
     def _build_score_fn() -> Callable[..., dict[str, Any]]:
-        from training.grpo_v3_repo_reward import make_repo_score_fn
+        from training.grpo_v3.baseline.repo_reward import make_repo_score_fn
 
         return make_repo_score_fn(
             review_model_id=os.environ.get("EGOQA_REVIEW_MODEL", "Qwen/Qwen3-VL-8B-Instruct"),

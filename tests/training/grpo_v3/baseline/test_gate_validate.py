@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3_gate_validate import validate_gate_artifacts
+from training.grpo_v3.baseline.gate_validate import validate_gate_artifacts
 
 
 class GateArtifactValidationTests(unittest.TestCase):

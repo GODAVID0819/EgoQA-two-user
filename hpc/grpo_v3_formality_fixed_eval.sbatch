@@ -66,7 +66,7 @@ done
 DATASET="$(${PYTHON} -c 'import json,sys; print(json.load(open(sys.argv[1]))["dataset"])' \
   "${FORMALITY_PROBE_DIR}/resolved_config.json")"
 [[ -s "${DATASET}" ]] || { echo "Probe dataset 不存在或为空: ${DATASET}" >&2; exit 2; }
-"${PYTHON}" -m training.grpo_v3_preflight \
+"${PYTHON}" -m training.grpo_v3.baseline.preflight \
   --dataset "${DATASET}" --output "${OUTPUT_DIR}/cpu_preflight.json"
 
 GPU_MONITOR_PID=""

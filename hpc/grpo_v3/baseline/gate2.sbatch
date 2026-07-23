@@ -89,7 +89,7 @@ GATE0_DIR="${GATE0_DIR:-$(head -n 1 "${GRPO_V3_ROOT}/latest_gate0_output.txt")}"
 DATASET="${GATE0_DIR}/train_native_video.jsonl"
 "${PYTHON}" -c 'import hashlib,json,sys; from pathlib import Path; p=json.load(open(sys.argv[1])); assert p["status"] == "passed"; m=json.load(open(sys.argv[2])); assert Path(m["parent_run"]).resolve() == Path(sys.argv[3]).resolve(); assert hashlib.sha256(Path(sys.argv[4]).read_bytes()).hexdigest() == m["dataset_sha256"]' \
   "${GATE1_DIR}/gate1_result.json" "${GATE1_DIR}/run_manifest.json" "${GATE0_DIR}" "${DATASET}"
-"${PYTHON}" -m training.grpo_v3_preflight \
+"${PYTHON}" -m training.grpo_v3.baseline.preflight \
   --dataset "${DATASET}" \
   --check-repo-reward \
   --output "${OUTPUT_DIR}/cpu_preflight.json"
@@ -114,7 +114,7 @@ CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf \
   --rlhf_type grpo \
   --model "${POLICY_MODEL}" \
   --dataset "${DATASET}" \
-  --external_plugins "${PROJECT_ROOT}/training/grpo_v3_reward_plugin.py" \
+  --external_plugins "${PROJECT_ROOT}/training/grpo_v3/runtime/reward_plugin.py" \
   --reward_funcs egoqa_repo_native_judge \
   --tuner_type lora \
   --torch_dtype bfloat16 \
@@ -147,8 +147,8 @@ CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf \
 CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3.shared.adapter_reload \
   --model-path "${POLICY_MODEL}" --search-root "${OUTPUT_DIR}" \
   --output "${OUTPUT_DIR}/adapter_reload.json"
-"${PYTHON}" -m training.grpo_v3_gate_validate --output-dir "${OUTPUT_DIR}" --gate 2
-"${PYTHON}" -m training.grpo_v3_summary \
+"${PYTHON}" -m training.grpo_v3.baseline.gate_validate --output-dir "${OUTPUT_DIR}" --gate 2
+"${PYTHON}" -m training.grpo_v3.baseline.summary \
   --output-dir "${OUTPUT_DIR}" --gate 2 --dataset "${DATASET}" \
   --policy-model "${POLICY_MODEL}" --reviewer-model "${REVIEW_MODEL}" \
   --job-id "${SLURM_JOB_ID}" --parent-run "${GATE1_DIR}" \

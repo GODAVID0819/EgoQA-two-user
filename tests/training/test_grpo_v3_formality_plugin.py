@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from training import grpo_v3_reward_plugin as plugin
-from training.grpo_v3_reward_plugin import FormalityConfidenceReward
+from training.grpo_v3.runtime import reward_plugin as plugin
+from training.grpo_v3.runtime.reward_plugin import FormalityConfidenceReward
 
 
 class FormalityPluginTests(unittest.TestCase):

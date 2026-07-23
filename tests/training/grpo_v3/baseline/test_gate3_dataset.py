@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3_gate3_dataset import build_gate3_split
+from training.grpo_v3.baseline.gate3_dataset import build_gate3_split
 
 
 class Gate3DatasetTests(unittest.TestCase):
