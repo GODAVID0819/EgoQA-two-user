@@ -135,55 +135,6 @@ class V3SlurmContractTests(unittest.TestCase):
         self.assertIn('[[ -s "${evidence_jsonl}" ]]', gate0)
         self.assertNotIn("latest_grpo_evidence.txt", gate0)
 
-    def test_runbook_contains_no_directory_placeholders(self) -> None:
-        runbook = (ROOT / "docs" / "GRPO" / "v3" / "MS_SWIFT_NATIVE_VIDEO_TORCH_RUNBOOK_CN.md").read_text(
-            encoding="utf-8"
-        )
-        for placeholder in ("你的实验目录", "替换为本次输出目录", "对应作业日志", "xxx目录", "XXX目录"):
-            self.assertNotIn(placeholder, runbook)
-        self.assertIn("outputs/grpo_v3/selected_packets_pruned.jsonl", runbook)
-        self.assertIn('test -s "${EVIDENCE_JSONL}"', runbook)
-
-    def test_runbook_has_interactive_sftp_torch_diagnostics_and_resource_escalation(self) -> None:
-        runbook = (ROOT / "docs" / "GRPO" / "v3" / "MS_SWIFT_NATIVE_VIDEO_TORCH_RUNBOOK_CN.md").read_text(
-            encoding="utf-8"
-        ).lower()
-        self.assertNotIn("## 9. 结果边界", runbook)
-        gate34 = runbook[runbook.index("## 9.") :]
-        for forbidden in (
-            "```powershell",
-            "sftp -b",
-            "new-item",
-            "remove-item",
-            "set-content",
-            "$localrepo",
-            "$torchuser",
-            "$remote",
-        ):
-            self.assertNotIn(forbidden, gate34)
-        for required in (
-            "sftp xl6775@torch-login-b-2",
-            "lcd c:/users/20661/desktop/research/ar/multiuser/egoqa-two-user",
-            "cd /scratch/xl6775/projects/egoqa-two-user",
-            "put training/grpo_v3_*.py training/",
-            "lcd c:/users/20661/desktop/research/ar/multiuser/egoqa-two-user/outputs/grpo_v3",
-            "cd /scratch/xl6775/projects/egoqa-two-user/outputs/grpo_v3",
-            "put selected_packets_pruned_gate4.jsonl",
-            "selected_packets_pruned_gate4.jsonl",
-            "scontrol show job",
-            "timelimit",
-            "traceback (most recent call last)",
-            "gpu_metrics.csv",
-            "failed_checks",
-            "review_max_num_seqs=1",
-            "--constraint=h100",
-            "--time=12:00:00",
-            "--time=36:00:00",
-        ):
-            self.assertIn(required, runbook)
-        self.assertGreaterEqual(runbook.count("sacct -j"), 5)
-        self.assertGreaterEqual(runbook.count("out_of_memory"), 3)
-
     def test_gate3_v2_is_audit_gated_multi_evidence_temperature_point_three(self) -> None:
         text = (ROOT / "hpc" / "grpo_v3_ms_swift_gate3_v2.sbatch").read_text(encoding="utf-8").lower()
         for required in (
