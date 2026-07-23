@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from training.grpo_v3_contract import (
+from training.grpo_v3.shared.contract import (
     DEFAULTS,
     GATE3_STEPS,
     GATE4_EVAL_EVIDENCE,

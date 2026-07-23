@@ -144,7 +144,7 @@ CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf \
   --report_to none \
   --output_dir "${OUTPUT_DIR}/swift"
 
-CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3_adapter_reload \
+CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3.shared.adapter_reload \
   --model-path "${POLICY_MODEL}" --search-root "${OUTPUT_DIR}" \
   --output "${OUTPUT_DIR}/adapter_reload.json"
 "${PYTHON}" -m training.grpo_v3_gate_validate --output-dir "${OUTPUT_DIR}" --gate 2

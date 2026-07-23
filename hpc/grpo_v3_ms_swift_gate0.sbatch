@@ -81,7 +81,7 @@ DATASET="${OUTPUT_DIR}/train_native_video.jsonl"
   tests.training.test_grpo_v3_contract \
   tests.training.test_grpo_v3_data \
   tests.training.test_grpo_v3_gate0_probe -v
-"${PYTHON}" -m training.grpo_v3_data \
+"${PYTHON}" -m training.grpo_v3.shared.data \
   --evidence "${EVIDENCE_JSONL}" --output "${DATASET}" \
   --question-type "${QUESTION_TYPE}" --generation-mode "${GENERATION_MODE}" \
   --max-prompts "${MAX_PROMPTS}"

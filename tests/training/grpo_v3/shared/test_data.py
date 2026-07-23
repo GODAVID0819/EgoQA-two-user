@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3_data import packet_to_swift_row, validate_swift_row
+from training.grpo_v3.shared.data import packet_to_swift_row, validate_swift_row
 
 
 class NativeDualVideoDataTests(unittest.TestCase):

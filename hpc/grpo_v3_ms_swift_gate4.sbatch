@@ -72,7 +72,7 @@ CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf --rlhf_type grpo --model "${POLICY_MODEL}
   --save_steps 10 --save_total_limit 1 --logging_steps 1 --log_completions true --split_dataset_ratio 0 \
   --dataset_num_proc 1 --dataloader_num_workers 0 --report_to none --output_dir "${OUTPUT_DIR}/swift"
 
-CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3_adapter_reload --model-path "${POLICY_MODEL}" --search-root "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/adapter_reload.json"
+CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3.shared.adapter_reload --model-path "${POLICY_MODEL}" --search-root "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/adapter_reload.json"
 "${PYTHON}" -m training.grpo_v3_convergence --gate 4 --trace "${EGOQA_GRPO_V3_REWARD_TRACE}" --training-output "${OUTPUT_DIR}" --split-manifest "${SPLIT_MANIFEST}" --output "${OUTPUT_DIR}/convergence_metrics.json"
 set +e
 "${PYTHON}" -m training.grpo_v3_gate_validate --output-dir "${OUTPUT_DIR}" --gate 4

@@ -11,9 +11,9 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from training.grpo_v3_contract import DEFAULTS
-from training.grpo_v3_data import read_jsonl
-from training.grpo_v3_json_format import FORMAT_REWARD_REVISION, summarize_format_traces
+from training.grpo_v3.shared.contract import DEFAULTS
+from training.grpo_v3.shared.data import read_jsonl
+from training.grpo_v3.shared.json_format import FORMAT_REWARD_REVISION, summarize_format_traces
 
 
 def _read(path: Path) -> dict[str, Any]:

@@ -7,8 +7,8 @@ import json
 from pathlib import Path
 from typing import Iterable
 
-from training.grpo_v3_contract import DEFAULTS, validate_formal_config
-from training.grpo_v3_data import read_jsonl, validate_swift_row
+from training.grpo_v3.shared.contract import DEFAULTS, validate_formal_config
+from training.grpo_v3.shared.data import read_jsonl, validate_swift_row
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

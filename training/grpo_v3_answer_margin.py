@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from numbers import Real
 from typing import Any, Mapping
 
-from training.grpo_v3_json_format import FormatValidationResult, validate_completion_json
+from training.grpo_v3.shared.json_format import FormatValidationResult, validate_completion_json
 
 
 LABELS = ("A", "B", "C", "D", "E")

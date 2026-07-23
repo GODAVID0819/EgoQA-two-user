@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3_adapter_reload import discover_adapter_dir
+from training.grpo_v3.shared.adapter_reload import discover_adapter_dir
 
 
 class AdapterDiscoveryTests(unittest.TestCase):

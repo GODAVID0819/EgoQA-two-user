@@ -9,7 +9,7 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from training.grpo_v3_json_format import summarize_format_traces
+from training.grpo_v3.shared.json_format import summarize_format_traces
 
 
 def _json(path: Path) -> dict[str, Any]:

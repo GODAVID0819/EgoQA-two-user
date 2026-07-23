@@ -10,7 +10,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from training.grpo_v3_contract import (
+from training.grpo_v3.shared.contract import (
     CONVERGENCE_WINDOW_GROUPS,
     GATE3_STEPS,
     GATE4_EVAL_EVIDENCE,

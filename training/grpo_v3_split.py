@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from training.grpo_v3_contract import GATE4_EVAL_EVIDENCE, GATE4_TRAIN_EVIDENCE
-from training.grpo_v3_data import packet_to_swift_row, read_jsonl, write_jsonl
+from training.grpo_v3.shared.contract import GATE4_EVAL_EVIDENCE, GATE4_TRAIN_EVIDENCE
+from training.grpo_v3.shared.data import packet_to_swift_row, read_jsonl, write_jsonl
 
 
 def _json_sha256(value: Any) -> str:

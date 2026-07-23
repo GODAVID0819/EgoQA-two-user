@@ -105,7 +105,7 @@ CUDA_VISIBLE_DEVICES=0 "${SWIFT}" rlhf --rlhf_type grpo --model "${POLICY_MODEL}
   --log_completions true --split_dataset_ratio 0 --dataset_num_proc 1 --dataloader_num_workers 0 \
   --report_to none --output_dir "${OUTPUT_DIR}/swift"
 
-CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3_adapter_reload \
+CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m training.grpo_v3.shared.adapter_reload \
   --model-path "${POLICY_MODEL}" --search-root "${OUTPUT_DIR}" --output "${OUTPUT_DIR}/adapter_reload.json"
 set +e
 "${PYTHON}" -m training.grpo_v3_formality_convergence \

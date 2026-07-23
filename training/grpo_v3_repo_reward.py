@@ -10,7 +10,7 @@ import types
 from pathlib import Path
 from typing import Any, Callable
 
-from training.grpo_v3_json_format import (
+from training.grpo_v3.shared.json_format import (
     UNRECOVERABLE_FORMAT_REWARD,
     validate_completion_json,
 )

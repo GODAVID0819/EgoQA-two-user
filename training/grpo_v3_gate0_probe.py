@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from training.grpo_v3_contract import DEFAULTS
-from training.grpo_v3_data import read_jsonl, validate_swift_row
+from training.grpo_v3.shared.contract import DEFAULTS
+from training.grpo_v3.shared.data import read_jsonl, validate_swift_row
 
 
 def assert_framework_version(installed_version: str) -> None:

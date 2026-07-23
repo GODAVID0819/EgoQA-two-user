@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from training.grpo_v3_json_format import validate_completion_json
+from training.grpo_v3.shared.json_format import validate_completion_json
 
 
 class JsonFormatValidationTests(unittest.TestCase):

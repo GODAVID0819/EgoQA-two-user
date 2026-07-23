@@ -10,7 +10,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from training.grpo_v3_data import packet_to_swift_row, read_jsonl, write_jsonl
+from training.grpo_v3.shared.data import packet_to_swift_row, read_jsonl, write_jsonl
 
 
 def _unique_packets(packets: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
