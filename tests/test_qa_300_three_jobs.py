@@ -8,7 +8,7 @@ from pathlib import Path
 class ThreeWayQaLauncherTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(__file__).resolve().parents[1]
-        self.hpc = self.root / "hpc"
+        self.hpc = self.root / "hpc" / "qa" / "production"
 
     def test_three_launchers_are_independent_ten_hour_h100_jobs(self) -> None:
         expected = {

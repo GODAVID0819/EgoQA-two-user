@@ -17,8 +17,8 @@ REPO_REWARD_SOURCE_PATHS = (
     PROJECT_ROOT / "prompts.py",
     PROJECT_ROOT / "schema.py",
     PROJECT_ROOT / "qwen3vl_runner.py",
-    PROJECT_ROOT / "grpo_judge_reward",
     PROJECT_ROOT / "training" / "grpo_v3" / "shared" / "json_format.py",
+    PROJECT_ROOT / "training" / "grpo_v3" / "baseline" / "judge_reward.py",
     PROJECT_ROOT / "training" / "grpo_v3" / "baseline" / "repo_reward.py",
     PROJECT_ROOT / "training" / "grpo_v3" / "runtime" / "reward_plugin.py",
 )

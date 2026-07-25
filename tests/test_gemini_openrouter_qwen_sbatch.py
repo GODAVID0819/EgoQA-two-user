@@ -6,6 +6,8 @@ from egolife_two_user_qa.prompts import quality_quota_prompt
 SBATCH_PATH = (
     Path(__file__).resolve().parents[1]
     / "hpc"
+    / "qa"
+    / "archived"
     / "run_clip_pruned_gemini25_openrouter_generator_qwen_judge_quota48_50.sbatch"
 )
 

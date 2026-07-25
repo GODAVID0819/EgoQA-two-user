@@ -14,6 +14,7 @@ from training.grpo_v3.shared.json_format import (
     UNRECOVERABLE_FORMAT_REWARD,
     validate_completion_json,
 )
+from training.grpo_v3.baseline.judge_reward import compute_judge_reward
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -89,7 +90,6 @@ def _repo_modules() -> dict[str, Any]:
         video_loop = importlib.import_module(f"{package_name}.video_qa_loop")
         schema = importlib.import_module(f"{package_name}.schema")
         runner = importlib.import_module(f"{package_name}.qwen3vl_runner")
-    scoring = importlib.import_module("grpo_judge_reward.scoring")
     return {
         "media_for_clips": video_loop.media_for_clips,
         "complete_generator_metadata": video_loop.complete_generator_metadata,
@@ -100,7 +100,7 @@ def _repo_modules() -> dict[str, Any]:
         "extract_json_object": schema.extract_json_object,
         "validate_qa_item": schema.validate_qa_item,
         "OpenAICompatibleLocalRunner": runner.OpenAICompatibleLocalRunner,
-        "compute_judge_reward": scoring.compute_judge_reward,
+        "compute_judge_reward": compute_judge_reward,
     }
 
 

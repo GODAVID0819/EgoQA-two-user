@@ -1,34 +1,34 @@
-# EgoLife 双用户 QA Pilot
+# EgoLife 鍙岀敤鎴?QA Pilot
 
-这个模块用于从 EgoLife 视频中构造 20 条 pilot 多选题。每道题都要求至少两个用户的第一视角视频共同提供证据，单个用户的视频不能完整回答。
+杩欎釜妯″潡鐢ㄤ簬浠?EgoLife 瑙嗛涓瀯閫?20 鏉?pilot 澶氶€夐銆傛瘡閬撻閮借姹傝嚦灏戜袱涓敤鎴风殑绗竴瑙嗚瑙嗛鍏卞悓鎻愪緵璇佹嵁锛屽崟涓敤鎴风殑瑙嗛涓嶈兘瀹屾暣鍥炵瓟銆?
 
-默认模型是 `Qwen/Qwen3.6-27B`。流程不使用 OpenRouter/Gemini 等商业 API key。`HF_TOKEN` 只作为 Hugging Face 下载或限流辅助，不作为推理 API key。
+榛樿妯″瀷鏄?`Qwen/Qwen3.6-27B`銆傛祦绋嬩笉浣跨敤 OpenRouter/Gemini 绛夊晢涓?API key銆俙HF_TOKEN` 鍙綔涓?Hugging Face 涓嬭浇鎴栭檺娴佽緟鍔╋紝涓嶄綔涓烘帹鐞?API key銆?
 
-## 主流程
+## 涓绘祦绋?
 
-当前主路径是 video-first。也就是说，Qwen3-VL 直接接收对齐后的 EgoLife 原始视频，而不是先把视频转成 caption/observation 再出题。之后用 judger 和 answerability evaluation 过滤掉单用户可答、合并视频也答不准、或者问题口吻不自然的题。
+褰撳墠涓昏矾寰勬槸 video-first銆備篃灏辨槸璇达紝Qwen3-VL 鐩存帴鎺ユ敹瀵归綈鍚庣殑 EgoLife 鍘熷瑙嗛锛岃€屼笉鏄厛鎶婅棰戣浆鎴?caption/observation 鍐嶅嚭棰樸€備箣鍚庣敤 judger 鍜?answerability evaluation 杩囨护鎺夊崟鐢ㄦ埛鍙瓟銆佸悎骞惰棰戜篃绛斾笉鍑嗐€佹垨鑰呴棶棰樺彛鍚讳笉鑷劧鐨勯銆?
 
 ```text
 EgoLife video + EyeGaze/EyeTracking tree
 -> build_manifest
--> prepare_evidence: 按 day / time token 对齐至少两个用户，并缓存视频/gaze
+-> prepare_evidence: 鎸?day / time token 瀵归綈鑷冲皯涓や釜鐢ㄦ埛锛屽苟缂撳瓨瑙嗛/gaze
 -> generate_video_qa_loop:
-   -> generator: 直接看多用户视频，生成 commonality/difference MCQ
-   -> judger: 解释为什么问这个问题，并给 generator 反馈
-   -> answerability eval: 分别测试单用户视频和合并视频能否答题
--> validate_outputs: 做确定性的 schema/gate 检查
+   -> generator: 鐩存帴鐪嬪鐢ㄦ埛瑙嗛锛岀敓鎴?commonality/difference MCQ
+   -> judger: 瑙ｉ噴涓轰粈涔堥棶杩欎釜闂锛屽苟缁?generator 鍙嶉
+   -> answerability eval: 鍒嗗埆娴嬭瘯鍗曠敤鎴疯棰戝拰鍚堝苟瑙嗛鑳藉惁绛旈
+-> validate_outputs: 鍋氱‘瀹氭€х殑 schema/gate 妫€鏌?
 ```
 
-`observe_clips` 和 `mine_candidates` 只保留作调试辅助，不作为 pilot 主路径。正式 QA 生成、judger、answerability evaluation 和最终 review 都在 `generate_video_qa_loop` 内完成，避免旧 prompt 和当前 judge rubric 混用。
+`observe_clips` 鍜?`mine_candidates` 鍙繚鐣欎綔璋冭瘯杈呭姪锛屼笉浣滀负 pilot 涓昏矾寰勩€傛寮?QA 鐢熸垚銆乯udger銆乤nswerability evaluation 鍜屾渶缁?review 閮藉湪 `generate_video_qa_loop` 鍐呭畬鎴愶紝閬垮厤鏃?prompt 鍜屽綋鍓?judge rubric 娣风敤銆?
 
 ### Opt-in ten-minute, memory-safe path
 
 The original `prepare_evidence` default and the historically named
-`hpc/run_egolife_three_modes.sbatch` remain 30-second paths; that launcher is
+`hpc/qa/production/run_egolife_three_modes.sbatch` remain 30-second paths; that launcher is
 now baseline-only. Ten-minute evidence is isolated in a separate launcher:
 
 ```bash
-sbatch hpc/run_egolife_three_modes_10min_memory_safe.sbatch
+sbatch hpc/qa/production/run_egolife_three_modes_10min_memory_safe.sbatch
 ```
 
 That launcher explicitly requests 600-second synchronized windows. EgoLife
@@ -88,7 +88,7 @@ ten-minute launcher to protect host RAM.
 
 ## CLIP-Pruned Benchmark Prep
 
-`hpc/run_clip_pruned_benchmark_100.sbatch` prepares a 100-packet benchmark for
+`hpc/qa/production/run_clip_pruned_benchmark_100.sbatch` prepares a 100-packet benchmark for
 later QA pipeline experiments. For each synchronized timestamp, it randomly
 selects exactly two videos, samples one frame per second from each selected
 30-second video, embeds those sampled frames with CLIP, clusters embeddings
@@ -153,10 +153,10 @@ python -m egolife_two_user_qa run_pruning_ablation \
 The complete manifest-plus-ablation cluster job is:
 
 ```bash
-sbatch hpc/run_pruning_ablation_30s.sbatch
+sbatch hpc/qa/preprocessing/run_pruning_ablation_30s.sbatch
 ```
 
-The Slurm launcher requires `hpc/cuda.py`, starts the CUDA keeper before
+The Slurm launcher requires `hpc/shared/cuda.py`, starts the CUDA keeper before
 manifest construction or CLIP loading, keeps it alive through every sweep, and
 stops it with an exit trap. The job fails instead of silently continuing if the
 keeper script, dependencies, or controller process are unavailable. Override
@@ -195,7 +195,7 @@ python -m egolife_two_user_qa run_pruning_k_grid \
 On the cluster, the complete manifest-plus-grid job is:
 
 ```bash
-sbatch hpc/run_pruning_k_grid_10.sbatch
+sbatch hpc/qa/preprocessing/run_pruning_k_grid_10.sbatch
 ```
 
 The grid produces normalized original videos, `K_XX/left_pruned.mp4` and
@@ -215,29 +215,29 @@ and the global `centroid_frames.csv` index every exported image.
 
 ## CLIP Anchor / Evidence-Gap Toy Demo
 
-`clip_gap_demo` 是一个独立的预处理实验，不会直接生成问题。它读取
-`prepare_evidence` 产生的双用户 evidence packet，对短视频窗口采样帧，
-使用 CLIP embedding 做用户内聚类，再寻找：
+`clip_gap_demo` 鏄竴涓嫭绔嬬殑棰勫鐞嗗疄楠岋紝涓嶄細鐩存帴鐢熸垚闂銆傚畠璇诲彇
+`prepare_evidence` 浜х敓鐨勫弻鐢ㄦ埛 evidence packet锛屽鐭棰戠獥鍙ｉ噰鏍峰抚锛?
+浣跨敤 CLIP embedding 鍋氱敤鎴峰唴鑱氱被锛屽啀瀵绘壘锛?
 
-- 两个用户之间的 mutual-nearest shared anchors；
-- Alice 中找不到 Bob 近邻的高 novelty evidence gaps；
-- Bob 中找不到 Alice 近邻的高 novelty evidence gaps。
+- 涓や釜鐢ㄦ埛涔嬮棿鐨?mutual-nearest shared anchors锛?
+- Alice 涓壘涓嶅埌 Bob 杩戦偦鐨勯珮 novelty evidence gaps锛?
+- Bob 涓壘涓嶅埌 Alice 杩戦偦鐨勯珮 novelty evidence gaps銆?
 
-运行后会写出 JSON similarity results 和一张 contact sheet，先供人工检查，
-再决定是否把候选片段交给自由度更高的 VLM question generator。完整示例见
-`CLIP_GAP_DEMO.md`。
+杩愯鍚庝細鍐欏嚭 JSON similarity results 鍜屼竴寮?contact sheet锛屽厛渚涗汉宸ユ鏌ワ紝
+鍐嶅喅瀹氭槸鍚︽妸鍊欓€夌墖娈典氦缁欒嚜鐢卞害鏇撮珮鐨?VLM question generator銆傚畬鏁寸ず渚嬭
+`CLIP_GAP_DEMO.md`銆?
 
-## Gaze 投影说明
+## Gaze 鎶曞奖璇存槑
 
-EgoLife EyeGaze CSV 不是 EgoEverything 里的 image pixel gaze。它给的是 Project Aria CPF 坐标系下的 yaw/pitch/depth，例如 `left_yaw_rads_cpf`、`right_yaw_rads_cpf`、`pitch_rads_cpf` 和 `depth_m`。所以代码不能凭空构造 `gaze_x/gaze_y`。
+EgoLife EyeGaze CSV 涓嶆槸 EgoEverything 閲岀殑 image pixel gaze銆傚畠缁欑殑鏄?Project Aria CPF 鍧愭爣绯讳笅鐨?yaw/pitch/depth锛屼緥濡?`left_yaw_rads_cpf`銆乣right_yaw_rads_cpf`銆乣pitch_rads_cpf` 鍜?`depth_m`銆傛墍浠ヤ唬鐮佷笉鑳藉嚟绌烘瀯閫?`gaze_x/gaze_y`銆?
 
-默认情况下 gaze summary 会标记为：
+榛樿鎯呭喌涓?gaze summary 浼氭爣璁颁负锛?
 
 ```json
 {"projection_status": "missing_calibration"}
 ```
 
-如果想启用 EgoEverything 那种 2D gaze point 到 object bbox center 的距离/Gaussian sampling，需要传入 Aria RGB calibration：
+濡傛灉鎯冲惎鐢?EgoEverything 閭ｇ 2D gaze point 鍒?object bbox center 鐨勮窛绂?Gaussian sampling锛岄渶瑕佷紶鍏?Aria RGB calibration锛?
 
 ```bash
 python -m egolife_two_user_qa observe_clips \
@@ -246,11 +246,11 @@ python -m egolife_two_user_qa observe_clips \
   --aria-calibration-dir /path/to/aria_calibrations
 ```
 
-更严格的 Aria 投影需要提供 VRS/no-image VRS 文件或 `online_calibration.jsonl`，并安装 `projectaria-tools`。代码会优先走 Project Aria 原生 `CameraCalibration.project()`。JSON calibration 也可以用，但必须显式包含 RGB intrinsics 加 `T_camera_cpf`，或者 `T_device_camera` 和 `T_device_cpf`。如果只使用公开 EgoLife Hugging Face 文件且没有 calibration/VRS，正确行为就是保持 2D projection unavailable，只使用视频帧和未投影的 3D gaze 统计。
+鏇翠弗鏍肩殑 Aria 鎶曞奖闇€瑕佹彁渚?VRS/no-image VRS 鏂囦欢鎴?`online_calibration.jsonl`锛屽苟瀹夎 `projectaria-tools`銆備唬鐮佷細浼樺厛璧?Project Aria 鍘熺敓 `CameraCalibration.project()`銆侸SON calibration 涔熷彲浠ョ敤锛屼絾蹇呴』鏄惧紡鍖呭惈 RGB intrinsics 鍔?`T_camera_cpf`锛屾垨鑰?`T_device_camera` 鍜?`T_device_cpf`銆傚鏋滃彧浣跨敤鍏紑 EgoLife Hugging Face 鏂囦欢涓旀病鏈?calibration/VRS锛屾纭涓哄氨鏄繚鎸?2D projection unavailable锛屽彧浣跨敤瑙嗛甯у拰鏈姇褰辩殑 3D gaze 缁熻銆?
 
-## 本地 CPU Dry Run
+## 鏈湴 CPU Dry Run
 
-dry run 用来验证 Hugging Face manifest、evidence packet、video-first prompt 和 schema 工具链。它不会加载 Qwen3-VL，也不会真的生成高质量 QA。
+dry run 鐢ㄦ潵楠岃瘉 Hugging Face manifest銆乪vidence packet銆乿ideo-first prompt 鍜?schema 宸ュ叿閾俱€傚畠涓嶄細鍔犺浇 Qwen3-VL锛屼篃涓嶄細鐪熺殑鐢熸垚楂樿川閲?QA銆?
 
 ```bash
 python -m egolife_two_user_qa build_manifest \
@@ -279,7 +279,7 @@ python -m egolife_two_user_qa generate_video_qa_loop \
 
 ## GPU Pilot Run
 
-正式生成 20 条 QA 需要 GPU 或支持视频输入的本地 VLM server。
+姝ｅ紡鐢熸垚 20 鏉?QA 闇€瑕?GPU 鎴栨敮鎸佽棰戣緭鍏ョ殑鏈湴 VLM server銆?
 
 ```bash
 bash scripts/run_qwen3vl_gpu.sh \
@@ -289,7 +289,7 @@ bash scripts/run_qwen3vl_gpu.sh \
   --max-new-tokens 1536
 ```
 
-如果使用本地 OpenAI-compatible server，比如 vLLM/SGLang/llama.cpp，先启动 server，然后运行：
+濡傛灉浣跨敤鏈湴 OpenAI-compatible server锛屾瘮濡?vLLM/SGLang/llama.cpp锛屽厛鍚姩 server锛岀劧鍚庤繍琛岋細
 
 ```bash
 python -m egolife_two_user_qa generate_video_qa_loop \
@@ -302,7 +302,7 @@ python -m egolife_two_user_qa generate_video_qa_loop \
   --allow-openai-video-input
 ```
 
-如果不传 `--allow-openai-video-input`，OpenAI-compatible backend 会退回 sampled frame images，因为不是每个本地 server 都支持 video data URL。
+濡傛灉涓嶄紶 `--allow-openai-video-input`锛孫penAI-compatible backend 浼氶€€鍥?sampled frame images锛屽洜涓轰笉鏄瘡涓湰鍦?server 閮芥敮鎸?video data URL銆?
 
 ### Gemini 2.5 Flash Backend
 
@@ -349,7 +349,7 @@ each generation or judge call has its own fresh KV cache.
 Run the maintained sampling launcher with K fixed to 40:
 
 ```bash
-SAMPLING_TOP_K=40 sbatch hpc/run_clip_pruned_sampling_neutral_pf_50.sbatch
+SAMPLING_TOP_K=40 sbatch hpc/qa/experiments/run_clip_pruned_sampling_neutral_pf_50.sbatch
 ```
 
 The generator receives the pruned videos at 1 FPS. The visual Qwen verification
@@ -399,7 +399,7 @@ the two videos.
 Run the category-free implicit underrepresented-family experiment with:
 
 ```bash
-sbatch hpc/run_implicit_underrepresented_families_50.sbatch
+sbatch hpc/qa/experiments/run_implicit_underrepresented_families_50.sbatch
 ```
 
 The launcher uses neutral generation with sampling temperature 0.7, top-p 0.9,
@@ -458,7 +458,7 @@ rows.
 Submit the baseline intermediate and its evidence file:
 
 ```bash
-sbatch hpc/run_generator_rationale_ablation_qwen.sbatch \
+sbatch hpc/qa/experiments/run_generator_rationale_ablation_qwen.sbatch \
   path/to/qa_mcq.intermediate.jsonl \
   path/to/evidence_pruned_pairs.jsonl
 ```
@@ -475,7 +475,7 @@ JSONLs retain `attempt_count` and the judge configuration but drop dense
 the root output directory. Both phases start fresh by default; explicitly set
 `RATIONALE_ABLATION_RESUME=1` or `RATIONALE_PRODUCTION_RESUME=1` only when a
 resume is desired. The
-launcher also starts `hpc/cuda.py` before the ablation and keeps it running
+launcher also starts `hpc/shared/cuda.py` before the ablation and keeps it running
 through the production phase; it is stopped automatically when the job exits.
 Set `CUDA_KEEPER_ENABLE=0` to disable it, or override
 `CUDA_KEEPER_THRESHOLD`, `CUDA_KEEPER_GPUS`, and `CUDA_KEEPER_RESERVE`.
@@ -489,9 +489,9 @@ old artifacts and offline historical reproduction. They are excluded from
 generation loop. The old discovery-control launcher exits immediately with an
 archive notice; the historical implementation remains below that guard.
 
-## 输出 Schema
+## 杈撳嚭 Schema
 
-`qa_mcq.jsonl` 每一行是一条 QA，包含：
+`qa_mcq.jsonl` 姣忎竴琛屾槸涓€鏉?QA锛屽寘鍚細
 
 - `qa_id`
 - `question`
@@ -515,14 +515,14 @@ archive notice; the historical implementation remains below that guard.
 - `model_id`
 - `source_urls`
 
-最终 `review` 由 `generate_video_qa_loop` 根据 judger、answerability evaluation 和 deterministic schema validation 生成。strict validation 要求 `review.status == "passed"`、`review.review_passed == true`，并且下面这些 judger blocking checks 全部为 `PASS`：
+鏈€缁?`review` 鐢?`generate_video_qa_loop` 鏍规嵁 judger銆乤nswerability evaluation 鍜?deterministic schema validation 鐢熸垚銆俿trict validation 瑕佹眰 `review.status == "passed"`銆乣review.review_passed == true`锛屽苟涓斾笅闈㈣繖浜?judger blocking checks 鍏ㄩ儴涓?`PASS`锛?
 
 - `qa_formality`
 - `evidence_groundedness`
 
-`generation_trace` 保存人眼核查需要的 intermediate data，包括 generation prompt/raw output、judger prompt/raw output、retry 时传回 generator 的 feedback、answerability conditions，以及每个 condition 实际使用的视频路径。只要传入 `--intermediate-output`，同样的 trace 也会单独写成 JSONL，方便后续人工检查。
+`generation_trace` 淇濆瓨浜虹溂鏍告煡闇€瑕佺殑 intermediate data锛屽寘鎷?generation prompt/raw output銆乯udger prompt/raw output銆乺etry 鏃朵紶鍥?generator 鐨?feedback銆乤nswerability conditions锛屼互鍙婃瘡涓?condition 瀹為檯浣跨敤鐨勮棰戣矾寰勩€傚彧瑕佷紶鍏?`--intermediate-output`锛屽悓鏍风殑 trace 涔熶細鍗曠嫭鍐欐垚 JSONL锛屾柟渚垮悗缁汉宸ユ鏌ャ€?
 
-运行严格校验：
+杩愯涓ユ牸鏍￠獙锛?
 
 ```bash
 python -m egolife_two_user_qa validate_outputs \

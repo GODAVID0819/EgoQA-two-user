@@ -34,6 +34,8 @@ class PruningAblationTests(unittest.TestCase):
         script_path = (
             Path(__file__).resolve().parents[1]
             / "hpc"
+            / "qa"
+            / "production"
             / "run_clip_pruned_packets_300_mixed_temporal.sbatch"
         )
         script = script_path.read_text(encoding="utf-8")
@@ -68,9 +70,15 @@ class PruningAblationTests(unittest.TestCase):
             compile(source, f"sbatch-heredoc-{index}", "exec")
 
     def test_slurm_launcher_requires_cuda_keeper_for_entire_ablation(self) -> None:
-        script_path = Path(__file__).resolve().parents[1] / "hpc" / "run_pruning_ablation_30s.sbatch"
+        script_path = (
+            Path(__file__).resolve().parents[1]
+            / "hpc"
+            / "qa"
+            / "preprocessing"
+            / "run_pruning_ablation_30s.sbatch"
+        )
         script = script_path.read_text(encoding="utf-8")
-        self.assertIn('CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/hpc/cuda.py}"', script)
+        self.assertIn('CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/hpc/shared/cuda.py}"', script)
         self.assertIn('echo "cuda_keeper=required threshold=${CUDA_KEEPER_THRESHOLD}', script)
         self.assertIn('echo "stage=start_cuda_keeper"', script)
         self.assertIn('python "${CUDA_KEEPER_SCRIPT}"', script)

@@ -3,20 +3,20 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-COUNT_COMPATIBILITY_LAUNCHER = ROOT / "hpc" / "run_implicit_count_nudge_50.sbatch"
-CATEGORY_COMPATIBILITY_LAUNCHER = ROOT / "hpc" / "run_category_guided_50.sbatch"
-PRODUCTION_LAUNCHER = ROOT / "hpc" / "run_clip_pruned_sampling_neutral_pf_50.sbatch"
-CONCURRENT_LAUNCHER = ROOT / "hpc" / "run_concurrent_activity_comparison_50.sbatch"
-IMPLICIT_FAMILIES_LAUNCHER = ROOT / "hpc" / "run_implicit_underrepresented_families_50.sbatch"
+QA_EXPERIMENTS = ROOT / "hpc" / "qa" / "experiments"
+QA_ARCHIVED = ROOT / "hpc" / "qa" / "archived"
+COUNT_COMPATIBILITY_LAUNCHER = QA_EXPERIMENTS / "run_implicit_count_nudge_50.sbatch"
+CATEGORY_COMPATIBILITY_LAUNCHER = QA_EXPERIMENTS / "run_category_guided_50.sbatch"
+PRODUCTION_LAUNCHER = QA_EXPERIMENTS / "run_clip_pruned_sampling_neutral_pf_50.sbatch"
+CONCURRENT_LAUNCHER = QA_EXPERIMENTS / "run_concurrent_activity_comparison_50.sbatch"
+IMPLICIT_FAMILIES_LAUNCHER = QA_EXPERIMENTS / "run_implicit_underrepresented_families_50.sbatch"
 ARCHIVED_SCORED_JUDGE_LAUNCHERS = (
-    ROOT / "hpc" / "run_clip_pruned_neutral_prompt_50_qwen.sbatch",
-    ROOT / "hpc" / "run_clip_pruned_neutral_prompt_50_mix.sbatch",
+    QA_EXPERIMENTS / "run_clip_pruned_neutral_prompt_50_qwen.sbatch",
+    QA_ARCHIVED / "run_clip_pruned_neutral_prompt_50_mix.sbatch",
 )
 ARCHIVED_QUOTA_JUDGE_LAUNCHERS = (
-    ROOT / "hpc" / "run_clip_pruned_rationale_quota48_single_model_50.sbatch",
-    ROOT
-    / "hpc"
-    / "run_clip_pruned_gemini25_openrouter_generator_qwen_judge_quota48_50.sbatch",
+    QA_EXPERIMENTS / "run_clip_pruned_rationale_quota48_single_model_50.sbatch",
+    QA_ARCHIVED / "run_clip_pruned_gemini25_openrouter_generator_qwen_judge_quota48_50.sbatch",
 )
 
 

@@ -1,8 +1,25 @@
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
 
 # Local experiment artifacts and research documentation
 /outputs/
+/output/
 /analysis_outputs/
 /tmp/
-/docs/
+/logs/
+/egolife_two_user_qa/outputs/
+/.rebase-untracked-backup-*/
+
+/hpc/logs/*
+!/hpc/logs/.gitkeep
+
+/docs/*
+!/docs/others/
+!/docs/others/**
+
+~$*
+*.tmp

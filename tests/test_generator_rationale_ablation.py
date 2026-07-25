@@ -23,6 +23,8 @@ def test_production_launcher_keeps_scoring_and_quota_archived() -> None:
     script = (
         Path(__file__).resolve().parents[1]
         / "hpc"
+        / "qa"
+        / "experiments"
         / "run_generator_rationale_ablation_qwen.sbatch"
     ).read_text(encoding="utf-8")
 
