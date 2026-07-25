@@ -641,7 +641,7 @@ class Qwen3VLTransformersRunner:
                     "type": "video",
                     "video": video_path,
                     "max_pixels": self.max_image_pixels,
-                    "fps": self.video_fps,
+                    "fps": getattr(self, "video_fps", DEFAULT_VIDEO_FPS),
                 }
                 if self.min_video_pixels is not None:
                     video_content["min_pixels"] = self.min_video_pixels
