@@ -458,6 +458,7 @@ class Qwen3VLTransformersRunner:
         *,
         max_new_tokens: int = 1024,
         max_image_pixels: int = DEFAULT_MAX_IMAGE_PIXELS,
+        min_video_pixels: int | None = None,
         dtype: str = "bfloat16",
         allow_cpu: bool = False,
         disable_thinking: bool = False,
@@ -481,6 +482,9 @@ class Qwen3VLTransformersRunner:
         self.model_id = model_id
         self.max_new_tokens = max_new_tokens
         self.max_image_pixels = max_image_pixels
+        if min_video_pixels is not None and not 0 < min_video_pixels <= max_image_pixels:
+            raise ValueError("min_video_pixels must be positive and no greater than max_image_pixels")
+        self.min_video_pixels = min_video_pixels
         self.disable_thinking = disable_thinking
         self.video_fps = float(video_fps)
         self.max_input_tokens = max_input_tokens
@@ -632,15 +636,16 @@ class Qwen3VLTransformersRunner:
                 {"type": "image", "image": image_path, "max_pixels": self.max_image_pixels}
                 for image_path in image_paths
             ]
-            content.extend(
-                {
+            for video_path in video_paths:
+                video_content = {
                     "type": "video",
                     "video": video_path,
                     "max_pixels": self.max_image_pixels,
                     "fps": self.video_fps,
                 }
-                for video_path in video_paths
-            )
+                if self.min_video_pixels is not None:
+                    video_content["min_pixels"] = self.min_video_pixels
+                content.append(video_content)
             content.append({"type": "text", "text": prompt})
         else:
             content = [dict(item) for item in multimodal_content]

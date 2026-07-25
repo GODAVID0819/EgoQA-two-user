@@ -25,13 +25,23 @@ POLICY_INPUT="native_video"
 EGOQA_FORMALITY_REWARD_REVISION="qa_formality_confidence_v1"
 export EGOQA_FORMALITY_REWARD_REVISION
 
-JOB_CACHE_ROOT="${JOB_CACHE_ROOT:-/scratch/${USER}/formality_job_cache}"
-export HF_HOME="${HF_HOME:-${JOB_CACHE_ROOT}/hf}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${JOB_CACHE_ROOT}/xdg}"
-export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${JOB_CACHE_ROOT}/triton}"
-export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-${JOB_CACHE_ROOT}/torchinductor}"
-export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-${JOB_CACHE_ROOT}/vllm}"
-export CUDA_CACHE_PATH="${CUDA_CACHE_PATH:-${JOB_CACHE_ROOT}/cuda}"
+JOB_SCRATCH_ROOT="${JOB_SCRATCH_ROOT:-/scratch/${USER}/formality_job_runtime}"
+# 作业内部统一覆盖缓存、配置与临时目录，避免继承登录 shell 中指向 /home 的旧值。
+export HOME="${JOB_SCRATCH_ROOT}/home"
+export XDG_CACHE_HOME="${JOB_SCRATCH_ROOT}/xdg"
+export HF_HOME="${JOB_SCRATCH_ROOT}/huggingface"
+export HF_DATASETS_CACHE="${JOB_SCRATCH_ROOT}/huggingface/datasets"
+export MODELSCOPE_CACHE="${JOB_SCRATCH_ROOT}/modelscope"
+export TORCH_HOME="${JOB_SCRATCH_ROOT}/torch"
+export TRITON_CACHE_DIR="${JOB_SCRATCH_ROOT}/triton"
+export TORCHINDUCTOR_CACHE_DIR="${JOB_SCRATCH_ROOT}/torchinductor"
+export VLLM_CACHE_ROOT="${JOB_SCRATCH_ROOT}/vllm"
+export CUDA_CACHE_PATH="${JOB_SCRATCH_ROOT}/cuda"
+export FLASHINFER_WORKSPACE_BASE="${JOB_SCRATCH_ROOT}/flashinfer"
+export TMPDIR="${JOB_SCRATCH_ROOT}/tmp"
+export TMP="${TMPDIR}"
+export TEMP="${TMPDIR}"
+export VLLM_NO_USAGE_STATS=1
 export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=false VLLM_USE_FLASHINFER_SAMPLER=0
 export FPS="${FPS:-1}" FPS_MIN_FRAMES="${FPS_MIN_FRAMES:-4}" FPS_MAX_FRAMES="${FPS_MAX_FRAMES:-64}"
@@ -41,14 +51,16 @@ export EGOQA_POLICY_MODEL="${POLICY_MODEL}" EGOQA_REVIEW_MODEL="${REVIEW_MODEL}"
 export EGOQA_REVIEW_BASE_URL="${REVIEW_BASE_URL}" EGOQA_REVIEW_MAX_NEW_TOKENS="2048"
 
 cd "${PROJECT_ROOT}"
-mkdir -p logs "${GRPO_V3_ROOT}" "${OUTPUT_DIR}" "${HF_HOME}" "${XDG_CACHE_HOME}" \
-  "${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}" "${VLLM_CACHE_ROOT}" "${CUDA_CACHE_PATH}"
+mkdir -p logs "${GRPO_V3_ROOT}" "${OUTPUT_DIR}"
 PYTHON="${TRAIN_ENV}/bin/python"
 SWIFT="${TRAIN_ENV}/bin/swift"
 VLLM="${INFERENCE_ENV}/bin/vllm"
 for required in "${PYTHON}" "${SWIFT}" "${VLLM}" "${POLICY_MODEL}" "${REVIEW_MODEL}"; do
   [[ -e "${required}" ]] || { echo "缺少必需路径: ${required}" >&2; exit 2; }
 done
+"${PYTHON}" -m training.torch_storage_preflight \
+  --allowed-root "${JOB_SCRATCH_ROOT}" \
+  --output "${OUTPUT_DIR}/storage_preflight.json"
 "${PYTHON}" -c 'import importlib.metadata as m; assert m.version("ms-swift") == "4.2.2"'
 "${PYTHON}" -m pip freeze > "${OUTPUT_DIR}/dependencies.txt"
 

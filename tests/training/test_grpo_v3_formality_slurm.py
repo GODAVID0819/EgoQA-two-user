@@ -63,6 +63,43 @@ class FormalitySlurmTests(unittest.TestCase):
                 self.assertLess(validate_at, summarize_at)
                 self.assertLess(summarize_at, exit_at)
 
+    def test_flashinfer_workspace_uses_the_supported_environment_variable(self) -> None:
+        for path in (SMOKE, PROBE):
+            with self.subTest(path=path.name):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn("FLASHINFER_WORKSPACE_BASE", text)
+                self.assertNotIn("FLASHINFER_WORKSPACE_DIR", text)
+
+    def test_storage_preflight_precedes_reviewer_and_trainer(self) -> None:
+        required_variables = (
+            "JOB_SCRATCH_ROOT",
+            "HOME",
+            "XDG_CACHE_HOME",
+            "HF_HOME",
+            "HF_DATASETS_CACHE",
+            "MODELSCOPE_CACHE",
+            "TORCH_HOME",
+            "TRITON_CACHE_DIR",
+            "TORCHINDUCTOR_CACHE_DIR",
+            "VLLM_CACHE_ROOT",
+            "CUDA_CACHE_PATH",
+            "FLASHINFER_WORKSPACE_BASE",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "VLLM_NO_USAGE_STATS=1",
+        )
+        for path in (SMOKE, PROBE):
+            with self.subTest(path=path.name):
+                text = path.read_text(encoding="utf-8")
+                for variable in required_variables:
+                    self.assertIn(variable, text)
+                preflight_at = text.index("training.torch_storage_preflight")
+                reviewer_at = text.index('"${VLLM}" serve')
+                trainer_at = text.index('"${SWIFT}" rlhf')
+                self.assertLess(preflight_at, reviewer_at)
+                self.assertLess(preflight_at, trainer_at)
+                self.assertIn('"${OUTPUT_DIR}/storage_preflight.json"', text)
 
 if __name__ == "__main__":
     unittest.main()

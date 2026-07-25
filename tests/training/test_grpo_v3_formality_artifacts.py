@@ -55,6 +55,17 @@ def _build_output(root: Path, *, mode: str) -> Path:
         ),
         encoding="utf-8",
     )
+    (output / "storage_preflight.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "torch_storage_preflight_v1",
+                "status": "passed",
+                "allowed_root": str((root / "scratch").resolve()),
+                "checks": {},
+            }
+        ),
+        encoding="utf-8",
+    )
     rows = [
         _trace_row(call_index, candidate, call_index * 0.01 + candidate * 0.02)
         for call_index in range(steps)
@@ -95,6 +106,22 @@ class FormalityArtifactTests(unittest.TestCase):
             result = validate_formality_artifacts(output, mode="probe")
         self.assertIn("convergence_metrics_passed", result["failed_checks"])
 
+    def test_validation_rejects_missing_or_failed_storage_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing_output = _build_output(root / "missing", mode="smoke")
+            (missing_output / "storage_preflight.json").unlink()
+            missing = validate_formality_artifacts(missing_output, mode="smoke")
+
+            failed_output = _build_output(root / "failed", mode="smoke")
+            (failed_output / "storage_preflight.json").write_text(
+                json.dumps({"status": "failed"}), encoding="utf-8"
+            )
+            failed = validate_formality_artifacts(failed_output, mode="smoke")
+
+        self.assertIn("storage_preflight_passed", missing["failed_checks"])
+        self.assertIn("storage_preflight_passed", failed["failed_checks"])
+
     def test_manifest_records_parent_hashes_and_single_reward(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -127,6 +154,11 @@ class FormalityArtifactTests(unittest.TestCase):
             expected_dataset_sha256,
         )
         self.assertFalse(manifest["calls_video_reviewer"])
+        self.assertEqual(manifest["storage_preflight"]["status"], "passed")
+        self.assertEqual(
+            manifest["resolved_config"]["storage_preflight"]["status"],
+            "passed",
+        )
 
 
 if __name__ == "__main__":

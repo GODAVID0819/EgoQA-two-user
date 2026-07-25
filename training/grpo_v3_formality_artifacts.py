@@ -49,6 +49,7 @@ def validate_formality_artifacts(output_dir: Path, *, mode: str) -> dict[str, An
     ]
     trainer_state = _latest_trainer_state(output_dir)
     global_step = int(trainer_state.get("global_step") or 0)
+    storage_preflight = _read_json(output_dir / "storage_preflight.json")
     reload_result = _read_json(output_dir / "adapter_reload.json")
     adapter_dirs = [
         path.parent
@@ -83,6 +84,7 @@ def validate_formality_artifacts(output_dir: Path, *, mode: str) -> dict[str, An
     expected_rows = 4 if mode == "smoke" else 160
     expected_steps = 1 if mode == "smoke" else 40
     checks = {
+        "storage_preflight_passed": storage_preflight.get("status") == "passed",
         "exact_trace_count": len(rows) == expected_rows,
         "all_rewards_finite": len(finite) == len(rows) == expected_rows,
         "reward_std_positive": len(finite) >= 2 and statistics.pstdev(finite) > 0,
@@ -138,6 +140,7 @@ def summarize_formality_run(
     dataset_sha256 = hashlib.sha256(dataset.read_bytes()).hexdigest()
     convergence = _read_json(output_dir / "convergence_metrics.json")
     adapter_reload = _read_json(output_dir / "adapter_reload.json")
+    storage_preflight = _read_json(output_dir / "storage_preflight.json")
     resolved_config = {
         "mode": mode,
         "policy_model": policy_model,
@@ -154,6 +157,7 @@ def summarize_formality_run(
         "learning_rate": 1e-5,
         "lr_scheduler_type": "constant",
         "beta": 0.0,
+        "storage_preflight": storage_preflight,
     }
     manifest = {
         "schema_version": "grpo_v3_formality_run_manifest_v1",
@@ -175,6 +179,7 @@ def summarize_formality_run(
         "adapter_dir": adapter_reload.get("adapter_dir"),
         "result": result,
         "convergence_metrics": convergence or None,
+        "storage_preflight": storage_preflight,
         "resolved_config": resolved_config,
     }
     output_dir.mkdir(parents=True, exist_ok=True)
