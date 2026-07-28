@@ -750,6 +750,207 @@ class AnswerMarginReward(ORM):
         return rewards
 
 
+class CrossViewRelationReward(ORM):
+    """Group-level anchored cross-view relation reward ORM."""
+
+    def __init__(
+        self,
+        args: Any = None,
+        *,
+        trace_path: str | Path | None = None,
+        judge_group_fn: Callable[..., Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(args, **kwargs)
+        self.trace_path = _trace_path(trace_path or os.environ.get("EGOQA_REWARD_TRACE"))
+        self._lock = threading.Lock()
+        self._reward_call_index = 0
+        self.judge_group_fn = judge_group_fn or self._build_judge_group_fn()
+
+    def _next_call_index(self) -> int:
+        with self._lock:
+            value = self._reward_call_index
+            self._reward_call_index += 1
+        return value
+
+    @staticmethod
+    def _build_judge_group_fn() -> Callable[..., Any]:
+        from training.grpo_v3.experiments.qa_cross_view_relation.judge import (
+            judge_candidate_group,
+        )
+
+        runner_cache: dict[str, Any] = {}
+
+        def run_group(**kwargs: Any) -> Any:
+            from qwen3vl_runner import OpenAICompatibleLocalRunner
+
+            runner = runner_cache.get("runner")
+            if runner is None:
+                runner = OpenAICompatibleLocalRunner(
+                    model_id=os.environ.get("EGOQA_REVIEW_MODEL", "Qwen/Qwen3-VL-8B-Instruct"),
+                    base_url=os.environ.get("EGOQA_REVIEW_BASE_URL", "http://127.0.0.1:8001/v1"),
+                    max_new_tokens=int(os.environ.get("EGOQA_REVIEW_MAX_NEW_TOKENS", "2048")),
+                    timeout=int(os.environ.get("EGOQA_REVIEW_TIMEOUT_SECONDS", "900")),
+                    allow_video_input=False,
+                )
+                runner_cache["runner"] = runner
+            return judge_candidate_group(runner=runner, **kwargs)
+
+        return run_group
+
+    def __call__(self, completions: Sequence[str], **kwargs: Any) -> list[float]:
+        from training.grpo_v3.experiments.qa_cross_view_relation.anchors import load_anchor_set
+        from training.grpo_v3.experiments.qa_cross_view_relation.deterministic import assess_completion
+        from training.grpo_v3.experiments.qa_cross_view_relation.domain import (
+            GroupJudgeResult,
+            JudgeCandidate,
+            REWARD_COMPONENT,
+            REWARD_REVISION,
+        )
+        from training.grpo_v3.experiments.qa_cross_view_relation.reward import (
+            compute_group_rewards,
+        )
+
+        count = len(completions)
+        call_index = self._next_call_index()
+
+        def metadata_error_row(error: Exception, *, stage: str = "metadata") -> dict[str, Any]:
+            return {
+                "reward_kind": "qa_cross_view_relation",
+                "reward_revision": REWARD_REVISION,
+                "reward_call_index": call_index,
+                "failure_stage": stage,
+                "reward": None,
+                "record": {
+                    "masked": True,
+                    "eligible_for_grpo": False,
+                    "infrastructure_error": {
+                        "type": type(error).__name__,
+                        "message": str(error),
+                    },
+                },
+            }
+
+        if count != 4:
+            error = CompletionGroupSizeError(
+                f"cross-view relation reward requires 4 completions, got {count}"
+            )
+            _write_rows(self.trace_path, [metadata_error_row(error)], self._lock)
+            raise error
+
+        try:
+            packets = _expand(kwargs["packet_json"], count, name="packet_json")
+            evidence_ids = _expand(kwargs["evidence_id"], count, name="evidence_id")
+            question_types = _expand(kwargs["question_type"], count, name="question_type")
+            generation_modes = _expand(kwargs["generation_mode"], count, name="generation_mode")
+            global_steps = _expand(kwargs.get("global_step", [None]), count, name="global_step")
+            if len({str(item) for item in evidence_ids}) != 1:
+                raise GroupIdentityError("cross-view relation group cannot mix evidence_id")
+            if len({str(item) for item in question_types}) != 1:
+                raise GroupIdentityError("cross-view relation group cannot mix question_type")
+            if len({str(item) for item in generation_modes}) != 1:
+                raise GroupIdentityError("cross-view relation group cannot mix generation_mode")
+        except Exception as exc:
+            _write_rows(self.trace_path, [metadata_error_row(exc)], self._lock)
+            raise
+
+        heldout_ids = {
+            item.strip()
+            for item in os.environ.get("EGOQA_HELDOUT_EVIDENCE_IDS", "").split(",")
+            if item.strip()
+        }
+        phase = "heldout" if str(evidence_ids[0]) in heldout_ids else "train"
+        packet0 = json.loads(packets[0]) if isinstance(packets[0], str) else packets[0]
+        packet_required_users = (
+            packet0.get("required_users")
+            if isinstance(packet0, dict) and isinstance(packet0.get("required_users"), list)
+            else None
+        )
+        candidate_ids = [f"candidate_{index}" for index in range(count)]
+        deterministic_results = {
+            candidate_ids[index]: assess_completion(
+                str(completions[index]),
+                required_users=packet_required_users,
+            )
+            for index in range(count)
+        }
+        candidates = [
+            JudgeCandidate(
+                candidate_id=candidate_id,
+                raw_completion=str(completions[index]),
+                qa=assessment.qa or {},
+                deterministic_flags=assessment.audit_flags,
+            )
+            for index, (candidate_id, assessment) in enumerate(deterministic_results.items())
+            if assessment.eligible_for_semantic_judge
+        ]
+
+        judge_result = None
+        anchors = load_anchor_set()
+        if candidates:
+            try:
+                raw_judge = self.judge_group_fn(
+                    candidates=candidates,
+                    deterministic_results=deterministic_results,
+                    anchors=anchors,
+                    order_seed=f"{evidence_ids[0]}:{call_index}",
+                )
+                judge_result = (
+                    raw_judge
+                    if isinstance(raw_judge, GroupJudgeResult)
+                    else GroupJudgeResult.from_mapping(
+                        raw_judge,
+                        [candidate.candidate_id for candidate in candidates],
+                    )
+                )
+            except Exception as exc:
+                row = metadata_error_row(exc, stage="group_judge")
+                row["phase"] = phase
+                row["evidence_id"] = str(evidence_ids[0])
+                _write_rows(self.trace_path, [row], self._lock)
+                raise
+
+        reward_results = compute_group_rewards(
+            candidate_ids=candidate_ids,
+            deterministic_results=deterministic_results,
+            judge_result=judge_result,
+        )
+        rows: list[dict[str, Any]] = []
+        values: list[float] = []
+        for index, candidate_id in enumerate(candidate_ids):
+            result = reward_results[candidate_id]
+            reward_value = float(result.reward_total)
+            if not math.isfinite(reward_value):
+                raise ValueError(f"cross-view relation reward non-finite: {reward_value}")
+            values.append(reward_value)
+            record = {
+                **result.to_record(),
+                "masked": False,
+                "eligible_for_grpo": True,
+                "deterministic": deterministic_results[candidate_id].to_dict(),
+                "judge_trace": judge_result.to_dict() if judge_result is not None else None,
+                "anchor_sha256": anchors.sha256,
+            }
+            rows.append({
+                "reward_kind": "qa_cross_view_relation",
+                "reward_revision": REWARD_REVISION,
+                "reward_call_index": call_index,
+                "phase": phase,
+                "global_step": global_steps[index],
+                "candidate_index": index,
+                "candidate_id": candidate_id,
+                "evidence_id": str(evidence_ids[index]),
+                "question_type": str(question_types[index]),
+                "generation_mode": str(generation_modes[index]),
+                "completion_length_chars": len(str(completions[index])),
+                "reward": reward_value,
+                "record": record,
+            })
+        _write_rows(self.trace_path, rows, self._lock)
+        return values
+
+
 orms["egoqa_gate1_controlled"] = ControlledGateReward
 orms["egoqa_repo_native_judge"] = RepoNativeJudgeReward
 orms["egoqa_combined_video_answer_margin"] = AnswerMarginReward
+orms["egoqa_cross_view_relation_v2"] = CrossViewRelationReward

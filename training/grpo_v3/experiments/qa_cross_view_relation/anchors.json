@@ -1,0 +1,46 @@
+{
+  "strong": {
+    "anchor_id": "strong_cross_view_followup_v1",
+    "question_type": "neutral",
+    "question": "After I left the counter where I had placed the mug, where did the mug end up?",
+    "options": [
+      "It remained on the counter.",
+      "It was placed in the sink.",
+      "It was beside the laptop on the other table.",
+      "It was moved onto a shelf.",
+      "It was being carried."
+    ],
+    "correct": "C",
+    "answer": "It was beside the laptop on the other table.",
+    "speaker_anchor": "The speaker placed the mug on the counter and then left.",
+    "other_view_missing_detail": "The other view shows the mug later beside the laptop.",
+    "cross_view_relation": "A concrete post-handoff state change connects the speaker's action to the later object location.",
+    "expected_scores": {
+      "cross_view_relation_score": 2,
+      "semantic_naturalness_score": 2,
+      "internal_consistency_score": 2
+    }
+  },
+  "weak": {
+    "anchor_id": "weak_other_person_activity_v1",
+    "question_type": "neutral",
+    "question": "While I was washing dishes, what was the other person doing?",
+    "options": [
+      "Reading a book.",
+      "Using a laptop.",
+      "Talking to someone.",
+      "Walking around the room.",
+      "Eating."
+    ],
+    "correct": "A",
+    "answer": "Reading a book.",
+    "speaker_anchor": "The speaker was washing dishes.",
+    "other_view_missing_detail": "The other person's concurrent activity.",
+    "cross_view_relation": "Only a shallow concurrent-activity query; no concrete object, state, outcome, consequence, or follow-up links the views.",
+    "expected_scores": {
+      "cross_view_relation_score": 0,
+      "semantic_naturalness_score": 2,
+      "internal_consistency_score": 2
+    }
+  }
+}
