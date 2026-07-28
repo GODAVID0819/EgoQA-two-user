@@ -13,6 +13,6 @@
 - [x] 在 probe 分析中报告模板集中度与 per-evidence 指标。
 - [x] 增加 8B generator、32B text judge 的 smoke/probe120 Slurm 入口及必要远程预检。
 - [x] 运行专项测试、训练回归、编译和 shell 静态检查。
-- [ ] 提交并尝试推送当前分支。
+- [x] 提交并推送当前分支。
 
 测试原则：只测试会改变 reward、judge 合同、数据 Gate 或远程启动合同的行为；不为纯文档、常量搬运和一次性胶水代码添加低价值测试。
