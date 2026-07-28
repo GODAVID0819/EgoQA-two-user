@@ -3,10 +3,19 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Sequence
 
+from qwen3vl_runner import OpenAICompatibleLocalRunner
+
 from .anchors import load_anchor_set
 from .deterministic import DeterministicAssessment
-from .domain import AnchorSet, GroupJudgeResult, JudgeCandidate
+from .domain import AnchorSet, GroupJudgeResult, JudgeCandidate, TEXT_CHECK_NAMES
 from .prompt import build_group_judge_prompt
+
+
+class NonThinkingTextJudgeRunner(OpenAICompatibleLocalRunner):
+    """Qwen3 text judge runner that reserves output tokens for strict JSON."""
+
+    def _extra_request_payload(self) -> dict[str, Any]:
+        return {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 def _call_runner(runner: Any, prompt: str) -> str:
@@ -32,6 +41,7 @@ def _build_schema_repair_prompt(
     raw_output: str,
     expected_candidate_ids: Sequence[str],
     error: BaseException,
+    require_text_checks: bool = False,
 ) -> str:
     payload = {
         "task": (
@@ -44,6 +54,7 @@ def _build_schema_repair_prompt(
             "candidate_scores must contain exactly one item for each required candidate_id.",
             "Each candidate_id must be copied exactly from required_candidate_ids.",
             "Do not use anchor ids as candidate ids.",
+            "Each pairwise_preferences keys set must equal all other required_candidate_ids exactly.",
             "Return JSON only, with no markdown fences or explanation.",
         ],
         "required_output_shape": {
@@ -62,6 +73,14 @@ def _build_schema_repair_prompt(
         "original_judge_request": original_prompt,
         "previous_invalid_response": raw_output,
     }
+    if require_text_checks:
+        payload["rules"].append(
+            "Each candidate must contain every required text check with PASS/FAIL status and a nonempty reason."
+        )
+        payload["required_output_shape"]["candidate_scores"][0]["checks"] = {
+            name: {"status": "PASS/FAIL", "reason": "specific text-only reason"}
+            for name in sorted(TEXT_CHECK_NAMES)
+        }
     return json.dumps(payload, ensure_ascii=True, indent=2)
 
 
@@ -71,10 +90,15 @@ def _parse_validate_or_repair(
     prompt: str,
     raw: str,
     expected_candidate_ids: Sequence[str],
+    require_text_checks: bool,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         parsed = _parse_json_object(raw)
-        GroupJudgeResult.from_mapping(parsed, expected_candidate_ids)
+        GroupJudgeResult.from_mapping(
+            parsed,
+            expected_candidate_ids,
+            require_text_checks=require_text_checks,
+        )
         return parsed, {"prompt": prompt, "raw_output": raw, "parsed_output": parsed}
     except (TypeError, ValueError) as initial_error:
         repair_prompt = _build_schema_repair_prompt(
@@ -82,11 +106,16 @@ def _parse_validate_or_repair(
             raw_output=raw,
             expected_candidate_ids=expected_candidate_ids,
             error=initial_error,
+            require_text_checks=require_text_checks,
         )
         repair_raw = _call_runner(runner, repair_prompt)
         repair_parsed = _parse_json_object(repair_raw)
         try:
-            GroupJudgeResult.from_mapping(repair_parsed, expected_candidate_ids)
+            GroupJudgeResult.from_mapping(
+                repair_parsed,
+                expected_candidate_ids,
+                require_text_checks=require_text_checks,
+            )
         except (TypeError, ValueError) as repair_error:
             raise ValueError(
                 "judge output failed schema validation after one repair attempt: "
@@ -112,6 +141,7 @@ def _stabilize_unstable_result(
     first_result: GroupJudgeResult,
     second_result: GroupJudgeResult,
     expected_candidate_ids: Sequence[str],
+    require_text_checks: bool,
 ) -> dict[str, Any]:
     scores: list[dict[str, Any]] = []
     for candidate_id in expected_candidate_ids:
@@ -122,6 +152,20 @@ def _stabilize_unstable_result(
             "Two judge passes disagreed after reversing candidate order; scalar scores "
             "were conservatively minimized and pairwise preferences were neutralized."
         )
+        checks: dict[str, dict[str, str]] = {}
+        if require_text_checks:
+            for name in first_score.checks:
+                first_check = first_score.checks[name]
+                second_check = second_score.checks[name]
+                failed = first_check.status == "FAIL" or second_check.status == "FAIL"
+                checks[name] = {
+                    "status": "FAIL" if failed else "PASS",
+                    "reason": (
+                        f"forward: {first_check.reason} reverse: {second_check.reason}"
+                        if first_check != second_check
+                        else first_check.reason
+                    ),
+                }
         scores.append(
             {
                 "candidate_id": candidate_id,
@@ -144,6 +188,7 @@ def _stabilize_unstable_result(
                     if other_id != candidate_id
                 },
                 "reasons": reasons,
+                "checks": checks,
             }
         )
     return {"candidate_scores": scores}
@@ -156,6 +201,7 @@ def judge_candidate_group(
     anchors: AnchorSet | None = None,
     runner: Any,
     order_seed: str,
+    require_text_checks: bool = False,
 ) -> GroupJudgeResult:
     valid = [
         item for item in candidates
@@ -173,6 +219,7 @@ def judge_candidate_group(
             anchors=anchor_set,
             order_seed=order_seed,
             reverse=reverse,
+            require_text_checks=require_text_checks,
         )
         raw = _call_runner(runner, prompt)
         _parsed, trace = _parse_validate_or_repair(
@@ -180,13 +227,22 @@ def judge_candidate_group(
             prompt=prompt,
             raw=raw,
             expected_candidate_ids=expected_candidate_ids,
+            require_text_checks=require_text_checks,
         )
         outputs.append(trace)
         orders.append(order)
     first = outputs[0]["parsed_output"]
     second = outputs[1]["parsed_output"]
-    first_result = GroupJudgeResult.from_mapping(first, expected_candidate_ids)
-    second_result = GroupJudgeResult.from_mapping(second, expected_candidate_ids)
+    first_result = GroupJudgeResult.from_mapping(
+        first,
+        expected_candidate_ids,
+        require_text_checks=require_text_checks,
+    )
+    second_result = GroupJudgeResult.from_mapping(
+        second,
+        expected_candidate_ids,
+        require_text_checks=require_text_checks,
+    )
     instability = any(
         {
             "cross_view_relation_score": first_result.candidate_scores[cid].cross_view_relation_score,
@@ -194,6 +250,10 @@ def judge_candidate_group(
             "internal_consistency_score": first_result.candidate_scores[cid].internal_consistency_score,
             "anchor_tier": first_result.candidate_scores[cid].anchor_tier,
             "pairwise_preferences": first_result.candidate_scores[cid].pairwise_preferences,
+            "check_statuses": {
+                name: check.status
+                for name, check in first_result.candidate_scores[cid].checks.items()
+            },
         }
         != {
             "cross_view_relation_score": second_result.candidate_scores[cid].cross_view_relation_score,
@@ -201,6 +261,10 @@ def judge_candidate_group(
             "internal_consistency_score": second_result.candidate_scores[cid].internal_consistency_score,
             "anchor_tier": second_result.candidate_scores[cid].anchor_tier,
             "pairwise_preferences": second_result.candidate_scores[cid].pairwise_preferences,
+            "check_statuses": {
+                name: check.status
+                for name, check in second_result.candidate_scores[cid].checks.items()
+            },
         }
         for cid in first_result.candidate_scores
     )
@@ -209,6 +273,7 @@ def judge_candidate_group(
             first_result=first_result,
             second_result=second_result,
             expected_candidate_ids=expected_candidate_ids,
+            require_text_checks=require_text_checks,
         )
         if instability
         else first
@@ -219,4 +284,5 @@ def judge_candidate_group(
         raw_outputs=outputs,
         item_orders=orders,
         order_instability=instability,
+        require_text_checks=require_text_checks,
     )

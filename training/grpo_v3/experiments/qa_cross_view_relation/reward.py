@@ -8,12 +8,27 @@ from .deterministic import DeterministicAssessment
 from .domain import GroupJudgeResult, REWARD_COMPONENT, REWARD_REVISION
 
 
+CONSISTENCY_BLOCKERS = frozenset(
+    {
+        "question_answer_type_match",
+        "options_answer_same_question",
+        "semantic_option_uniqueness",
+        "answer_resolves_question",
+        "premise_relevance",
+        "text_claim_consistency",
+    }
+)
+
+
 @dataclass(frozen=True)
 class RewardResult:
     candidate_id: str
     semantic_quality: float
     anchor_score: float
     borda_score: float
+    reward_before_cap: float
+    reward_cap: float
+    cap_reasons: tuple[str, ...]
     reward_total: float
     reward_source: str
     format_status: str
@@ -25,6 +40,9 @@ class RewardResult:
             "semantic_quality": self.semantic_quality,
             "anchor_score": self.anchor_score,
             "borda_score": self.borda_score,
+            "reward_before_cap": self.reward_before_cap,
+            "reward_cap": self.reward_cap,
+            "cap_reasons": list(self.cap_reasons),
             "reward_total": self.reward_total,
             "reward_components": {REWARD_COMPONENT: self.reward_total},
             "reward_source": self.reward_source,
@@ -74,15 +92,24 @@ def _deterministic_blocking_penalty(assessment: DeterministicAssessment) -> floa
     return 0.0
 
 
-def _zero_group_result(candidate_id: str, assessment: DeterministicAssessment) -> RewardResult:
+def _zero_group_result(
+    candidate_id: str,
+    assessment: DeterministicAssessment,
+    *,
+    reward_revision: str,
+) -> RewardResult:
     return RewardResult(
         candidate_id=candidate_id,
         semantic_quality=0.0,
         anchor_score=0.0,
         borda_score=0.0,
+        reward_before_cap=0.0,
+        reward_cap=1.0,
+        cap_reasons=(),
         reward_total=0.0,
         reward_source="group_skipped_unrecoverable_json",
         format_status=assessment.format_status,
+        reward_revision=reward_revision,
     )
 
 
@@ -92,11 +119,17 @@ def compute_group_rewards(
     deterministic_results: Mapping[str, DeterministicAssessment],
     judge_result: GroupJudgeResult | None,
     invalid_cost: float = 0.05,
+    apply_text_caps: bool = False,
+    reward_revision: str = REWARD_REVISION,
 ) -> dict[str, RewardResult]:
     ids = [str(item) for item in candidate_ids]
     if any(_has_unrecoverable_json(deterministic_results[item]) for item in ids):
         return {
-            item: _zero_group_result(item, deterministic_results[item])
+            item: _zero_group_result(
+                item,
+                deterministic_results[item],
+                reward_revision=reward_revision,
+            )
             for item in ids
         }
 
@@ -114,23 +147,58 @@ def compute_group_rewards(
     for candidate_id in valid_ids:
         assert judge_result is not None
         score = judge_result.candidate_scores[candidate_id]
-        semantic = _semantic_quality(
-            score.cross_view_relation_score,
-            score.semantic_naturalness_score,
-            score.internal_consistency_score,
+        relation_score = score.cross_view_relation_score
+        naturalness_score = score.semantic_naturalness_score
+        consistency_score = score.internal_consistency_score
+        anchor_tier = score.anchor_tier
+        failed = (
+            {name for name, check in score.checks.items() if check.status == "FAIL"}
+            if apply_text_caps
+            else set()
         )
-        anchor = score.anchor_tier / 2.0
+        consistency_failures = sorted(failed & CONSISTENCY_BLOCKERS)
+        if consistency_failures:
+            consistency_score = 0
+            anchor_tier = min(anchor_tier, 1)
+        if "shallow_activity_relation" in failed:
+            relation_score = 0
+            anchor_tier = 0
+        if "natural_first_person_wording" in failed:
+            naturalness_score = 0
+        semantic = _semantic_quality(
+            relation_score,
+            naturalness_score,
+            consistency_score,
+        )
+        anchor = anchor_tier / 2.0
         borda = _borda(candidate_id, score.pairwise_preferences, valid_ids)
-        reward = _clamp_reward(0.60 * semantic + 0.25 * anchor + 0.15 * borda)
+        reward_before_cap = _clamp_reward(0.60 * semantic + 0.25 * anchor + 0.15 * borda)
+        reward_cap = 1.0
+        cap_reasons: list[str] = []
+        if apply_text_caps:
+            if consistency_failures:
+                reward_cap = min(reward_cap, 0.40)
+                cap_reasons.extend(consistency_failures)
+            if "shallow_activity_relation" in failed:
+                reward_cap = min(reward_cap, 0.40)
+                cap_reasons.append("shallow_activity_relation")
+            if "natural_first_person_wording" in failed:
+                reward_cap = min(reward_cap, 0.55)
+                cap_reasons.append("natural_first_person_wording")
+        reward = min(reward_before_cap, reward_cap)
         valid_rewards.append(reward)
         results[candidate_id] = RewardResult(
             candidate_id=candidate_id,
             semantic_quality=semantic,
             anchor_score=anchor,
             borda_score=borda,
+            reward_before_cap=reward_before_cap,
+            reward_cap=reward_cap,
+            cap_reasons=tuple(cap_reasons),
             reward_total=reward,
-            reward_source=REWARD_REVISION,
+            reward_source=reward_revision,
             format_status=deterministic_results[candidate_id].format_status,
+            reward_revision=reward_revision,
         )
 
     for candidate_id in ids:
@@ -143,8 +211,12 @@ def compute_group_rewards(
             semantic_quality=0.0,
             anchor_score=0.0,
             borda_score=0.0,
+            reward_before_cap=penalty,
+            reward_cap=1.0,
+            cap_reasons=(),
             reward_total=penalty,
             reward_source="deterministic_blocking_penalty" if assessment.blocking_errors else "all_invalid_zero",
             format_status=assessment.format_status,
+            reward_revision=reward_revision,
         )
     return results

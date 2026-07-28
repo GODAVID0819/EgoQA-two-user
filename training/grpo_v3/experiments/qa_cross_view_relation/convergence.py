@@ -33,7 +33,12 @@ def load_trace(path: str | Path) -> list[dict[str, Any]]:
     ]
 
 
-def analyze_trace(rows: list[dict[str, Any]], *, expected_groups: int = 40) -> dict[str, Any]:
+def analyze_trace(
+    rows: list[dict[str, Any]],
+    *,
+    expected_groups: int = 40,
+    expected_reward_revision: str = REWARD_REVISION,
+) -> dict[str, Any]:
     reward_rows = [
         row for row in rows
         if row.get("reward_kind") == "qa_cross_view_relation"
@@ -66,7 +71,7 @@ def analyze_trace(rows: list[dict[str, Any]], *, expected_groups: int = 40) -> d
     finite = all(math.isfinite(float(row["reward"])) for row in reward_rows)
     components_ok = all(
         set(((row.get("record") or {}).get("reward_components") or {})) == {REWARD_COMPONENT}
-        and (row.get("record") or {}).get("reward_revision") == REWARD_REVISION
+        and (row.get("record") or {}).get("reward_revision") == expected_reward_revision
         for row in reward_rows
     )
     failed_checks = []
@@ -83,7 +88,7 @@ def analyze_trace(rows: list[dict[str, Any]], *, expected_groups: int = 40) -> d
     failed_checks = [name for name, ok in checks.items() if not ok]
     return {
         "status": "passed" if not failed_checks else "failed",
-        "reward_revision": REWARD_REVISION,
+        "reward_revision": expected_reward_revision,
         "group_count": len(groups),
         "reward_count": len(reward_rows),
         "first10_mean": _mean(first10),
@@ -105,8 +110,13 @@ def main() -> None:
     parser.add_argument("--trace", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--expected-groups", type=int, default=40)
+    parser.add_argument("--expected-reward-revision", default=REWARD_REVISION)
     args = parser.parse_args()
-    result = analyze_trace(load_trace(args.trace), expected_groups=args.expected_groups)
+    result = analyze_trace(
+        load_trace(args.trace),
+        expected_groups=args.expected_groups,
+        expected_reward_revision=args.expected_reward_revision,
+    )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")

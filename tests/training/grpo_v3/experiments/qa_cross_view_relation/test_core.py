@@ -9,8 +9,13 @@ from training.grpo_v3.experiments.qa_cross_view_relation.domain import (
     CandidateSemanticScore,
     JudgeCandidate,
     GroupJudgeResult,
+    TEXT_CHECK_NAMES,
 )
-from training.grpo_v3.experiments.qa_cross_view_relation.judge import judge_candidate_group
+from training.grpo_v3.experiments.qa_cross_view_relation.judge import (
+    _build_schema_repair_prompt,
+    NonThinkingTextJudgeRunner,
+    judge_candidate_group,
+)
 from training.grpo_v3.experiments.qa_cross_view_relation.prompt import build_group_judge_prompt
 from training.grpo_v3.experiments.qa_cross_view_relation.reward import compute_group_rewards
 
@@ -30,7 +35,36 @@ def qa(**overrides):
     return value
 
 
+def passing_checks():
+    return {
+        name: {"status": "PASS", "reason": "The candidate passes this text-only check."}
+        for name in TEXT_CHECK_NAMES
+    }
+
+
+def judge_score(candidate_id="c0", **overrides):
+    value = {
+        "candidate_id": candidate_id,
+        "cross_view_relation_score": 2,
+        "semantic_naturalness_score": 2,
+        "internal_consistency_score": 2,
+        "anchor_tier": 2,
+        "pairwise_preferences": {},
+        "checks": passing_checks(),
+        "reasons": {"summary": "strong"},
+    }
+    value.update(overrides)
+    return value
+
+
 class CrossViewRelationCoreTests(unittest.TestCase):
+    def test_text_judge_explicitly_disables_qwen3_thinking_mode(self):
+        runner = NonThinkingTextJudgeRunner(model_id="Qwen3-32B")
+        self.assertEqual(
+            runner._extra_request_payload(),
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        )
+
     def test_domain_rejects_invalid_scores_and_missing_candidate_ids(self):
         valid = CandidateSemanticScore.from_mapping(
             {
@@ -50,6 +84,16 @@ class CrossViewRelationCoreTests(unittest.TestCase):
             GroupJudgeResult.from_mapping({"candidate_scores": [valid.to_dict()]}, ["c0", "c1"])
         with self.assertRaises(ValueError):
             GroupJudgeResult.from_mapping({"candidate_scores": [{**valid.to_dict(), "candidate_id": "strong_anchor"}]}, ["strong_anchor"])
+        with self.assertRaisesRegex(ValueError, "candidate score must be an object"):
+            GroupJudgeResult.from_mapping({"candidate_scores": ["not-an-object"]}, ["c0"])
+        c0 = judge_score("c0", pairwise_preferences={})
+        c1 = judge_score("c1", pairwise_preferences={"c0": "LOSS"})
+        with self.assertRaisesRegex(ValueError, "pairwise preference keys"):
+            GroupJudgeResult.from_mapping(
+                {"candidate_scores": [c0, c1]},
+                ["c0", "c1"],
+                require_text_checks=True,
+            )
 
     def test_deterministic_checks_repair_json_but_blocks_semantic_invalids(self):
         raw = json.dumps(qa())
@@ -100,6 +144,44 @@ class CrossViewRelationCoreTests(unittest.TestCase):
         self.assertIn("timestamps", prompt)
         self.assertIn("dataset language", prompt)
 
+    def test_v3_judge_contract_requires_all_text_checks_and_scopes_out_video_truth(self):
+        prompt, _order = build_group_judge_prompt(
+            candidates=[JudgeCandidate(candidate_id="c0", raw_completion=json.dumps(qa()), qa=qa())],
+            anchors=load_anchor_set(),
+            order_seed="fixture",
+            require_text_checks=True,
+        )
+        self.assertIn("Do not verify video truth, groundedness, or actual answerability.", prompt)
+        self.assertIn("Run every absolute text check before assigning scores or pairwise preferences.", prompt)
+        for name in TEXT_CHECK_NAMES:
+            self.assertIn(name, prompt)
+        repair_prompt = _build_schema_repair_prompt(
+            original_prompt=prompt,
+            raw_output="{}",
+            expected_candidate_ids=["c0"],
+            error=ValueError("missing text checks"),
+            require_text_checks=True,
+        )
+        self.assertIn("question_answer_type_match", repair_prompt)
+        self.assertIn("pairwise_preferences keys", repair_prompt)
+
+        missing = judge_score()
+        missing["checks"] = {}
+        with self.assertRaisesRegex(ValueError, "missing text checks"):
+            GroupJudgeResult.from_mapping(
+                {"candidate_scores": [missing]},
+                ["c0"],
+                require_text_checks=True,
+            )
+        malformed = judge_score()
+        malformed["checks"]["premise_relevance"] = "PASS"
+        with self.assertRaisesRegex(ValueError, "premise_relevance must be an object"):
+            GroupJudgeResult.from_mapping(
+                {"candidate_scores": [malformed]},
+                ["c0"],
+                require_text_checks=True,
+            )
+
     def test_reward_formula_for_semantic_judged_candidates(self):
         valid0 = assess_completion(json.dumps(qa()), required_users=["Jake", "Katrina"])
         valid1 = assess_completion(
@@ -139,6 +221,68 @@ class CrossViewRelationCoreTests(unittest.TestCase):
         self.assertAlmostEqual(rewards["c0"].reward_total, 1.0)
         self.assertAlmostEqual(rewards["c1"].semantic_quality, 0.4)
         self.assertTrue(all(0.0 <= item.reward_total <= 1.0 for item in rewards.values()))
+
+    def test_v3_blocking_text_checks_cap_reward_without_changing_v2_formula(self):
+        assessment = assess_completion(json.dumps(qa()), required_users=["Jake", "Katrina"])
+        blocked = judge_score()
+        blocked["checks"]["question_answer_type_match"] = {
+            "status": "FAIL",
+            "reason": "The question asks for a person but the answer is an activity.",
+        }
+        judge = GroupJudgeResult.from_mapping(
+            {"candidate_scores": [blocked]},
+            ["c0"],
+            require_text_checks=True,
+        )
+
+        v2 = compute_group_rewards(
+            candidate_ids=["c0"],
+            deterministic_results={"c0": assessment},
+            judge_result=judge,
+        )["c0"]
+        v3 = compute_group_rewards(
+            candidate_ids=["c0"],
+            deterministic_results={"c0": assessment},
+            judge_result=judge,
+            apply_text_caps=True,
+            reward_revision="qa_cross_view_relation_v3",
+        )["c0"]
+
+        self.assertAlmostEqual(v2.reward_total, 0.925)
+        self.assertEqual(v2.reward_cap, 1.0)
+        self.assertEqual(v3.reward_total, 0.40)
+        self.assertAlmostEqual(v3.semantic_quality, 0.8)
+        self.assertEqual(v3.anchor_score, 0.5)
+        self.assertAlmostEqual(v3.reward_before_cap, 0.68)
+        self.assertEqual(v3.reward_cap, 0.40)
+        self.assertIn("question_answer_type_match", v3.cap_reasons)
+
+    def test_v3_shallow_and_naturalness_failures_use_declared_caps(self):
+        assessment = assess_completion(json.dumps(qa()), required_users=["Jake", "Katrina"])
+        for check_name, expected_cap in (
+            ("shallow_activity_relation", 0.40),
+            ("natural_first_person_wording", 0.55),
+        ):
+            with self.subTest(check_name=check_name):
+                value = judge_score()
+                value["checks"][check_name] = {
+                    "status": "FAIL",
+                    "reason": "Deliberate regression fixture.",
+                }
+                judge = GroupJudgeResult.from_mapping(
+                    {"candidate_scores": [value]},
+                    ["c0"],
+                    require_text_checks=True,
+                )
+                result = compute_group_rewards(
+                    candidate_ids=["c0"],
+                    deterministic_results={"c0": assessment},
+                    judge_result=judge,
+                    apply_text_caps=True,
+                    reward_revision="qa_cross_view_relation_v3",
+                )["c0"]
+                self.assertEqual(result.reward_cap, expected_cap)
+                self.assertLessEqual(result.reward_total, expected_cap)
 
     def test_unrecoverable_json_skips_whole_reward_group(self):
         valid0 = assess_completion(json.dumps(qa()), required_users=["Jake", "Katrina"])
@@ -181,6 +325,16 @@ class CrossViewRelationCoreTests(unittest.TestCase):
 
         self.assertTrue(all(item.reward_total == 0.0 for item in rewards.values()))
         self.assertTrue(all(item.reward_source == "group_skipped_unrecoverable_json" for item in rewards.values()))
+        v3_rewards = compute_group_rewards(
+            candidate_ids=["c0", "c1", "c2"],
+            deterministic_results={"c0": valid0, "c1": valid1, "c2": invalid},
+            judge_result=judge,
+            apply_text_caps=True,
+            reward_revision="qa_cross_view_relation_v3",
+        )
+        self.assertTrue(
+            all(item.reward_revision == "qa_cross_view_relation_v3" for item in v3_rewards.values())
+        )
 
     def test_deterministic_blocking_errors_receive_low_fixed_penalty(self):
         valid = assess_completion(json.dumps(qa()), required_users=["Jake", "Katrina"])
@@ -262,6 +416,24 @@ class CrossViewRelationCoreTests(unittest.TestCase):
         self.assertTrue(result.order_instability)
         self.assertEqual(len(result.raw_outputs), 2)
         self.assertEqual(result.candidate_scores["c0"].cross_view_relation_score, 1)
+
+    def test_reason_wording_difference_alone_is_not_order_instability(self):
+        assessment = assess_completion(json.dumps(qa()), required_users=["Jake", "Katrina"])
+        candidate = JudgeCandidate(candidate_id="c0", raw_completion=json.dumps(qa()), qa=qa())
+        first = judge_score("c0")
+        second = judge_score("c0")
+        second["checks"]["premise_relevance"]["reason"] = "Same PASS decision, different wording."
+        outputs = [{"candidate_scores": [first]}, {"candidate_scores": [second]}]
+
+        result = judge_candidate_group(
+            candidates=[candidate],
+            deterministic_results={"c0": assessment},
+            runner=lambda _prompt: json.dumps(outputs.pop(0)),
+            order_seed="fixture",
+            require_text_checks=True,
+        )
+
+        self.assertFalse(result.order_instability)
 
     def test_judge_repairs_one_schema_invalid_response(self):
         assessment = assess_completion(json.dumps(qa()), required_users=["Jake", "Katrina"])

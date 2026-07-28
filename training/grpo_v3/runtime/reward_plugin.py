@@ -753,6 +753,10 @@ class AnswerMarginReward(ORM):
 class CrossViewRelationReward(ORM):
     """Group-level anchored cross-view relation reward ORM."""
 
+    reward_revision = "qa_cross_view_relation_v2"
+    require_text_checks = False
+    apply_text_caps = False
+
     def __init__(
         self,
         args: Any = None,
@@ -773,8 +777,7 @@ class CrossViewRelationReward(ORM):
             self._reward_call_index += 1
         return value
 
-    @staticmethod
-    def _build_judge_group_fn() -> Callable[..., Any]:
+    def _build_judge_group_fn(self) -> Callable[..., Any]:
         from training.grpo_v3.experiments.qa_cross_view_relation.judge import (
             judge_candidate_group,
         )
@@ -783,10 +786,18 @@ class CrossViewRelationReward(ORM):
 
         def run_group(**kwargs: Any) -> Any:
             from qwen3vl_runner import OpenAICompatibleLocalRunner
+            from training.grpo_v3.experiments.qa_cross_view_relation.judge import (
+                NonThinkingTextJudgeRunner,
+            )
 
             runner = runner_cache.get("runner")
             if runner is None:
-                runner = OpenAICompatibleLocalRunner(
+                runner_class = (
+                    NonThinkingTextJudgeRunner
+                    if self.require_text_checks
+                    else OpenAICompatibleLocalRunner
+                )
+                runner = runner_class(
                     model_id=os.environ.get("EGOQA_REVIEW_MODEL", "Qwen/Qwen3-VL-8B-Instruct"),
                     base_url=os.environ.get("EGOQA_REVIEW_BASE_URL", "http://127.0.0.1:8001/v1"),
                     max_new_tokens=int(os.environ.get("EGOQA_REVIEW_MAX_NEW_TOKENS", "2048")),
@@ -794,7 +805,11 @@ class CrossViewRelationReward(ORM):
                     allow_video_input=False,
                 )
                 runner_cache["runner"] = runner
-            return judge_candidate_group(runner=runner, **kwargs)
+            return judge_candidate_group(
+                runner=runner,
+                require_text_checks=self.require_text_checks,
+                **kwargs,
+            )
 
         return run_group
 
@@ -805,7 +820,6 @@ class CrossViewRelationReward(ORM):
             GroupJudgeResult,
             JudgeCandidate,
             REWARD_COMPONENT,
-            REWARD_REVISION,
         )
         from training.grpo_v3.experiments.qa_cross_view_relation.reward import (
             compute_group_rewards,
@@ -817,7 +831,7 @@ class CrossViewRelationReward(ORM):
         def metadata_error_row(error: Exception, *, stage: str = "metadata") -> dict[str, Any]:
             return {
                 "reward_kind": "qa_cross_view_relation",
-                "reward_revision": REWARD_REVISION,
+                "reward_revision": self.reward_revision,
                 "reward_call_index": call_index,
                 "failure_stage": stage,
                 "reward": None,
@@ -901,6 +915,7 @@ class CrossViewRelationReward(ORM):
                     else GroupJudgeResult.from_mapping(
                         raw_judge,
                         [candidate.candidate_id for candidate in candidates],
+                        require_text_checks=self.require_text_checks,
                     )
                 )
             except Exception as exc:
@@ -914,6 +929,8 @@ class CrossViewRelationReward(ORM):
             candidate_ids=candidate_ids,
             deterministic_results=deterministic_results,
             judge_result=judge_result,
+            apply_text_caps=self.apply_text_caps,
+            reward_revision=self.reward_revision,
         )
         rows: list[dict[str, Any]] = []
         values: list[float] = []
@@ -933,7 +950,7 @@ class CrossViewRelationReward(ORM):
             }
             rows.append({
                 "reward_kind": "qa_cross_view_relation",
-                "reward_revision": REWARD_REVISION,
+                "reward_revision": self.reward_revision,
                 "reward_call_index": call_index,
                 "phase": phase,
                 "global_step": global_steps[index],
@@ -950,7 +967,16 @@ class CrossViewRelationReward(ORM):
         return values
 
 
+class CrossViewRelationRewardV3(CrossViewRelationReward):
+    """Text-audited cross-view reward with code-level caps."""
+
+    reward_revision = "qa_cross_view_relation_v3"
+    require_text_checks = True
+    apply_text_caps = True
+
+
 orms["egoqa_gate1_controlled"] = ControlledGateReward
 orms["egoqa_repo_native_judge"] = RepoNativeJudgeReward
 orms["egoqa_combined_video_answer_margin"] = AnswerMarginReward
 orms["egoqa_cross_view_relation_v2"] = CrossViewRelationReward
+orms["egoqa_cross_view_relation_v3"] = CrossViewRelationRewardV3

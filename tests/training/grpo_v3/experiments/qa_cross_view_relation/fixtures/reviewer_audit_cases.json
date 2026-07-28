@@ -1,0 +1,441 @@
+﻿{
+    "schema_version":  "qa_cross_view_relation_text_audit_v1",
+    "source_job":  "14833087",
+    "source_file":  "outputs/grpo_v3/qa_cross_view_relation_downloads/qa_cross_view_relation_probe40_14833087/qa_cross_view_relation_probe40_14833087_over_0.9_qa_review.csv",
+    "cases":  [
+                  {
+                      "case_id":  "probe40_high_001",
+                      "question":  "I was looking at the table, but I couldn\u0027t see anything on the laptop. What was the laptop screen showing?",
+                      "options":  [
+                                      "A. A photo of a person",
+                                      "B. A cooking tutorial",
+                                      "C. A calendar",
+                                      "D. A floral arrangement",
+                                      "E. A food recipe"
+                                  ],
+                      "answer":  "A. A photo of a person",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_002",
+                      "question":  "I was watching the flowers on the table, but I didn\u0027t see the laptop screen clearly. What is on the laptop screen?",
+                      "options":  [
+                                      "a photo of a person",
+                                      "a video of cooking",
+                                      "a picture of a cat",
+                                      "a drawing of a house",
+                                      "a video of a person eating"
+                                  ],
+                      "answer":  "a photo of a person",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_003",
+                      "question":  "I was at the table with my friends, but I didn\u0027t see the flowers in the vase on the left. What was the arrangement of the flowers?",
+                      "options":  [
+                                      "The flowers were in a white vase.",
+                                      "The flowers were in a green vase.",
+                                      "The flowers were in a black vase.",
+                                      "The flowers were not visible.",
+                                      "The flowers were in a blue vase."
+                                  ],
+                      "answer":  "The flowers were in a white vase.",
+                      "expected_text_issue":  true,
+                      "comment":  "题目问花的“排列方式”，但选项实际区分的是花瓶颜色；问答目标错位，内部一致性不应满分。"
+                  },
+                  {
+                      "case_id":  "probe40_high_004",
+                      "question":  "I was sitting at the table with my friends, but I didn\u0027t see the flowers on the table. What was the color of the flowers?",
+                      "options":  [
+                                      "The flowers were pink.",
+                                      "The flowers were white.",
+                                      "The flowers were blue.",
+                                      "The flowers were green.",
+                                      "The flowers were yellow."
+                                  ],
+                      "answer":  "The flowers were pink.",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_005",
+                      "question":  "I was looking at the table, but I couldn\u0027t see the photo on the laptop screen clearly. What was visible on the laptop screen?",
+                      "options":  [
+                                      "a photo of a person",
+                                      "a photo of a cat",
+                                      "a photo of a dog",
+                                      "a photo of a group of people",
+                                      "an empty photo"
+                                  ],
+                      "answer":  "a photo of a person",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_006",
+                      "question":  "I was looking at the table, but I couldn\u0027t see the flowers clearly. What was the other person doing?",
+                      "options":  [
+                                      "The flowers were in the middle of the table.",
+                                      "The other person was sitting in a chair.",
+                                      "The flowers were in a vase.",
+                                      "The other person was holding a phone.",
+                                      "I was looking at the flowers."
+                                  ],
+                      "answer":  "The flowers were in a vase.",
+                      "expected_text_issue":  true,
+                      "comment":  "题目问“另一个人在做什么”，答案却是“花在花瓶里”，答案类型与问题不匹配，且选项混合人物动作与物体状态。"
+                  },
+                  {
+                      "case_id":  "probe40_high_007",
+                      "question":  "I was looking at the laptop screen, but I didn\u0027t see the photo. Where is it located?",
+                      "options":  [
+                                      "The photo is on the table.",
+                                      "The photo is on the laptop screen.",
+                                      "The photo is in the middle of the table.",
+                                      "The photo is on the floor.",
+                                      "The photo is on the wall."
+                                  ],
+                      "answer":  "The photo is on the laptop screen.",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_008",
+                      "question":  "I was watching the flowers on the table, but I can\u0027t tell what kind of flower is in this vase on the right side. What kind of flowers are in the vase on the right?",
+                      "options":  [
+                                      "A. Roses",
+                                      "B. Lilies",
+                                      "C. Daisies",
+                                      "D. Tulips",
+                                      "E. Orchids"
+                                  ],
+                      "answer":  "A. Roses",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_009",
+                      "question":  "I was looking at the flowers on the table, but I couldn\u0027t see the laptop screen clearly. What was on the screen?",
+                      "options":  [
+                                      "The laptop was displaying a photo of a dog.",
+                                      "The laptop was showing a video of a cat.",
+                                      "The laptop was displaying a floral design.",
+                                      "The laptop was showing a cooking recipe.",
+                                      "The laptop was showing a drawing of a person."
+                                  ],
+                      "answer":  "The laptop was displaying a photo of a dog.",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_010",
+                      "question":  "I was watching the flowers on the table, but I didn\u0027t see the laptop screen. What was on the screen?",
+                      "options":  [
+                                      "The laptop was showing a photo of a person.",
+                                      "The laptop was displaying a video game.",
+                                      "The laptop was showing a video of the kitchen.",
+                                      "The laptop was showing a map of the city.",
+                                      "The laptop was showing a social media post."
+                                  ],
+                      "answer":  "The laptop was showing a photo of a person.",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_011",
+                      "question":  "I was looking at the table with my friends, but I couldn\u0027t see the flower arrangement clearly. What was visible on the table?",
+                      "options":  [
+                                      "the flower arrangement",
+                                      "the laptop screen",
+                                      "the cooking pot",
+                                      "the cup with the food",
+                                      "the green box"
+                                  ],
+                      "answer":  "the flower arrangement",
+                      "expected_text_issue":  true,
+                      "comment":  "题目泛问桌上可见什么，且题目中已经提到 flower arrangement，答案还是 flower arrangement，内部一致性不应满分。"
+                  },
+                  {
+                      "case_id":  "probe40_high_012",
+                      "question":  "I was watching the flowers on the table, but I didn\u0027t see a photo of the family. Where was the photo placed?",
+                      "options":  [
+                                      "on the table",
+                                      "on the floor",
+                                      "on the kitchen counter",
+                                      "in the vase",
+                                      "under the table"
+                                  ],
+                      "answer":  "on the table",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_013",
+                      "question":  "I was watching the flowers on the table, but I didn\u0027t see the laptop screen. What was the screen displaying?",
+                      "options":  [
+                                      "a photo of the group",
+                                      "a video of the kitchen",
+                                      "a recipe for cake",
+                                      "a picture of the garden",
+                                      "the time on the clock"
+                                  ],
+                      "answer":  "a photo of the group",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_014",
+                      "question":  "I was looking at the table, but I can\u0027t see where the flowers were placed. Where were they?",
+                      "options":  [
+                                      "on the table",
+                                      "on the floor",
+                                      "in the kitchen",
+                                      "on the counter",
+                                      "on the window sill"
+                                  ],
+                      "answer":  "on the table",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_015",
+                      "question":  "I was sitting at the table with my friends, but I can\u0027t remember what I was doing. What was the food on the counter?",
+                      "options":  [
+                                      "The food was a cake.",
+                                      "The food was a bowl of soup.",
+                                      "The food was a plate of salad.",
+                                      "The food was a cup of tea.",
+                                      "The food was a sandwich."
+                                  ],
+                      "answer":  "The food was a cake.",
+                      "expected_text_issue":  true,
+                      "comment":  "题干前半句“记不起自己在做什么”与询问食物无关"
+                  },
+                  {
+                      "case_id":  "probe40_high_016",
+                      "question":  "I was looking at the laptop screen, but I can\u0027t see the photo I took. What\u0027s the photo on the screen?",
+                      "options":  [
+                                      "The photo is visible on the laptop screen.",
+                                      "The photo is not visible on the laptop screen.",
+                                      "The photo is on the table next to the laptop.",
+                                      "The photo is on the wall behind the laptop.",
+                                      "The photo is on the table in front of the laptop."
+                                  ],
+                      "answer":  "The photo is visible on the laptop screen.",
+                      "expected_text_issue":  true,
+                      "comment":  "题目问照片是什么，答案却只说照片在屏幕上可见"
+                  },
+                  {
+                      "case_id":  "probe40_high_017",
+                      "question":  "I was looking at the table in the living room, but I couldn\u0027t see the flowers clearly. What was the arrangement of the flowers on the table?",
+                      "options":  [
+                                      "The flowers were arranged in a single row.",
+                                      "The flowers were in multiple clusters.",
+                                      "The flowers were placed in a vase.",
+                                      "The flowers were in a single vase with no other objects.",
+                                      "The flowers were in a single row on the table."
+                                  ],
+                      "answer":  "The flowers were in multiple clusters.",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_018",
+                      "question":  "I was sitting at the table with friends, and I noticed a photo on the laptop. What was the picture showing?",
+                      "options":  [
+                                      "a close-up of a dog",
+                                      "a landscape with flowers",
+                                      "a person eating a sandwich",
+                                      "a group of people dancing",
+                                      "a city skyline"
+                                  ],
+                      "answer":  "a landscape with flowers",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_019",
+                      "question":  "I was looking at the table with the flowers, but I didn\u0027t see the laptop screen. What was on the laptop?",
+                      "options":  [
+                                      "a picture of a person",
+                                      "a photo of a cat",
+                                      "a video of a dog",
+                                      "a photo of a flower",
+                                      "a photo of a person"
+                                  ],
+                      "answer":  "a photo of a flower",
+                      "expected_text_issue":  true,
+                      "comment":  "选项“a picture of a person”和“a photo of a person”语义重复，违反重复/冲突选项应降一致性分的标准。"
+                  },
+                  {
+                      "case_id":  "probe40_high_020",
+                      "question":  "I was sitting at the table with my friends, and I remember seeing some flowers on the table. What was the arrangement of the flowers?",
+                      "options":  [
+                                      "The flowers were arranged in a straight line.",
+                                      "The flowers were in a circular pattern.",
+                                      "The flowers were placed in a vase.",
+                                      "The flowers were in different colors.",
+                                      "The flowers were on the floor."
+                                  ],
+                      "answer":  "The flowers were placed in a vase.",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_021",
+                      "question":  "I was looking at the table while we were eating, but I didn\u0027t see the photo on the laptop. What was on the laptop screen?",
+                      "options":  [
+                                      "a photo of the people at the table",
+                                      "a photo of the flowers",
+                                      "a photo of the kitchen",
+                                      "a photo of the room",
+                                      "a photo of the cake"
+                                  ],
+                      "answer":  "a photo of the people at the table",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_022",
+                      "question":  "After the group left the table, what object was still on the table?",
+                      "options":  [
+                                      "a bowl of food",
+                                      "a vase of flowers",
+                                      "a laptop",
+                                      "a cup of tea",
+                                      "a plate with a slice of cake"
+                                  ],
+                      "answer":  "a plate with a slice of cake",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_023",
+                      "question":  "I was focused on the table, but I couldn\u0027t see the flowers on the far side. Where were they placed?",
+                      "options":  [
+                                      "on the table in front of me",
+                                      "on the table to my left",
+                                      "on the table to my right",
+                                      "on the table behind me",
+                                      "on the table in the corner"
+                                  ],
+                      "answer":  "on the table to my left",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_024",
+                      "question":  "I was watching the flowers on the table, but I don\u0027t know what the laptop screen was displaying. What was shown on the laptop?",
+                      "options":  [
+                                      "The laptop was showing a video of a cat.",
+                                      "The laptop was showing a picture of a cat.",
+                                      "The laptop was showing a photo of a person.",
+                                      "The laptop was showing a diagram of a kitchen.",
+                                      "The laptop was showing a recipe for cake."
+                                  ],
+                      "answer":  "The laptop was showing a picture of a cat.",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_025",
+                      "question":  "I was looking at the table with my friends, but I couldn\u0027t see the flowers in the vase on the left. What was still on the table?",
+                      "options":  [
+                                      "The green box was still on the table.",
+                                      "The bowl of food was still on the table.",
+                                      "The laptop was still on the table.",
+                                      "The photo frame was still on the table.",
+                                      "The flowers were still in the vase."
+                                  ],
+                      "answer":  "The flowers were still in the vase.",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_026",
+                      "question":  "I was looking at the table where the flowers were, but I didn\u0027t see the laptop. Who else was on the table?",
+                      "options":  [
+                                      "The other person was using the laptop.",
+                                      "The other person was eating.",
+                                      "The other person was reading.",
+                                      "The other person was watching the flowers.",
+                                      "The other person was playing cards."
+                                  ],
+                      "answer":  "The other person was using the laptop.",
+                      "expected_text_issue":  true,
+                      "comment":  "“Who else was on the table”字面表示人在桌面上，主谓/空间关系不自然；题目问“谁”，选项和答案却回答“在做什么”，问答类型错位。"
+                  },
+                  {
+                      "case_id":  "probe40_high_027",
+                      "question":  "I was watching the flowers on the table, but I didn\u0027t see the laptop screen. What was on the screen?",
+                      "options":  [
+                                      "a photo of the flowers",
+                                      "a cooking recipe",
+                                      "an open laptop",
+                                      "a video of a person",
+                                      "a flower arrangement"
+                                  ],
+                      "answer":  "an open laptop",
+                      "expected_text_issue":  true,
+                      "comment":  "题目问屏幕内容，答案“an open laptop”不是屏幕内容；evidence 明确显示屏幕上是人物照片，答案与证据直接矛盾。"
+                  },
+                  {
+                      "case_id":  "probe40_high_028",
+                      "question":  "I was sitting at the table with my friends, but I didn\u0027t see the flowers on the table. What was the flower arrangement like?",
+                      "options":  [
+                                      "The flowers were in a vase and were pink.",
+                                      "The flowers were in a large bowl and were blue.",
+                                      "The flowers were in a small vase and were yellow.",
+                                      "The flowers were in a flower pot and were red.",
+                                      "The flowers were in a glass container and were white."
+                                  ],
+                      "answer":  "The flowers were in a vase and were pink.",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_029",
+                      "question":  "I was looking at the table, but I couldn\u0027t see the exact flower arrangement. Which one was visible on the table?",
+                      "options":  [
+                                      "the pink roses on the left",
+                                      "the white flowers in the center",
+                                      "the red flowers on the right",
+                                      "the blue flowers in the background",
+                                      "the green plant on the far wall"
+                                  ],
+                      "answer":  "the pink roses on the left",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  },
+                  {
+                      "case_id":  "probe40_high_030",
+                      "question":  "I was looking at the table, but I couldn\u0027t see the flower arrangement on the left side. What was the other person doing?",
+                      "options":  [
+                                      "The other person was painting.",
+                                      "The other person was eating.",
+                                      "The other person was playing a game.",
+                                      "The other person was watching a video.",
+                                      "The other person was arranging the flowers."
+                                  ],
+                      "answer":  "The other person was arranging the flowers.",
+                      "expected_text_issue":  true,
+                      "comment":  "形式退化为弱锚点式“另一个人在做什么”；更关键的是 evidence 只显示对方与花同处桌边，并未显示其正在插花，动作答案缺少证据支持。"
+                  },
+                  {
+                      "case_id":  "probe40_high_031",
+                      "question":  "I was looking at the table, but I didn\u0027t see the exact items laid out. What was still on the table?",
+                      "options":  [
+                                      "The bowl with the food was still on the table.",
+                                      "The green box was on the table.",
+                                      "The laptop was on the table.",
+                                      "The flower vase was on the table.",
+                                      "The empty plate was on the table."
+                                  ],
+                      "answer":  "The flower vase was on the table.",
+                      "expected_text_issue":  false,
+                      "comment":  ""
+                  }
+              ]
+}

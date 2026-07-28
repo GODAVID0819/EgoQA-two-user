@@ -17,6 +17,7 @@ def build_group_judge_prompt(
     anchors: AnchorSet,
     order_seed: str,
     reverse: bool = False,
+    require_text_checks: bool = False,
 ) -> tuple[str, tuple[str, ...]]:
     by_id = {item.candidate_id: item for item in candidates}
     order = stable_candidate_order(list(by_id), order_seed)
@@ -72,4 +73,29 @@ def build_group_judge_prompt(
             ]
         },
     }
+    if require_text_checks:
+        payload["scope"] = [
+            "Do not verify video truth, groundedness, or actual answerability.",
+            "Run every absolute text check before assigning scores or pairwise preferences.",
+            "Judge only user-visible text and internal consistency within the generated JSON.",
+            "Do not penalize a question merely because required user 0 could answer it alone.",
+            "Anchor tier measures relation quality, not object, scene, or wording similarity.",
+        ]
+        payload["text_checks"] = {
+            "question_answer_type_match": "Question word/type agrees with what the answer denotes.",
+            "options_answer_same_question": "Every option is a plausible answer type for this exact question.",
+            "semantic_option_uniqueness": "Options are semantically distinct, not paraphrase duplicates.",
+            "answer_resolves_question": "The selected answer directly resolves the question.",
+            "premise_relevance": "Any premise in the question is relevant to the requested relation.",
+            "text_claim_consistency": "Question, options, answer, evidence claims, and rationale do not contradict.",
+            "natural_first_person_wording": (
+                "FAIL only for a blocking malformed sentence, impossible role logic, or impossible "
+                "subject-action relation. Minor stiffness stays PASS and is handled by the scalar naturalness score."
+            ),
+            "shallow_activity_relation": "FAIL for generic what-was-the-other-person-doing activity reports.",
+        }
+        payload["output_shape"]["candidate_scores"][0]["checks"] = {
+            name: {"status": "PASS/FAIL", "reason": "specific text-only reason"}
+            for name in payload["text_checks"]
+        }
     return json.dumps(payload, ensure_ascii=False, indent=2), order
