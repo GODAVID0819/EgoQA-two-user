@@ -18,18 +18,30 @@ old deterministic schema checks are not a separate pre-judger gate anymore; they
 are stored as `checks.qa_formality.schema_branch` and merged with the model
 qa_formality branch.
 
-The two model judges use the historical structured contract in which
-`checks.<judge>.status` is `PASS` or `FAIL`. Both receive the generator's
-`generator_rationale`, but must independently verify its claims. Production
-prompts and output rows do not request or retain 1/2/3 point scores, quality
-labels, quality rationales, quotas, or quota rebuttals. Those helpers remain
-only as archived offline experiment surfaces.
+In integrated entropy runs, each model judge runs twice. The first call keeps
+the original detailed production contract: `review_passed`, nested checks,
+reasons, fixes, blocking failures, and feedback. Its
+`checks.<judge>.status` remains authoritative for retries and final selection.
 
-PASS/FAIL logit collection and `check.decision_uncertainty` JSON are archived
-legacy experiment surfaces. The active production path does not request or
-attach them, and strict validation does not require them for acceptance. The
-offline helper and post-run analyzer remain available for previously generated
-artifacts. There is no proxy P/F output field.
+The second call receives the same rubric, QA candidate, and judge media but not
+the first call's output. It must return only `{"verdict":"pass"}` or
+`{"verdict":"fail"}`. That independent probe verdict and its entropy cannot
+change the production status, acceptance, retry behavior, or feedback.
+Deterministic formality/schema overrides and answerability remain separate
+gates.
+
+`check.decision_uncertainty` stores the restricted pass/fail softmax, raw
+weights, entropy, token position, and independent-probe provenance. The
+attempt-level entropy artifact also records both the probe verdict and the
+authoritative post-merge production status, whether another generation
+followed, and whether the packet was eventually accepted. Historical
+nested-status entropy remains invalid because it followed an earlier
+`review_passed` decision.
+
+`judge_entropy_sidecar.py` remains an offline compatibility experiment for
+completed traces. It retains the older detailed first-verdict contract, not the
+production pipeline's new one-field probe, and its rerun cannot alter the
+original production result.
 
 Each answerability condition uses `choice` as its answer-bearing JSON field.
 Production uses ordinary JSON generation and stores only the parsed response;

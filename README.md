@@ -4,6 +4,13 @@
 
 默认模型是 `Qwen/Qwen3.6-27B`。流程不使用 OpenRouter/Gemini 等商业 API key。`HF_TOKEN` 只作为 Hugging Face 下载或限流辅助，不作为推理 API key。
 
+On HPC, the checkout root is
+`/scratch/${USER}/Long-video-understanding-clip`. All Slurm launchers, workers,
+environment scripts, and helper programs are resolved from
+`${PROJECT_ROOT}/hpc` directly. The nested `egolife_two_user_qa/` directory is
+used for Python package data and outputs only; no HPC executable is expected
+under `egolife_two_user_qa/hpc`.
+
 ## 主流程
 
 当前主路径是 video-first。也就是说，Qwen3-VL 直接接收对齐后的 EgoLife 原始视频，而不是先把视频转成 caption/observation 再出题。之后用 judger 和 answerability evaluation 过滤掉单用户可答、合并视频也答不准、或者问题口吻不自然的题。
@@ -362,11 +369,118 @@ binary PASS/FAIL contract. The former 1/2/3 score, quality rationale, quota, and
 quota-rebuttal path is archived and is not included in production prompts,
 traces, or accepted rows.
 
-PASS/FAIL choice-logit and decision-entropy JSON is a legacy archived
-experiment. Production judge calls no longer request or attach it, and strict
-acceptance validation does not require it. The A-E answerability evaluator also
-uses ordinary JSON generation; it no longer requests or stores choice logits or
+PASS/FAIL choice logits are disabled in ordinary production. The opt-in entropy
+mode below adds a separate diagnostic judge call; strict acceptance validation
+does not require its verdict or entropy. The A-E answerability evaluator still
+uses ordinary JSON generation and does not request or store choice logits or
 entropy.
+
+### Independent minimal-verdict production entropy
+
+The former entropy run captured the nested `checks.<judge>.status` token after
+the model had already emitted `review_passed`. Its near-zero values therefore
+mostly measured consistency with a verdict already present in the generated
+prefix, not uncertainty about the judge decision.
+
+The redesigned mode runs each model judge twice. The first call is the original
+detailed production judge: it returns `review_passed`, nested checks, reasons,
+fixes, blocking failures, and generator feedback. Its nested
+`checks.<judge>.status` remains the only model-judge decision used for
+acceptance and retries.
+
+The second call is an independent diagnostic probe. It receives the same judge
+rubric, generated QA candidate, and the same media as that judge, but it is not
+shown the detailed judge's output. Its entire response must be exactly one of:
+
+```json
+{"verdict":"pass"}
+```
+
+```json
+{"verdict":"fail"}
+```
+
+No checks, reasons, fixes, feedback, scores, or other fields are permitted. The
+probe verdict and its entropy are recorded only for analysis; they cannot alter
+acceptance, retry feedback, or final QA selection. Deterministic schema checks
+and the separate answerability gate continue to work exactly as before.
+
+Qwen3.6-27B encodes both lowercase values as single tokens (`pass` token 6184
+and `fail` token 17854 in the cached tokenizer). The run performs this tokenizer
+preflight before inference. The minimal probe requires `verdict` to be its only
+JSON field. A malformed or unavailable probe is marked unavailable while the
+separate detailed production decision remains unchanged.
+
+Run a fresh production generation over the exact saved 001-100 evidence cohort:
+
+```bash
+sbatch hpc/run_production_entropy_qa_001_100.sbatch
+```
+
+The new QA run writes under
+`outputs/qa_001_100_production_independent_minimal_entropy_v3/packets_001_100/`.
+The `_v3` root preserves both the completed entropy-less run produced by the
+CLI forwarding bug and the earlier coupled first-verdict run.
+Alongside the accepted, rejected, prompt, and intermediate QA artifacts it
+writes:
+
+- `judge_entropy_attempts.jsonl`: both model judges for every judged generation
+  attempt, including probe probabilities, entropy, the independent probe
+  verdict, the authoritative production status, retry outcome, and eventual
+  packet acceptance/rejection;
+- `judge_entropy_summary.json`: aggregates by judge, probe verdict, production
+  post-merge status, retry outcome, and final packet status;
+- `judge_entropy_report.md`: a compact human-readable comparison.
+
+The same two flattened measurements are also stored at
+`qa_mcq.intermediate.jsonl -> attempts[*].judge_entropy` (or
+`generation_trace[*].judge_entropy` for a finally rejected packet), so the
+entropy, retry decision, and final packet result can be inspected in one trace.
+The production entropy launcher defaults to `RESUME_GENERATION=0`: rerunning it
+recreates the batch instead of skipping outputs from a prior non-entropy run.
+Set resume to `1` only when continuing an interrupted run that already contains
+integrated entropy artifacts.
+
+This makes the relationship traceable without changing the production
+experiment: the detailed verdict affects retries and final QA selection, while
+the second minimal verdict lets us compare diagnostic entropy with that outcome.
+
+### Offline first-verdict sidecar
+
+The offline sidecar remains available for rerunning judges on an existing trace
+without generating new QAs. It retains the older detailed first-verdict
+compatibility contract and does not affect the saved run's original gates. It
+is distinct from the production pipeline's new one-field minimal probe.
+
+`ENTROPY_SOURCE_INTERMEDIATE` means the prior QA run's
+`qa_mcq.intermediate.jsonl` trace. It is not an entropy artifact: unlike the
+accepted-only `qa_mcq.jsonl`, it retains every generation attempt together with
+the exact judge prompts, original model PASS/FAIL labels, and media paths needed
+to rerun the judges offline.
+
+The offline launcher defaults to the saved fixed 001-100 baseline cohort:
+`outputs/qa_300_three_jobs_safe_prompts/packets_001_100/qa_mcq.intermediate.jsonl`.
+Run that cohort from the project root with:
+
+```bash
+sbatch hpc/run_judge_entropy_sidecar.sbatch
+```
+
+To probe a different completed QA run, override the source and give it a
+separate output directory:
+
+```bash
+ENTROPY_SOURCE_INTERMEDIATE=egolife_two_user_qa/outputs/<run>/qa_mcq.intermediate.jsonl \
+ENTROPY_OUTPUT_DIR=egolife_two_user_qa/outputs/judge_entropy_first_verdict_detailed/<run> \
+sbatch hpc/run_judge_entropy_sidecar.sbatch
+```
+
+The output directory contains the selected task manifest, preflight class
+counts, raw JSONL/CSV sidecar results, `summary.json`, and `report.md`. By default
+the launcher keeps the natural label prevalence across all attempts and requires
+at least 20 examples in every judge-by-status cell. Set
+`ENTROPY_BALANCE_STATUSES=1` only for a status-balanced sensitivity analysis;
+calibration metrics should use the default natural cohort.
 
 Production generation and judging are category-free. Generated items do not emit
 `category` or `category_rationale`; schema validation, CSV/review exports, and the
@@ -479,6 +593,186 @@ launcher also starts `hpc/cuda.py` before the ablation and keeps it running
 through the production phase; it is stopped automatically when the job exits.
 Set `CUDA_KEEPER_ENABLE=0` to disable it, or override
 `CUDA_KEEPER_THRESHOLD`, `CUDA_KEEPER_GPUS`, and `CUDA_KEEPER_RESERVE`.
+
+## Retained-centroid-frame generator sidecar
+
+The centroid-frame sidecar is an additive generation experiment. It consumes
+the existing 300 CLIP-pruned evidence packets and reads their saved cluster
+decisions. For each required user, it copies one CLIP medoid for every cluster
+that still has retained content after pruning and duration protection. Those
+images are ordered by original timestamp and sent directly to the generator;
+the sidecar does not extract one-second intervals, run ffmpeg, or build a new
+pruned MP4. Evidence-groundedness and answerability still receive the full
+original synchronized videos.
+
+The current `run_qa_packets_*.sbatch` launchers and
+`run_qa_packet_slice_100.sh` worker are unchanged. The sidecar has separate
+launchers, evidence JSONL, frame assets, QA outputs, and a post-run media-routing
+verification:
+
+Run these commands from the project root
+`/scratch/${USER}/Long-video-understanding-clip`. The sidecar launchers, its
+worker, `run_qa_packet_slice_100.sh`, `env_qwen3vl.sh`, and `cuda.py` are all
+resolved exclusively from `${PROJECT_ROOT}/hpc`; the sidecar never expects an
+`egolife_two_user_qa/hpc` directory on HPC.
+
+```bash
+sbatch hpc/run_centroid_frame_qa_packets_001_100.sbatch
+sbatch hpc/run_centroid_frame_qa_packets_101_200.sbatch
+sbatch hpc/run_centroid_frame_qa_packets_201_300.sbatch
+```
+
+Outputs default to `outputs/qa_300_centroid_frame_sidecar/`. Override the
+existing pruned packet source with `CENTROID_SIDECAR_SOURCE_EVIDENCE` or the
+sidecar output root with `CENTROID_SIDECAR_OUTPUT_ROOT`.
+
+For a local or one-off conversion without generation:
+
+```bash
+python -m egolife_two_user_qa.centroid_frame_sidecar prepare \
+  --evidence outputs/clip_pruned_packets_300_mixed_temporal/evidence_pruned_pairs.jsonl \
+  --output outputs/centroid_frame_sidecar/evidence.jsonl \
+  --output-dir outputs/centroid_frame_sidecar/assets \
+  --start-index 0 \
+  --max-packets 10
+```
+
+Each sidecar packet uses `generator_media_mode="centroid_frames_only"`, stores
+the ordered images in `clips[*].frames`, removes generator-video routing, and
+retains `clips[*].full_local_video` for the visual checks.
+
+## Retained-cluster-member-frame generator sidecar
+
+This second additive sidecar gives the generator more context without
+reconstructing an MP4. It reads the same saved CLIP pruning diagnostics as the
+centroid sidecar. For every cluster kept by pruning, it sends all of that
+cluster's CLIP-sampled member frames; for a cluster otherwise pruned but partly
+restored by duration protection, it sends only the explicitly restored
+members. Images are ordered by original timestamp within each user. These are
+the frames sampled for CLIP (normally one per second), not every native video
+frame. Judges and answerability continue to receive the full original videos.
+
+The original pruned-video launchers and centroid-only launchers are unchanged.
+Run the new launchers from
+`/scratch/${USER}/Long-video-understanding-clip`:
+
+```bash
+sbatch hpc/run_cluster_member_frame_qa_packets_001_100.sbatch
+sbatch hpc/run_cluster_member_frame_qa_packets_101_200.sbatch
+sbatch hpc/run_cluster_member_frame_qa_packets_201_300.sbatch
+```
+
+Outputs default to `outputs/qa_300_cluster_member_frame_sidecar/`. Override the
+source with `CLUSTER_MEMBER_SIDECAR_SOURCE_EVIDENCE` or the output root with
+`CLUSTER_MEMBER_SIDECAR_OUTPUT_ROOT`. Each packet uses
+`generator_media_mode="retained_cluster_frames_only"` and routes an ordered
+image list to Qwen with no generator MP4.
+
+## Fixed 001–100 QA ablations
+
+Two one-factor arms reuse the saved
+`outputs/qa_300_three_jobs_safe_prompts/packets_001_100/evidence_slice.jsonl`
+directly. Both therefore use the same 100 evidence IDs, original videos, and
+pruned videos:
+
+| Arm | CLIP-pruning FPS | Visual judge media |
+| --- | ---: | --- |
+| `fps_0p5` | `0.5` | full originals |
+| `pruned_judges` | `1.0` | pruned videos |
+
+The first arm rebuilds the pruned videos from the same full originals with a
+2-second sample interval (`0.5 FPS`) while holding `K=12`, threshold `0.82`,
+minimum-8-second pruning protection, model inference, and full-original judge
+routing fixed. Its input check allows the saved nominally 30-second clips to
+measure within 3 seconds of that target, accommodating container durations such
+as 28.6 seconds without changing the 30-second pruning window. The second
+reuses the existing baseline 1-FPS pruned videos and
+routes both evidence-groundedness and every answerability condition to the same
+pruned media seen by the generator. The text-only formality judge remains
+text-only.
+
+```bash
+sbatch hpc/run_ablation_qa_001_100_fps_0p5.sbatch
+sbatch hpc/run_ablation_qa_001_100_pruned_judges.sbatch
+```
+
+Run these commands from the project root. The launchers, shared worker, environment
+script, and `cuda.py` all live in the project-level `hpc/` directory; only package
+data and outputs resolve through `egolife_two_user_qa/`.
+
+Set `EGOLIFE2U_REFERENCE_001_100` if the saved slice lives elsewhere. Outputs
+are separated under `outputs/qa_001_100_two_ablations/`. Each job verifies
+100-row coverage, unique and ordered evidence-ID identity after re-pruning, the
+declared pruning FPS, and visual-judge media routing before completing.
+
+### Threshold and K follow-up arms
+
+Two additional one-factor launchers use the same saved 001–100 cohort and the
+same shared worker:
+
+| Arm | CLIP-pruning FPS | K | Threshold | Visual judge media |
+| --- | ---: | ---: | ---: | --- |
+| `threshold_0p85` | `1.0` | `12` | `0.85` | full originals |
+| `k_8` | `1.0` | `8` | `0.82` | full originals |
+
+`K=8` is the closest established grid point below the `K=12` control. It gives
+a meaningful 33% reduction in cluster count without the more aggressive jump
+to `K=4`. Each arm changes only its named factor; sampling, pruning protection,
+generation settings, and judge routing remain at the baseline values.
+
+```bash
+sbatch hpc/run_ablation_qa_001_100_threshold_0p85.sbatch
+sbatch hpc/run_ablation_qa_001_100_k_8.sbatch
+```
+
+Outputs are isolated under
+`outputs/qa_001_100_threshold_k_ablations/{threshold_0p85,k_8}/`. The worker
+checks the realized FPS, K, threshold, evidence-ID order, full-video judge
+routing, and complete 100-pair coverage, then records the arm metadata in both
+the rebuilt evidence packets and `generation_summary.json`.
+
+## CPU-only Gemini answerability verification
+
+After a generation-loop job completes, the accepted `qa_mcq.jsonl` rows can be
+checked once more with `google/gemini-3.5-flash` through OpenRouter:
+
+```bash
+sbatch hpc/run_answerability_verification_gemini35_flash_cpu.sbatch
+```
+
+Put every generation-run directory to verify in
+`hpc/answerability_verification_run_dirs.txt`, one per line. Entries may be
+absolute, or relative to `egolife_two_user_qa/`:
+
+```text
+outputs/qa_300_three_jobs_safe_prompts/packets_001_100
+outputs/qa_300_three_jobs_safe_prompts/packets_101_200
+outputs/qa_300_three_jobs_safe_prompts/packets_201_300
+outputs/qa_001_100_two_ablations/fps_0p5/packets_001_100
+outputs/qa_001_100_two_ablations/pruned_judges/packets_001_100
+outputs/qa_001_100_threshold_k_ablations/threshold_0p85/packets_001_100
+outputs/qa_001_100_threshold_k_ablations/k_8/packets_001_100
+```
+
+Only list completed directories containing `qa_mcq.jsonl`,
+`evidence_slice.jsonl`, and `generation_summary.json`. The job validates every
+listed directory before its first billable API call. For a one-off run,
+`EGOLIFE2U_QA_RUN_DIR` overrides the manifest.
+
+`OPENROUTER_API_KEY` must be exported when the job is submitted. This is a
+CPU-only job: it requests no GPU, starts no CUDA keeper, and loads no local
+model. It makes three verification calls per accepted two-user QA, preserves
+that QA's original `full` or `pruned` judge-media route, and writes
+`verification.jsonl`, `prompts.jsonl`, and `summary.json` under
+`answerability_verification_gemini35_flash_minimal_reasoning/`.
+Gemini 3.5 Flash requires reasoning on OpenRouter, so the launcher uses its
+lowest supported `minimal` effort instead of the rejected `none` setting.
+`RESUME_VERIFICATION=1` is the default, so completed QA IDs are not submitted
+again after a retry. Before upload, videos are cached as moderate 720px, 2-FPS,
+CRF-23 CPU transcodes to reduce OpenRouter gateway timeouts without aggressive
+downsampling; set
+`OPENROUTER_VIDEO_MAX_EDGE=0` and
+`OPENROUTER_VIDEO_FPS=0` only when original-encoding uploads are required.
 
 ## Archived generation modes
 

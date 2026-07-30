@@ -1,0 +1,29 @@
+.venv/
+.cache/
+__pycache__/
+.agents/
+.git/
+*.py[cod]
+*.egg-info/
+
+# HPC/runtime outputs
+slurm-*.out
+logs/
+checkpoints/
+weights/
+data/reference/
+data/processed/
+artifacts/
+hpc/
+output/
+outputs/
+reports/
+tmp/
+tests/
+analysis_outputs/
+*.npz
+
+# Local secrets
+.env
+*.token
+hpc/site.env

@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import itertools
 import json
 import math
+import re
+import statistics
 import time
 from pathlib import Path
 from typing import Any
 
-from .io_utils import append_jsonl, iter_jsonl, write_jsonl
+from .io_utils import append_jsonl, iter_jsonl, write_json, write_jsonl
 from .prompts import (
     DEFAULT_QUALITY_QUOTA,
     GENERATION_MODES,
+    JUDGE_OUTPUT_SCHEMA_MARKER,
     QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
     build_answerability_prompt,
+    build_judge_minimal_verdict_probe_prompt,
     build_evidence_groundedness_judge_prompt,
     build_judge_json_repair_prompt,
     build_qa_formality_judge_prompt,
@@ -28,8 +34,6 @@ from .prompts import (
 # Archived discovery-mode imports:
 # from .prompts import build_relation_discovery_prompt, build_relation_mcq_prompt
 from .qwen3vl_runner import (
-    DEFAULT_CHOICE_FIELD,
-    DEFAULT_DECISION_CHOICES,
     DEFAULT_MODEL_ID,
     DEFAULT_SAMPLING_TEMPERATURE,
     DEFAULT_SAMPLING_TOP_P,
@@ -67,6 +71,7 @@ class StreamingJsonlRows(list[dict[str, Any]]):
 QUESTION_TYPES = ("commonality", "difference", "neutral")
 DEFAULT_QUESTION_TYPES = ("commonality", "difference")
 DEFAULT_JUDGE_MODEL_ID = "Qwen/Qwen3.6-27B"
+JUDGE_VIDEO_SOURCES = ("full", "pruned")
 BLOCKING_JUDGE_CHECKS = (
     "qa_formality",
     "evidence_groundedness",
@@ -76,11 +81,55 @@ QUALITY_SCORED_JUDGE_CHECKS = {
     "qa_formality",
     "evidence_groundedness",
 }
-# Legacy PASS/FAIL entropy helpers remain below for old analysis artifacts and
-# explicit offline calls. The production review path does not request logits,
-# attach decision_uncertainty JSON, or use entropy for acceptance.
+# PASS/FAIL entropy is opt-in for production runs. The old detailed judge remains
+# the production gate. A second independent call emits only a lowercase verdict;
+# that call is diagnostic and cannot affect acceptance, retries, or feedback.
 LEGACY_DECISION_ENTROPY_JUDGE_CHECKS = set(QUALITY_SCORED_JUDGE_CHECKS)
+FIRST_VERDICT_ENTROPY_VERSION = "first_verdict_detailed_v2"
+MINIMAL_VERDICT_ENTROPY_VERSION = "independent_minimal_verdict_v1"
+FIRST_VERDICT_FIELD = "verdict"
+FIRST_VERDICT_CHOICES = ("pass", "fail")
 TEMPORAL_REASONING_MODE = "temporal_reasoning"
+
+
+def verify_first_verdict_tokenization(runner: Any) -> dict[str, Any]:
+    """Verify that lowercase pass/fail are single tokens when a tokenizer exists."""
+
+    processor = getattr(runner, "processor", None)
+    tokenizer = getattr(processor, "tokenizer", processor)
+    encode = getattr(tokenizer, "encode", None)
+    if not callable(encode):
+        return {
+            "checked": False,
+            "reason": (
+                "runner does not expose a local tokenizer; the generated-token "
+                "capture will validate the choices at response time"
+            ),
+        }
+    choices = {}
+    for choice in FIRST_VERDICT_CHOICES:
+        token_ids = [int(value) for value in encode(choice, add_special_tokens=False)]
+        leading_space_ids = [
+            int(value)
+            for value in encode(f" {choice}", add_special_tokens=False)
+        ]
+        choices[choice] = {
+            "token_ids": token_ids,
+            "single_token": len(token_ids) == 1,
+            "leading_space_token_ids": leading_space_ids,
+            "leading_space_single_token": len(leading_space_ids) == 1,
+        }
+    if not all(value["single_token"] for value in choices.values()):
+        raise RuntimeError(
+            "lowercase pass and fail must each be one tokenizer token: "
+            + json.dumps(choices, sort_keys=True)
+        )
+    return {
+        "checked": True,
+        "tokenizer_class": type(tokenizer).__name__,
+        "model_id": getattr(runner, "model_id", None),
+        "choices": choices,
+    }
 
 
 def quality_score_value(value: Any) -> int | None:
@@ -240,7 +289,7 @@ def media_for_clips(
 ) -> tuple[list[str], list[str]]:
     videos = [path for clip in clips if (path := clip_video_path(clip, media_role=media_role))]
     images = [path for clip in clips for path in clip_image_paths(clip)]
-    if clips_require_frame_inputs(clips):
+    if media_role == "generator" and clips_require_frame_inputs(clips):
         return images, []
     if backend in {"openai-compatible-local", "openrouter"} and not allow_openai_video_input:
         return images, []
@@ -253,6 +302,7 @@ def prepare_runner_video_uploads(
     evidence_id: Any,
     generator_video_paths: list[str],
     full_video_paths: list[str],
+    judge_media_role: str = "full",
 ) -> dict[str, Any] | None:
     """Let remote runners pre-upload all packet videos before generation starts."""
 
@@ -267,7 +317,8 @@ def prepare_runner_video_uploads(
         "qa_stage_start "
         f"stage=prepare_media evidence_id={evidence_id} "
         f"generator_videos={len(generator_video_paths)} "
-        f"full_videos={len(full_video_paths)} "
+        f"judge_videos={len(full_video_paths)} "
+        f"judge_media_role={judge_media_role} "
         f"unique_videos={len(all_video_paths)}",
         flush=True,
     )
@@ -283,11 +334,13 @@ def prepare_runner_video_uploads(
         "stage": "prepare_media",
         "generator_video_paths": generator_video_paths,
         "full_video_paths": full_video_paths,
+        "judge_video_paths": full_video_paths,
+        "judge_media_role": judge_media_role,
         "unique_video_paths": all_video_paths,
         "prepared_video_count": len(prepared or []),
         "purpose": (
-            "pre-upload generator pruned videos and full original videos so the generator sees pruned media "
-            "and judges/answerability see complete originals"
+            "pre-upload generator media and the explicitly selected visual-judge media before "
+            "generation starts"
         ),
     }
 
@@ -553,9 +606,13 @@ def condition_media_for_clips(
 def qa_for_judger_prompt(
     qa: dict[str, Any],
     *,
-    include_generator_rationale: bool = True,
+    include_generator_rationale: bool = False,
 ) -> dict[str, Any]:
-    """Return candidate fields, optionally withholding the generator rationale."""
+    """Return only independently judgeable candidate fields.
+
+    ``include_generator_rationale`` is retained for call compatibility, but the
+    generator's interpretation is deliberately never supplied to a reviewer.
+    """
 
     wanted = [
         "qa_id",
@@ -566,9 +623,9 @@ def qa_for_judger_prompt(
         "correct",
         "answer",
         "required_users",
-        # Other generator-authored evidence fields remain archived because they can anchor
+        # Generator-authored evidence fields remain excluded because they can anchor
         # judges to a mistaken interpretation instead of letting them inspect the media
-        # independently. The rationale is included to expose the intended question relation.
+        # independently.
         # "evidence",
         # "single_user_answerability",
         # "combined_answerability",
@@ -577,8 +634,6 @@ def qa_for_judger_prompt(
         # "referred_timestamps",
         # "review",
     ]
-    if include_generator_rationale:
-        wanted.append("generator_rationale")
     return {key: qa[key] for key in wanted if key in qa}
 
 
@@ -654,13 +709,10 @@ def build_answerability_conditions(required_users: list[str]) -> list[dict[str, 
 
 
 def parsed_choice(value: Any) -> tuple[str | None, bool]:
-    text = str(value or "").strip()
-    if text.lower() in {"insufficient", "not enough", "unknown", "cannot answer", "can't answer"}:
-        return None, True
-    try:
-        return normalize_correct(text), False
-    except ValueError:
-        return None, False
+    text = str(value or "").strip().upper()
+    if text in OPTION_LETTERS:
+        return text, False
+    return None, True
 
 
 def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]]) -> dict[str, Any]:
@@ -673,8 +725,19 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
     if not combined:
         return {"passed": False, "reason": "missing combined_all_users evaluation"}
 
-    combined_choice, combined_insufficient = parsed_choice(combined[-1].get("choice"))
-    if combined_insufficient or combined_choice != correct:
+    combined_choice, combined_invalid = parsed_choice(combined[-1].get("choice"))
+    if combined_invalid:
+        return {
+            "passed": False,
+            "reason": "combined_all_users did not select exactly one A-E answer",
+            "invalid_evaluations": [
+                {
+                    "condition_id": combined[-1].get("condition_id"),
+                    "choice": combined[-1].get("choice"),
+                }
+            ],
+        }
+    if combined_choice != correct:
         return {
             "passed": False,
             "reason": f"combined_all_users did not select correct answer {correct}",
@@ -685,11 +748,20 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
     evidence_provider_user = required_users[1] if len(required_users) > 1 else None
     blocking_leaks = []
     evidence_provider_answerable = []
+    invalid_evaluations = []
     for row in evaluations:
         if row.get("condition_type") == "combined_all_users":
             continue
-        choice, insufficient = parsed_choice(row.get("choice"))
-        if not insufficient and choice == correct:
+        choice, invalid = parsed_choice(row.get("choice"))
+        if invalid:
+            invalid_evaluations.append(
+                {
+                    "condition_id": row.get("condition_id"),
+                    "choice": row.get("choice"),
+                }
+            )
+            continue
+        if choice == correct:
             condition_id = row.get("condition_id")
             users = list(row.get("users") or [])
             if not users and isinstance(condition_id, str) and condition_id.startswith("single_user::"):
@@ -709,6 +781,13 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 evidence_provider_answerable.append(leak)
             else:
                 blocking_leaks.append(leak)
+    if invalid_evaluations:
+        return {
+            "passed": False,
+            "reason": "answerability condition did not select exactly one A-E answer: "
+            + ", ".join(str(item.get("condition_id")) for item in invalid_evaluations),
+            "invalid_evaluations": invalid_evaluations,
+        }
     if blocking_leaks:
         return {
             "passed": False,
@@ -722,7 +801,7 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
 
     gate = {
         "passed": True,
-        "reason": "combined videos answer correctly and all single/subset conditions are insufficient or incorrect",
+        "reason": "combined videos answer correctly and all single/subset conditions chose an incorrect answer",
         "evidence_provider_answerable": evidence_provider_answerable,
         "speaker_user": asker_user,
         "evidence_provider_user": evidence_provider_user,
@@ -841,25 +920,523 @@ def schema_formality_branch(schema_errors: list[str]) -> dict[str, Any]:
 #     return check
 
 
+def validate_first_verdict_sidecar_generation(
+    generation: dict[str, Any],
+    *,
+    prompt: str,
+    check_name: str,
+) -> dict[str, Any]:
+    """Validate a detailed sidecar judge whose first field is its real verdict.
+
+    The experiment is invalid unless lowercase pass/fail is the first generated
+    verdict and the later detailed check agrees with that authoritative field.
+    """
+
+    raw_output = str(generation.get("text") or "")
+    source_signal = generation.get("choice_logits")
+    signal = dict(source_signal) if isinstance(source_signal, dict) else {}
+    output_contract_errors = []
+    measurement_errors = []
+    try:
+        parsed = json.loads(raw_output.strip())
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        parsed = None
+        output_contract_errors.append(f"judge output is not exact JSON: {exc}")
+    if not isinstance(parsed, dict) or not parsed or list(parsed)[0] != FIRST_VERDICT_FIELD:
+        output_contract_errors.append("judge must contain verdict as its first field")
+        parsed_verdict = None
+    else:
+        parsed_verdict = str(parsed.get(FIRST_VERDICT_FIELD) or "").strip()
+        if parsed_verdict not in FIRST_VERDICT_CHOICES:
+            output_contract_errors.append("verdict must be lowercase pass or fail")
+    if isinstance(parsed, dict) and "review_passed" in parsed:
+        output_contract_errors.append("first-verdict judge must not emit review_passed")
+
+    expected_schema = None
+    if JUDGE_OUTPUT_SCHEMA_MARKER in prompt:
+        try:
+            expected_schema = json.loads(
+                prompt.rsplit(JUDGE_OUTPUT_SCHEMA_MARKER, 1)[1].strip()
+            )
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            output_contract_errors.append(f"judge prompt schema is not valid JSON: {exc}")
+    else:
+        output_contract_errors.append("judge prompt is missing its output-schema marker")
+
+    def require_schema_keys(
+        expected: Any,
+        actual: Any,
+        path: str = "",
+    ) -> None:
+        if not isinstance(expected, dict):
+            return
+        if not isinstance(actual, dict):
+            output_contract_errors.append(f"{path or 'output'} must be an object")
+            return
+        for key, expected_value in expected.items():
+            key_path = f"{path}.{key}" if path else key
+            if key not in actual:
+                output_contract_errors.append(f"judge omitted required field {key_path}")
+            elif isinstance(expected_value, dict):
+                require_schema_keys(expected_value, actual[key], key_path)
+
+    if isinstance(expected_schema, dict) and isinstance(parsed, dict):
+        require_schema_keys(expected_schema, parsed)
+
+    nested_status = None
+    if isinstance(parsed, dict) and parsed_verdict in FIRST_VERDICT_CHOICES:
+        checks = parsed.get("checks")
+        check = checks.get(check_name) if isinstance(checks, dict) else None
+        if not isinstance(check, dict):
+            output_contract_errors.append(f"checks.{check_name} must be an object")
+        else:
+            reason = check.get("reason")
+            fix = check.get("fix")
+            if not isinstance(reason, str) or not reason.strip():
+                output_contract_errors.append(
+                    f"checks.{check_name}.reason must be a non-empty string"
+                )
+            if not isinstance(fix, str):
+                output_contract_errors.append(f"checks.{check_name}.fix must be a string")
+            semantic_subchecks = check.get("semantic_subchecks")
+            if semantic_subchecks is not None:
+                if not isinstance(semantic_subchecks, dict):
+                    output_contract_errors.append(
+                        f"checks.{check_name}.semantic_subchecks must be an object"
+                    )
+                else:
+                    for subcheck_name, subcheck in semantic_subchecks.items():
+                        if not isinstance(subcheck, dict):
+                            output_contract_errors.append(
+                                f"checks.{check_name}.semantic_subchecks."
+                                f"{subcheck_name} must be an object"
+                            )
+                            continue
+                        subcheck_status = str(
+                            subcheck.get("status") or ""
+                        ).strip().upper()
+                        if subcheck_status not in {"PASS", "FAIL"}:
+                            output_contract_errors.append(
+                                f"checks.{check_name}.semantic_subchecks."
+                                f"{subcheck_name}.status must be PASS or FAIL"
+                            )
+                        subcheck_reason = subcheck.get("reason")
+                        if (
+                            not isinstance(subcheck_reason, str)
+                            or not subcheck_reason.strip()
+                        ):
+                            output_contract_errors.append(
+                                f"checks.{check_name}.semantic_subchecks."
+                                f"{subcheck_name}.reason must be a non-empty string"
+                            )
+        nested_status = (
+            str(check.get("status") or "").strip().upper()
+            if isinstance(check, dict)
+            else None
+        )
+        if nested_status not in {"PASS", "FAIL"}:
+            output_contract_errors.append(
+                f"checks.{check_name}.status must be PASS or FAIL"
+            )
+        if nested_status in {"PASS", "FAIL"} and nested_status != parsed_verdict.upper():
+            output_contract_errors.append(
+                "authoritative verdict disagrees with the later detailed check status"
+            )
+        blocking_failures = parsed.get("blocking_failures")
+        if not isinstance(blocking_failures, list):
+            output_contract_errors.append("blocking_failures must be an array")
+        else:
+            if parsed_verdict == "pass" and blocking_failures:
+                output_contract_errors.append(
+                    "pass verdict must not list blocking_failures"
+                )
+            if parsed_verdict == "fail" and check_name not in blocking_failures:
+                output_contract_errors.append(
+                    "fail verdict must list the failed judge in blocking_failures"
+                )
+        if not isinstance(parsed.get("feedback_to_generator"), str):
+            output_contract_errors.append("feedback_to_generator must be a string")
+    else:
+        check = None
+
+    field_name = str(signal.get("field_name") or "")
+    if field_name != FIRST_VERDICT_FIELD:
+        measurement_errors.append(
+            f"choice logits targeted {field_name or '<missing>'!r}, "
+            f"expected {FIRST_VERDICT_FIELD!r}"
+        )
+    prefix = signal.get("generated_prefix_before_choice")
+    if not isinstance(prefix, str):
+        measurement_errors.append(
+            "runner did not retain the generated prefix before the verdict token"
+        )
+        prefix = ""
+    prior_verdict = bool(
+        re.search(r'"review_passed"\s*:', prefix, re.IGNORECASE)
+        or re.search(
+            r'["\'](?:status|decision|verdict)["\']\s*:\s*'
+            r'["\'](?:pass|fail)["\']',
+            prefix,
+            re.IGNORECASE,
+        )
+    )
+    if prior_verdict:
+        measurement_errors.append(
+            "generated prefix contains a verdict before the measured first verdict"
+        )
+    generated_choice = str(signal.get("generated_choice") or "").strip()
+    if (
+        parsed_verdict in FIRST_VERDICT_CHOICES
+        and generated_choice != parsed_verdict
+    ):
+        measurement_errors.append(
+            "captured verdict token does not match the parsed verdict"
+        )
+    errors = [*output_contract_errors, *measurement_errors]
+    if signal.get("available") is not True:
+        errors.append(str(signal.get("reason") or "runner did not return available choice logits"))
+
+    signal.update(
+        {
+            "available": not errors,
+            "reason": "; ".join(dict.fromkeys(errors)),
+            "probe_version": FIRST_VERDICT_ENTROPY_VERSION,
+            "measurement_context": "authoritative_first_detailed_judge_verdict",
+            "field_name": FIRST_VERDICT_FIELD,
+            "prior_generated_verdict": prior_verdict,
+            "probe_output_contract_valid": not output_contract_errors,
+            "measurement_contract_valid": not measurement_errors,
+            "probe_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        }
+    )
+    return {
+        "prompt": prompt,
+        "raw_output": raw_output,
+        "parsed_verdict": parsed_verdict,
+        "parsed_detailed_judge": parsed,
+        "nested_check_status": nested_status,
+        "verdict_matches_nested_status": (
+            nested_status == parsed_verdict.upper()
+            if parsed_verdict in FIRST_VERDICT_CHOICES
+            and nested_status in {"PASS", "FAIL"}
+            else None
+        ),
+        "choice_logit_signal": signal,
+        "probe_version": FIRST_VERDICT_ENTROPY_VERSION,
+        "sidecar_verdict_is_authoritative": True,
+        "independent_from_acceptance_gate": True,
+    }
+
+
+def run_first_verdict_entropy_sidecar_call(
+    *,
+    runner: Any,
+    prompt: str,
+    image_paths: list[str],
+    video_paths: list[str],
+    check_name: str,
+) -> dict[str, Any]:
+    """Run one detailed judge call and capture its first lowercase verdict."""
+
+    generate_with_choice_logits = getattr(runner, "generate_with_choice_logits", None)
+    supports_choice_logits = getattr(runner, "supports_choice_logits", True)
+    if not callable(generate_with_choice_logits) or not supports_choice_logits:
+        reason = (
+            f"runner {type(runner).__name__} disables choice logits for this provider/model"
+            if callable(generate_with_choice_logits) and not supports_choice_logits
+            else f"runner {type(runner).__name__} does not expose choice logits"
+        )
+        return {
+            "prompt": prompt,
+            "raw_output": "",
+            "parsed_verdict": None,
+            "parsed_detailed_judge": None,
+            "choice_logit_signal": {
+                "available": False,
+                "reason": reason,
+                "probe_version": FIRST_VERDICT_ENTROPY_VERSION,
+                "measurement_context": "authoritative_first_detailed_judge_verdict",
+                "field_name": FIRST_VERDICT_FIELD,
+                "prior_generated_verdict": False,
+                "probe_output_contract_valid": False,
+                "probe_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            },
+            "probe_version": FIRST_VERDICT_ENTROPY_VERSION,
+            "sidecar_verdict_is_authoritative": True,
+            "independent_from_acceptance_gate": True,
+        }
+    generation = generate_with_choice_logits(
+        prompt,
+        image_paths=image_paths,
+        video_paths=video_paths,
+        field_name=FIRST_VERDICT_FIELD,
+        choices=FIRST_VERDICT_CHOICES,
+    )
+    if not isinstance(generation, dict):
+        generation = {
+            "text": "",
+            "choice_logits": {
+                "available": False,
+                "reason": "runner returned a non-object first-verdict sidecar result",
+            },
+        }
+    return validate_first_verdict_sidecar_generation(
+        generation,
+        prompt=prompt,
+        check_name=check_name,
+    )
+
+
+def validate_minimal_verdict_probe_generation(
+    generation: dict[str, Any],
+    *,
+    prompt: str,
+    check_name: str,
+) -> dict[str, Any]:
+    """Validate an independent judge probe whose entire output is one verdict."""
+
+    raw_output = str(generation.get("text") or "")
+    source_signal = generation.get("choice_logits")
+    signal = dict(source_signal) if isinstance(source_signal, dict) else {}
+    output_contract_errors = []
+    measurement_errors = []
+    try:
+        parsed = json.loads(raw_output.strip())
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        parsed = None
+        output_contract_errors.append(f"probe output is not exact JSON: {exc}")
+
+    parsed_verdict = None
+    if not isinstance(parsed, dict):
+        output_contract_errors.append("probe output must be a JSON object")
+    elif list(parsed) != [FIRST_VERDICT_FIELD]:
+        output_contract_errors.append(
+            "probe output must contain exactly one field: verdict"
+        )
+    else:
+        parsed_verdict = parsed.get(FIRST_VERDICT_FIELD)
+        if (
+            not isinstance(parsed_verdict, str)
+            or parsed_verdict not in FIRST_VERDICT_CHOICES
+        ):
+            output_contract_errors.append(
+                "verdict must be exactly lowercase pass or fail"
+            )
+
+    expected_schema = None
+    if JUDGE_OUTPUT_SCHEMA_MARKER not in prompt:
+        output_contract_errors.append(
+            "probe prompt is missing its output-schema marker"
+        )
+    else:
+        try:
+            expected_schema = json.loads(
+                prompt.rsplit(JUDGE_OUTPUT_SCHEMA_MARKER, 1)[1].strip()
+            )
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            output_contract_errors.append(
+                f"probe prompt schema is not valid JSON: {exc}"
+            )
+    if expected_schema != {FIRST_VERDICT_FIELD: "pass/fail"}:
+        output_contract_errors.append(
+            "probe prompt must request exactly the single verdict field"
+        )
+
+    field_name = str(signal.get("field_name") or "")
+    if field_name != FIRST_VERDICT_FIELD:
+        measurement_errors.append(
+            f"choice logits targeted {field_name or '<missing>'!r}, "
+            f"expected {FIRST_VERDICT_FIELD!r}"
+        )
+    prefix = signal.get("generated_prefix_before_choice")
+    if not isinstance(prefix, str):
+        measurement_errors.append(
+            "runner did not retain the generated prefix before the verdict token"
+        )
+        prefix = ""
+    prior_verdict = bool(
+        re.search(r'"review_passed"\s*:', prefix, re.IGNORECASE)
+        or re.search(
+            r'["\'](?:status|decision|verdict)["\']\s*:\s*'
+            r'["\'](?:pass|fail)["\']',
+            prefix,
+            re.IGNORECASE,
+        )
+    )
+    if prior_verdict:
+        measurement_errors.append(
+            "generated prefix contains a verdict before the measured verdict"
+        )
+    generated_choice = str(signal.get("generated_choice") or "").strip()
+    if (
+        parsed_verdict in FIRST_VERDICT_CHOICES
+        and generated_choice != parsed_verdict
+    ):
+        measurement_errors.append(
+            "captured verdict token does not match the parsed verdict"
+        )
+
+    errors = [*output_contract_errors, *measurement_errors]
+    if signal.get("available") is not True:
+        errors.append(
+            str(signal.get("reason") or "runner did not return available choice logits")
+        )
+    signal.update(
+        {
+            "available": not errors,
+            "reason": "; ".join(dict.fromkeys(errors)),
+            "probe_version": MINIMAL_VERDICT_ENTROPY_VERSION,
+            "measurement_context": "independent_minimal_judge_verdict",
+            "field_name": FIRST_VERDICT_FIELD,
+            "judge": check_name,
+            "prior_generated_verdict": prior_verdict,
+            "probe_output_contract_valid": not output_contract_errors,
+            "measurement_contract_valid": not measurement_errors,
+            "probe_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "decision_role": "independent_diagnostic_probe",
+            "verdict_affects_acceptance": False,
+            "entropy_used_as_threshold": False,
+            "independent_from_acceptance_gate": True,
+        }
+    )
+    return {
+        "prompt": prompt,
+        "raw_output": raw_output,
+        "parsed_verdict": (
+            parsed_verdict
+            if parsed_verdict in FIRST_VERDICT_CHOICES
+            else None
+        ),
+        "choice_logit_signal": signal,
+        "probe_version": MINIMAL_VERDICT_ENTROPY_VERSION,
+        "decision_role": "independent_diagnostic_probe",
+        "verdict_affects_acceptance": False,
+        "entropy_used_as_threshold": False,
+        "independent_from_acceptance_gate": True,
+    }
+
+
+def run_minimal_verdict_entropy_probe_call(
+    *,
+    runner: Any,
+    prompt: str,
+    image_paths: list[str],
+    video_paths: list[str],
+    check_name: str,
+) -> dict[str, Any]:
+    """Run the second, minimal judge call and capture pass/fail logits."""
+
+    generate_with_choice_logits = getattr(runner, "generate_with_choice_logits", None)
+    supports_choice_logits = getattr(runner, "supports_choice_logits", True)
+    if not callable(generate_with_choice_logits) or not supports_choice_logits:
+        reason = (
+            f"runner {type(runner).__name__} disables choice logits for this provider/model"
+            if callable(generate_with_choice_logits) and not supports_choice_logits
+            else f"runner {type(runner).__name__} does not expose choice logits"
+        )
+        return validate_minimal_verdict_probe_generation(
+            {
+                "text": "",
+                "choice_logits": {
+                    "available": False,
+                    "reason": reason,
+                    "field_name": FIRST_VERDICT_FIELD,
+                    "generated_prefix_before_choice": "",
+                },
+            },
+            prompt=prompt,
+            check_name=check_name,
+        )
+    generation = generate_with_choice_logits(
+        prompt,
+        image_paths=image_paths,
+        video_paths=video_paths,
+        field_name=FIRST_VERDICT_FIELD,
+        choices=FIRST_VERDICT_CHOICES,
+    )
+    if not isinstance(generation, dict):
+        generation = {
+            "text": "",
+            "choice_logits": {
+                "available": False,
+                "reason": "runner returned a non-object minimal-verdict result",
+                "field_name": FIRST_VERDICT_FIELD,
+                "generated_prefix_before_choice": "",
+            },
+        }
+    return validate_minimal_verdict_probe_generation(
+        generation,
+        prompt=prompt,
+        check_name=check_name,
+    )
+
+
 def decision_uncertainty_from_choice_logits(signal: dict[str, Any] | None) -> dict[str, Any]:
-    """Legacy offline helper for archived PASS/FAIL entropy experiments."""
+    """Normalize first-verdict pass/fail or legacy PASS/FAIL logits."""
 
     statuses = ("PASS", "FAIL")
     if not isinstance(signal, dict):
         return {"available": False, "reason": "runner returned no choice-logit signal"}
-    generated = str(signal.get("generated_choice") or "").upper()
+    generated_raw = str(signal.get("generated_choice") or "").strip()
+    generated = generated_raw.upper()
+    signal_metadata = {
+        **({"generated_decision": generated} if generated in statuses else {}),
+        "probe_version": signal.get("probe_version"),
+        "measurement_context": signal.get("measurement_context"),
+        "field_name": signal.get("field_name"),
+        "prior_generated_verdict": signal.get("prior_generated_verdict"),
+        "probe_output_contract_valid": signal.get("probe_output_contract_valid"),
+        "measurement_contract_valid": signal.get("measurement_contract_valid"),
+        "probe_prompt_sha256": signal.get("probe_prompt_sha256"),
+        "decision_role": signal.get("decision_role"),
+        "verdict_affects_acceptance": signal.get("verdict_affects_acceptance"),
+        "entropy_used_as_threshold": signal.get("entropy_used_as_threshold"),
+        "independent_from_acceptance_gate": signal.get(
+            "independent_from_acceptance_gate"
+        ),
+    }
     if signal.get("available") is not True:
         return {
             "available": False,
             "reason": str(signal.get("reason") or "choice logits unavailable"),
-            **({"generated_decision": generated} if generated in statuses else {}),
+            **signal_metadata,
         }
     raw = signal.get("choice_logits") or signal.get("choice_logprobs")
-    if not isinstance(raw, dict) or any(status not in raw for status in statuses):
-        return {"available": False, "reason": "runner did not return both PASS and FAIL weights"}
-    weights = {status: float(raw[status]) for status in statuses}
+    if not isinstance(raw, dict):
+        return {
+            "available": False,
+            "reason": "runner did not return pass/fail weights",
+            **signal_metadata,
+        }
+    if all(choice in raw for choice in FIRST_VERDICT_CHOICES):
+        source_keys = {"PASS": "pass", "FAIL": "fail"}
+        verdict_token_case = "lowercase"
+    elif all(status in raw for status in statuses):
+        source_keys = {"PASS": "PASS", "FAIL": "FAIL"}
+        verdict_token_case = "uppercase_legacy"
+    else:
+        return {
+            "available": False,
+            "reason": "runner did not return both PASS and FAIL weights",
+            **signal_metadata,
+        }
+    try:
+        weights = {
+            status: float(raw[source_keys[status]])
+            for status in statuses
+        }
+    except (TypeError, ValueError):
+        return {
+            "available": False,
+            "reason": "choice weights contain a non-numeric value",
+            **signal_metadata,
+        }
     if not all(math.isfinite(value) for value in weights.values()):
-        return {"available": False, "reason": "choice weights contain non-finite values"}
+        return {
+            "available": False,
+            "reason": "choice weights contain non-finite values",
+            **signal_metadata,
+        }
     max_weight = max(weights.values())
     exp_weights = {status: math.exp(value - max_weight) for status, value in weights.items()}
     denominator = sum(exp_weights.values())
@@ -873,6 +1450,8 @@ def decision_uncertainty_from_choice_logits(signal: dict[str, Any] | None) -> di
     return {
         "available": True,
         "choice_set": list(statuses),
+        "captured_choice_set": [source_keys[status] for status in statuses],
+        "verdict_token_case": verdict_token_case,
         "weight_type": str(signal.get("weight_type") or "logit_or_log_probability"),
         "log_weights": {status: round(value, 8) for status, value in weights.items()},
         "probabilities": {status: round(value, 8) for status, value in probabilities.items()},
@@ -880,9 +1459,12 @@ def decision_uncertainty_from_choice_logits(signal: dict[str, Any] | None) -> di
         "entropy_bits": round(entropy_nats / math.log(2.0), 8),
         "normalized_entropy": round(normalized_entropy, 8),
         "argmax_decision": max(probabilities, key=probabilities.get),
-        "generated_decision": generated if generated in statuses else None,
+        **signal_metadata,
         "token_index": signal.get("token_index"),
-        "distribution_scope": "softmax restricted to the judge status tokens PASS and FAIL",
+        "distribution_scope": (
+            "softmax restricted to pass and fail at the only verdict field "
+            "of the independent minimal judge probe"
+        ),
     }
 
 
@@ -931,7 +1513,7 @@ def answerability_uncertainty_from_choice_logits(
         "generated_choice": generated if generated in choices else None,
         "token_index": signal.get("token_index"),
         "distribution_scope": "softmax restricted to direct answer tokens A, B, C, D, and E",
-        "note": "diagnostic only; insufficient responses have no A-E entropy",
+        "note": "diagnostic only; production answerability is forced-choice over A-E",
     }
 
 
@@ -953,17 +1535,18 @@ def attach_decision_uncertainty(
         else decision_uncertainty_from_choice_logits(choice_signal)
     )
     check["decision_uncertainty"] = uncertainty
-    generated_status = str(
-        emitted_status
-        or uncertainty.get("generated_decision")
-        or ""
-    ).upper()
+    # Compare the independent probe with the effective production check after
+    # any deterministic schema or semantic-subcheck overrides.
+    generated_status = str(uncertainty.get("generated_decision") or "").upper()
     effective_status = str(check.get("status") or "").upper()
-    check["status_matches_effective_status"] = bool(
+    probe_matches = bool(
         generated_status in {"PASS", "FAIL"}
         and effective_status in {"PASS", "FAIL"}
         and generated_status == effective_status
     )
+    check["probe_matches_effective_status"] = probe_matches
+    # Compatibility alias retained for older artifact readers.
+    check["status_matches_effective_status"] = probe_matches
     return check
 
 
@@ -1058,9 +1641,15 @@ def run_model_judge_branch(
     qa_id: Any,
     attempt: int,
     collect_choice_logits: bool = False,
+    minimal_verdict_probe_prompt: str | None = None,
 ) -> dict[str, Any]:
-    # collect_choice_logits is a legacy opt-in retained for offline entropy analysis.
-    # Production callers use ordinary JSON generation and never emit the old logit artifact.
+    """Run one model judge.
+
+    The detailed call always remains authoritative. When entropy collection is
+    enabled, a second independent call returns only ``{"verdict":"pass/fail"}``;
+    its output and entropy are diagnostic and cannot alter the detailed result.
+    """
+
     stage = f"{check_name}_judge"
     stage_start = time.time()
     print(
@@ -1070,30 +1659,7 @@ def run_model_judge_branch(
         f"images={len(image_paths)} videos={len(video_paths)}",
         flush=True,
     )
-    generate_with_choice_logits = getattr(runner, "generate_with_choice_logits", None)
-    supports_choice_logits = getattr(runner, "supports_choice_logits", True)
-    if collect_choice_logits and callable(generate_with_choice_logits) and supports_choice_logits:
-        generation = generate_with_choice_logits(
-            prompt,
-            image_paths=image_paths,
-            video_paths=video_paths,
-            field_name=DEFAULT_CHOICE_FIELD,
-            choices=DEFAULT_DECISION_CHOICES,
-        )
-        raw = str(generation.get("text") or "")
-        choice_signal = generation.get("choice_logits")
-    else:
-        raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
-        choice_signal = None
-        if collect_choice_logits:
-            choice_signal = {
-                "available": False,
-                "reason": (
-                    f"runner {type(runner).__name__} disables choice logits for this provider/model"
-                    if callable(generate_with_choice_logits) and not supports_choice_logits
-                    else f"runner {type(runner).__name__} does not expose choice logits"
-                ),
-            }
+    raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
     print(
         "qa_stage_done "
         f"stage={stage} evidence_id={evidence_id} "
@@ -1153,12 +1719,85 @@ def run_model_judge_branch(
             f"seconds={time.time() - repair_start:.1f}",
             flush=True,
         )
-    if collect_choice_logits:
-        judge["choice_logit_signal"] = choice_signal
     judge["raw_output"] = final_raw
     if format_repair["attempted"]:
         judge["initial_raw_output"] = initial_raw
         judge["format_repair"] = format_repair
+
+    if not collect_choice_logits:
+        return judge
+
+    effective_probe_prompt = minimal_verdict_probe_prompt
+    probe_stage = f"{check_name}_entropy_probe"
+    probe_start = time.time()
+    print(
+        "qa_stage_start "
+        f"stage={probe_stage} evidence_id={evidence_id} "
+        f"qa_id={qa_id} attempt={attempt} "
+        f"images={len(image_paths)} videos={len(video_paths)}",
+        flush=True,
+    )
+    try:
+        if effective_probe_prompt is None:
+            effective_probe_prompt = build_judge_minimal_verdict_probe_prompt(
+                prompt,
+                check_name,
+            )
+        entropy_probe = run_minimal_verdict_entropy_probe_call(
+            runner=runner,
+            prompt=effective_probe_prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            check_name=check_name,
+        )
+    except Exception as exc:
+        fallback_prompt = effective_probe_prompt or ""
+        entropy_probe = validate_minimal_verdict_probe_generation(
+            {
+                "text": "",
+                "choice_logits": {
+                    "available": False,
+                    "reason": (
+                        "independent minimal-verdict probe crashed: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    "field_name": FIRST_VERDICT_FIELD,
+                    "generated_prefix_before_choice": "",
+                },
+            },
+            prompt=fallback_prompt,
+            check_name=check_name,
+        )
+    signal = entropy_probe.get("choice_logit_signal")
+    if not isinstance(signal, dict):
+        signal = {
+            "available": False,
+            "reason": "independent minimal-verdict probe returned no choice-logit signal",
+            "probe_version": MINIMAL_VERDICT_ENTROPY_VERSION,
+            "measurement_context": "independent_minimal_judge_verdict",
+            "field_name": FIRST_VERDICT_FIELD,
+            "probe_output_contract_valid": False,
+            "decision_role": "independent_diagnostic_probe",
+            "verdict_affects_acceptance": False,
+            "entropy_used_as_threshold": False,
+            "independent_from_acceptance_gate": True,
+        }
+    judge["choice_logit_signal"] = signal
+    judge["entropy_probe_verdict"] = entropy_probe.get("parsed_verdict")
+    judge["minimal_entropy_probe"] = {
+        key: value
+        for key, value in entropy_probe.items()
+        if key not in {"prompt", "choice_logit_signal"}
+    }
+    print(
+        "qa_stage_done "
+        f"stage={probe_stage} evidence_id={evidence_id} "
+        f"qa_id={qa_id} attempt={attempt} "
+        f"probe_verdict={entropy_probe.get('parsed_verdict') or 'invalid'} "
+        f"entropy_available={signal.get('available') is True} "
+        f"seconds={time.time() - probe_start:.1f}",
+        flush=True,
+    )
     return judge
 
 
@@ -1171,6 +1810,7 @@ def check_from_single_judge(
     def finalize(check: dict[str, Any], *, emitted_status: Any = None) -> dict[str, Any]:
         if not include_decision_uncertainty:
             check.pop("decision_uncertainty", None)
+            check.pop("probe_matches_effective_status", None)
             check.pop("status_matches_effective_status", None)
             return check
         return attach_decision_uncertainty(
@@ -1332,7 +1972,10 @@ def merge_parallel_judges(
             ),
             "max_normalized_entropy": round(max(entropy_values), 8) if entropy_values else None,
             "unavailable_checks": unavailable_entropy_checks,
-            "note": "diagnostic only; this does not override PASS/FAIL gates",
+            "note": (
+                "each entropy value comes from a second independent minimal-verdict "
+                "call; the detailed production judges alone drive the gate"
+            ),
         }
 
     feedback = []
@@ -1427,6 +2070,276 @@ def build_review_from_gates(
             "reason": final_reason or ("passed all gates" if accepted else "rejected"),
         },
     }
+
+
+def production_entropy_rows_for_attempt(
+    *,
+    judge: dict[str, Any],
+    evidence_id: Any,
+    qa_id: Any,
+    attempt: int,
+    attempt_outcome: str,
+) -> list[dict[str, Any]]:
+    """Flatten the two independent minimal-verdict measurements for analysis."""
+
+    checks = judge.get("checks") if isinstance(judge.get("checks"), dict) else {}
+    branches = judge.get("branches") if isinstance(judge.get("branches"), dict) else {}
+    rows = []
+    for judge_name in sorted(LEGACY_DECISION_ENTROPY_JUDGE_CHECKS):
+        check = checks.get(judge_name) if isinstance(checks.get(judge_name), dict) else {}
+        branch = (
+            branches.get(judge_name)
+            if isinstance(branches.get(judge_name), dict)
+            else {}
+        )
+        uncertainty = (
+            check.get("decision_uncertainty")
+            if isinstance(check.get("decision_uncertainty"), dict)
+            else {
+                "available": False,
+                "reason": "effective production check omitted decision_uncertainty",
+            }
+        )
+        probabilities = (
+            uncertainty.get("probabilities")
+            if isinstance(uncertainty.get("probabilities"), dict)
+            else {}
+        )
+        log_weights = (
+            uncertainty.get("log_weights")
+            if isinstance(uncertainty.get("log_weights"), dict)
+            else {}
+        )
+        probe_verdict = str(
+            branch.get("entropy_probe_verdict")
+            or uncertainty.get("generated_decision")
+            or ""
+        ).lower()
+        probe_verdict_status = (
+            probe_verdict.upper()
+            if probe_verdict in FIRST_VERDICT_CHOICES
+            else ""
+        )
+        production_status = str(check.get("status") or "").upper()
+        probe_matches_production = (
+            probe_verdict_status == production_status
+            if probe_verdict_status in {"PASS", "FAIL"}
+            and production_status in {"PASS", "FAIL"}
+            else None
+        )
+        minimal_probe = (
+            branch.get("minimal_entropy_probe")
+            if isinstance(branch.get("minimal_entropy_probe"), dict)
+            else {}
+        )
+        rows.append(
+            {
+                "evidence_id": evidence_id,
+                "qa_id": qa_id,
+                "attempt": attempt,
+                "judge": judge_name,
+                "probe_verdict": probe_verdict,
+                "probe_verdict_status": probe_verdict_status,
+                "production_status": production_status,
+                "probe_matches_production_status": probe_matches_production,
+                "minimal_probe_raw_output": minimal_probe.get("raw_output"),
+                # Compatibility aliases for older entropy-analysis readers.
+                "model_verdict": probe_verdict,
+                "model_verdict_status": probe_verdict_status,
+                "effective_status": production_status,
+                "model_verdict_matches_effective_status": probe_matches_production,
+                "attempt_outcome": attempt_outcome,
+                "combined_judge_gate_passed": (
+                    (judge.get("gate") or {}).get("passed") is True
+                ),
+                "entropy_available": uncertainty.get("available") is True,
+                "entropy_unavailable_reason": str(
+                    uncertainty.get("reason") or ""
+                ),
+                "probability_pass": probabilities.get("PASS"),
+                "probability_fail": probabilities.get("FAIL"),
+                "log_weight_pass": log_weights.get("PASS"),
+                "log_weight_fail": log_weights.get("FAIL"),
+                "entropy_nats": uncertainty.get("entropy_nats"),
+                "entropy_bits": uncertainty.get("entropy_bits"),
+                "normalized_entropy": uncertainty.get("normalized_entropy"),
+                "argmax_decision": uncertainty.get("argmax_decision"),
+                "generated_decision": uncertainty.get("generated_decision"),
+                "generated_matches_argmax": (
+                    uncertainty.get("generated_decision")
+                    == uncertainty.get("argmax_decision")
+                    if uncertainty.get("available") is True
+                    else None
+                ),
+                "token_index": uncertainty.get("token_index"),
+                "probe_version": uncertainty.get("probe_version"),
+                "measurement_context": uncertainty.get("measurement_context"),
+                "decision_role": uncertainty.get("decision_role"),
+                "verdict_affects_acceptance": uncertainty.get(
+                    "verdict_affects_acceptance"
+                ),
+                "entropy_used_as_threshold": uncertainty.get(
+                    "entropy_used_as_threshold"
+                ),
+                "probe_output_contract_valid": uncertainty.get(
+                    "probe_output_contract_valid"
+                ),
+                "measurement_contract_valid": uncertainty.get(
+                    "measurement_contract_valid"
+                ),
+                "probe_prompt_sha256": uncertainty.get("probe_prompt_sha256"),
+                "independent_from_acceptance_gate": uncertainty.get(
+                    "independent_from_acceptance_gate"
+                ),
+            }
+        )
+    return rows
+
+
+def _production_entropy_group(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    available = [
+        row
+        for row in rows
+        if row.get("entropy_available") is True
+        and isinstance(row.get("normalized_entropy"), (int, float))
+    ]
+    entropies = [float(row["normalized_entropy"]) for row in available]
+    return {
+        "row_count": len(rows),
+        "available_count": len(available),
+        "availability_rate": len(available) / len(rows) if rows else None,
+        "mean_normalized_entropy": (
+            statistics.fmean(entropies) if entropies else None
+        ),
+        "median_normalized_entropy": (
+            statistics.median(entropies) if entropies else None
+        ),
+        "minimum_normalized_entropy": min(entropies) if entropies else None,
+        "maximum_normalized_entropy": max(entropies) if entropies else None,
+        "probe_verdict_counts": dict(
+            sorted(Counter(str(row.get("probe_verdict_status")) for row in rows).items())
+        ),
+        "production_status_counts": dict(
+            sorted(Counter(str(row.get("production_status")) for row in rows).items())
+        ),
+        "probe_production_mismatch_count": sum(
+            row.get("probe_matches_production_status") is False
+            for row in rows
+        ),
+        # Compatibility aliases for older report consumers.
+        "model_verdict_counts": dict(
+            sorted(Counter(str(row.get("probe_verdict_status")) for row in rows).items())
+        ),
+        "effective_status_counts": dict(
+            sorted(Counter(str(row.get("production_status")) for row in rows).items())
+        ),
+        "model_effective_mismatch_count": sum(
+            row.get("probe_matches_production_status") is False
+            for row in rows
+        ),
+        "generated_argmax_mismatch_count": sum(
+            row.get("generated_matches_argmax") is False for row in available
+        ),
+    }
+
+
+def summarize_production_judge_entropy(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize entropy by judge, attempt result, and final packet outcome."""
+
+    def grouped(field: str) -> dict[str, Any]:
+        values = sorted({str(row.get(field) or "missing") for row in rows})
+        return {
+            value: _production_entropy_group(
+                [row for row in rows if str(row.get(field) or "missing") == value]
+            )
+            for value in values
+        }
+
+    joint_keys = sorted(
+        {
+            (
+                str(row.get("judge") or "missing"),
+                str(row.get("packet_final_status") or "missing"),
+            )
+            for row in rows
+        }
+    )
+    return {
+        "experiment": "independent_minimal_judge_verdict_entropy",
+        "measurement": (
+            "restricted softmax over lowercase pass/fail logits at the only "
+            "verdict field in a second minimal judge call"
+        ),
+        "causal_role": (
+            "the old detailed production judge drives acceptance, retries, and feedback; "
+            "the independent probe verdict and entropy are diagnostic only"
+        ),
+        "overall": _production_entropy_group(rows),
+        "by_judge": grouped("judge"),
+        "by_probe_verdict": grouped("probe_verdict_status"),
+        "by_production_status": grouped("production_status"),
+        # Compatibility aliases.
+        "by_model_verdict": grouped("probe_verdict_status"),
+        "by_effective_status": grouped("production_status"),
+        "by_attempt_outcome": grouped("attempt_outcome"),
+        "by_retry_followed": grouped("retry_followed"),
+        "by_packet_final_status": grouped("packet_final_status"),
+        "by_judge_and_packet_final_status": {
+            f"{judge}:{status}": _production_entropy_group(
+                [
+                    row
+                    for row in rows
+                    if str(row.get("judge") or "missing") == judge
+                    and str(row.get("packet_final_status") or "missing") == status
+                ]
+            )
+            for judge, status in joint_keys
+        },
+    }
+
+
+def production_entropy_report_markdown(summary: dict[str, Any]) -> str:
+    lines = [
+        "# Independent Minimal Judge-Probe Entropy",
+        "",
+        (
+            "Each model judge runs twice. The old detailed judge controls production; "
+            "the second call returns only `{\"verdict\":\"pass\"}` or "
+            "`{\"verdict\":\"fail\"}`. The second verdict and its entropy cannot "
+            "change acceptance, retries, or feedback."
+        ),
+        "",
+        "| Group | Rows | Available | Mean normalized entropy | Median | Probe/production mismatches |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for group_name, group in summary.get("by_judge", {}).items():
+        lines.append(
+            f"| judge={group_name} | {group['row_count']} | "
+            f"{group['available_count']} | "
+            f"{group['mean_normalized_entropy'] if group['mean_normalized_entropy'] is not None else 'NA'} | "
+            f"{group['median_normalized_entropy'] if group['median_normalized_entropy'] is not None else 'NA'} | "
+            f"{group['probe_production_mismatch_count']} |"
+        )
+    for group_name, group in summary.get("by_attempt_outcome", {}).items():
+        lines.append(
+            f"| attempt={group_name} | {group['row_count']} | "
+            f"{group['available_count']} | "
+            f"{group['mean_normalized_entropy'] if group['mean_normalized_entropy'] is not None else 'NA'} | "
+            f"{group['median_normalized_entropy'] if group['median_normalized_entropy'] is not None else 'NA'} | "
+            f"{group['probe_production_mismatch_count']} |"
+        )
+    for group_name, group in summary.get("by_packet_final_status", {}).items():
+        lines.append(
+            f"| final={group_name} | {group['row_count']} | "
+            f"{group['available_count']} | "
+            f"{group['mean_normalized_entropy'] if group['mean_normalized_entropy'] is not None else 'NA'} | "
+            f"{group['median_normalized_entropy'] if group['median_normalized_entropy'] is not None else 'NA'} | "
+            f"{group['probe_production_mismatch_count']} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def generator_decode_config(
@@ -1531,6 +2444,7 @@ def run_answerability_eval(
     media_backend: str,
     allow_openai_video_input: bool,
     prompt_rows: list[dict[str, Any]],
+    judge_media_role: str = "full",
 ) -> dict[str, Any]:
     evaluations = []
     for condition in build_answerability_conditions(qa_item.get("required_users", [])):
@@ -1539,7 +2453,7 @@ def run_answerability_eval(
             clips,
             backend=media_backend,
             allow_openai_video_input=allow_openai_video_input,
-            media_role="full",
+            media_role=judge_media_role,
         )
         prompt = build_answerability_prompt(qa_item, condition)
         prompt_rows.append(
@@ -1551,12 +2465,13 @@ def run_answerability_eval(
                 "prompt": prompt,
                 "image_paths": image_paths,
                 "video_paths": video_paths,
+                "media_role": judge_media_role,
                 "condition_media": condition_media_for_clips(
                     condition=condition,
                     clips=clips,
                     image_paths=image_paths,
                     video_paths=video_paths,
-                    media_role="full",
+                    media_role=judge_media_role,
                 ),
             }
         )
@@ -1584,10 +2499,9 @@ def run_answerability_eval(
             answer = extract_json_object(raw)
         except Exception as exc:
             answer = {
-                "choice": "insufficient",
+                "choice": None,
                 "answer_text": "",
-                "evidence_used": "",
-                "insufficient_reason": f"parse_failed: {exc}",
+                "evidence_used": f"parse_failed: {exc}",
             }
         evaluations.append(
             {
@@ -1599,7 +2513,7 @@ def run_answerability_eval(
                     clips=clips,
                     image_paths=image_paths,
                     video_paths=video_paths,
-                    media_role="full",
+                    media_role=judge_media_role,
                 ),
             }
         )
@@ -1620,14 +2534,17 @@ def run_parallel_review_judges(
     full_image_paths: list[str],
     full_video_paths: list[str],
     attempt: int,
-    include_generator_rationale: bool = True,
+    judge_media_role: str = "full",
+    include_generator_rationale: bool = False,
     pass_fail_only: bool = True,
     quality_quota_counts: dict[str, int] | None = None,
     quality_quota: int = DEFAULT_QUALITY_QUOTA,
+    record_decision_entropy: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Run qa_formality, evidence_groundedness, and answerability in parallel."""
 
     active_qa_formality_runner = qa_formality_runner or runner
+    include_generator_rationale = False
     participant_names = formality_participant_names(packet, qa_item)
     schema_errors = qa_formality_errors(
         qa_item,
@@ -1663,6 +2580,19 @@ def run_parallel_review_judges(
         packet,
         pass_fail_only=True,
     )
+    qa_formality_entropy_probe_prompt = None
+    evidence_groundedness_entropy_probe_prompt = None
+    if record_decision_entropy:
+        qa_formality_entropy_probe_prompt = build_judge_minimal_verdict_probe_prompt(
+            qa_formality_prompt,
+            "qa_formality",
+        )
+        evidence_groundedness_entropy_probe_prompt = (
+            build_judge_minimal_verdict_probe_prompt(
+                evidence_groundedness_prompt,
+                "evidence_groundedness",
+            )
+        )
     prompt_rows.append(
         {
             "stage": "qa_formality_judge",
@@ -1679,6 +2609,10 @@ def run_parallel_review_judges(
             "schema_branch": schema_formality_branch(schema_errors),
             "generator_rationale_included": False,
             "pass_fail_only": True,
+            "judge_contract": "legacy_review_passed",
+            "decision_entropy_requested": False,
+            "authoritative_for_acceptance": True,
+            "entropy_probe_affects_acceptance": False,
             "point_scoring": point_scoring_mode,
         }
     )
@@ -1693,13 +2627,60 @@ def run_parallel_review_judges(
             "prompt": evidence_groundedness_prompt,
             "image_paths": full_image_paths,
             "video_paths": full_video_paths,
-            "media_role": "full",
+            "media_role": judge_media_role,
             "model_id": getattr(runner, "model_id", None),
             "generator_rationale_included": include_generator_rationale,
             "pass_fail_only": True,
+            "judge_contract": "legacy_review_passed",
+            "decision_entropy_requested": False,
+            "authoritative_for_acceptance": True,
+            "entropy_probe_affects_acceptance": False,
             "point_scoring": point_scoring_mode,
         }
     )
+    if record_decision_entropy:
+        prompt_rows.extend(
+            [
+                {
+                    "stage": "qa_formality_entropy_probe",
+                    "evidence_id": packet.get("evidence_id"),
+                    "qa_id": qa_item.get("qa_id"),
+                    "question_type": qa_item.get("question_type"),
+                    "generation_mode": qa_item.get("generation_mode"),
+                    "attempt": attempt,
+                    "prompt": qa_formality_entropy_probe_prompt,
+                    "image_paths": [],
+                    "video_paths": [],
+                    "media_role": "text_only",
+                    "model_id": getattr(active_qa_formality_runner, "model_id", None),
+                    "pass_fail_only": True,
+                    "judge_contract": "minimal_verdict_only",
+                    "decision_entropy_requested": True,
+                    "authoritative_for_acceptance": False,
+                    "entropy_probe_affects_acceptance": False,
+                    "point_scoring": point_scoring_mode,
+                },
+                {
+                    "stage": "evidence_groundedness_entropy_probe",
+                    "evidence_id": packet.get("evidence_id"),
+                    "qa_id": qa_item.get("qa_id"),
+                    "question_type": qa_item.get("question_type"),
+                    "generation_mode": qa_item.get("generation_mode"),
+                    "attempt": attempt,
+                    "prompt": evidence_groundedness_entropy_probe_prompt,
+                    "image_paths": full_image_paths,
+                    "video_paths": full_video_paths,
+                    "media_role": judge_media_role,
+                    "model_id": getattr(runner, "model_id", None),
+                    "pass_fail_only": True,
+                    "judge_contract": "minimal_verdict_only",
+                    "decision_entropy_requested": True,
+                    "authoritative_for_acceptance": False,
+                    "entropy_probe_affects_acceptance": False,
+                    "point_scoring": point_scoring_mode,
+                },
+            ]
+        )
 
     answerability_prompt_rows: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -1713,7 +2694,8 @@ def run_parallel_review_judges(
             evidence_id=packet.get("evidence_id"),
             qa_id=qa_item.get("qa_id"),
             attempt=attempt,
-            collect_choice_logits=False,
+            collect_choice_logits=record_decision_entropy,
+            minimal_verdict_probe_prompt=qa_formality_entropy_probe_prompt,
         )
         evidence_groundedness_future = executor.submit(
             run_model_judge_branch,
@@ -1725,7 +2707,8 @@ def run_parallel_review_judges(
             evidence_id=packet.get("evidence_id"),
             qa_id=qa_item.get("qa_id"),
             attempt=attempt,
-            collect_choice_logits=False,
+            collect_choice_logits=record_decision_entropy,
+            minimal_verdict_probe_prompt=evidence_groundedness_entropy_probe_prompt,
         )
         answerability_future = executor.submit(
             run_answerability_eval,
@@ -1735,6 +2718,7 @@ def run_parallel_review_judges(
             media_backend=media_backend,
             allow_openai_video_input=allow_openai_video_input,
             prompt_rows=answerability_prompt_rows,
+            judge_media_role=judge_media_role,
         )
 
         try:
@@ -1775,7 +2759,7 @@ def run_parallel_review_judges(
         schema_errors=schema_errors,
         qa_item=qa_item,
         participant_names=participant_names,
-        include_decision_uncertainty=False,
+        include_decision_uncertainty=record_decision_entropy,
         quality_quota_by_check=None,
     )
     for check_name in QUALITY_SCORED_JUDGE_CHECKS:
@@ -1784,16 +2768,23 @@ def run_parallel_review_judges(
             continue
         # Do not retain stray fields from the archived point/logit contracts even if
         # a model emits them despite the binary production schema.
-        for archived_field in (
+        archived_fields = [
             "quality_score",
             "quality_flag",
             "quality_reason",
             "quota_rebuttal",
             "quality_quota",
             "quality_uncertainty",
-            "decision_uncertainty",
-            "status_matches_effective_status",
-        ):
+        ]
+        if not record_decision_entropy:
+            archived_fields.extend(
+                [
+                    "decision_uncertainty",
+                    "probe_matches_effective_status",
+                    "status_matches_effective_status",
+                ]
+            )
+        for archived_field in archived_fields:
             check.pop(archived_field, None)
     # Archived quota-counter update:
     # if quality_quota_by_check and active_quota_counts is not None: ...
@@ -1801,14 +2792,30 @@ def run_parallel_review_judges(
         "parallel": True,
         "schema_branch": schema_formality_branch(schema_errors),
         "generator_rationale_included": include_generator_rationale,
+        "judge_media_role": judge_media_role,
         "pass_fail_only": True,
-        "pass_fail_entropy_logits": "legacy_archived_not_collected",
+        "judge_contract": (
+            "legacy_detailed_production_plus_independent_minimal_probe"
+            if record_decision_entropy
+            else "legacy_review_passed"
+        ),
+        "pass_fail_entropy_logits": (
+            "independent_minimal_probe_recorded"
+            if record_decision_entropy
+            else "not_collected"
+        ),
+        "verdict_entropy_gate_relation": (
+            "independent_probe_does_not_affect_gate"
+            if record_decision_entropy
+            else "not_applicable"
+        ),
         "answerability_choice_logits": "legacy_archived_not_collected",
         "point_scoring": point_scoring_mode,
         "qa_formality": {
             "model_id": getattr(active_qa_formality_runner, "model_id", None),
             "generator_rationale_included": False,
             "prompt": qa_formality_prompt,
+            "entropy_probe_prompt": qa_formality_entropy_probe_prompt,
             "raw_output": qa_formality_judge.get("raw_output"),
             "parsed": qa_formality_judge,
         },
@@ -1816,6 +2823,7 @@ def run_parallel_review_judges(
             "model_id": getattr(runner, "model_id", None),
             "generator_rationale_included": include_generator_rationale,
             "prompt": evidence_groundedness_prompt,
+            "entropy_probe_prompt": evidence_groundedness_entropy_probe_prompt,
             "raw_output": evidence_groundedness_judge.get("raw_output"),
             "parsed": evidence_groundedness_judge,
         },
@@ -1835,6 +2843,9 @@ def generate_video_qa_loop(
     prompts_path: str | Path | None,
     rejected_path: str | Path | None,
     intermediate_path: str | Path | None = None,
+    judge_entropy_path: str | Path | None = None,
+    judge_entropy_summary_path: str | Path | None = None,
+    judge_entropy_report_path: str | Path | None = None,
     backend: str,
     model_id: str = DEFAULT_MODEL_ID,
     base_url: str = "http://127.0.0.1:8000/v1",
@@ -1854,9 +2865,11 @@ def generate_video_qa_loop(
     judge_max_new_tokens: int | None = None,
     judge_reasoning_effort: str | None = None,
     qa_formality_use_generator: bool = False,
-    judge_include_generator_rationale: bool = True,
+    judge_video_source: str = "full",
+    judge_include_generator_rationale: bool = False,
     judge_pass_fail_only: bool = True,
     judge_quality_quota: int = DEFAULT_QUALITY_QUOTA,
+    record_judge_decision_entropy: bool = False,
     dry_run: bool = False,
     generation_mode: str = "baseline",
     fixed_question_type_schedule: bool = False,
@@ -1867,6 +2880,7 @@ def generate_video_qa_loop(
     generator_top_p: float = DEFAULT_SAMPLING_TOP_P,
     generator_top_k: int | None = None,
 ) -> list[dict[str, Any]]:
+    judge_include_generator_rationale = False
     # Archived scored/quota production switch:
     # judge_pass_fail_only = caller-provided value
     # judge_quality_quota = caller-provided value
@@ -1876,6 +2890,11 @@ def generate_video_qa_loop(
         raise ValueError(f"unknown generation_mode: {generation_mode}")
     if generator_decode_mode not in GENERATOR_DECODING_MODES:
         raise ValueError(f"unknown generator_decode_mode: {generator_decode_mode}")
+    if judge_video_source not in JUDGE_VIDEO_SOURCES:
+        raise ValueError(
+            f"unknown judge_video_source {judge_video_source!r}; "
+            f"expected one of {JUDGE_VIDEO_SOURCES}"
+        )
     # Archived scored-quota validation:
     # if not judge_pass_fail_only and judge_quality_quota < 1: ...
     active_question_types = tuple(question_types or DEFAULT_QUESTION_TYPES)
@@ -1936,8 +2955,31 @@ def generate_video_qa_loop(
             reasoning_effort=judge_reasoning_effort,
         )
     qa_formality_runner = runner if qa_formality_use_generator else judge_runner
+    entropy_tokenizer_preflight: dict[str, Any] = {}
+    if record_judge_decision_entropy:
+        runners_by_role = {
+            "qa_formality": qa_formality_runner,
+            "evidence_groundedness": judge_runner,
+        }
+        verified_runner_ids: dict[int, dict[str, Any]] = {}
+        for role, active_runner in runners_by_role.items():
+            runner_id = id(active_runner)
+            if runner_id not in verified_runner_ids:
+                verified_runner_ids[runner_id] = verify_first_verdict_tokenization(
+                    active_runner
+                )
+            entropy_tokenizer_preflight[role] = verified_runner_ids[runner_id]
+        print(
+            "production_entropy_tokenizer_preflight "
+            + json.dumps(entropy_tokenizer_preflight, sort_keys=True),
+            flush=True,
+        )
     point_scoring_mode = "legacy_archived_not_active"
-    judge_contract = "binary_pass_fail"
+    judge_contract = (
+        "legacy_detailed_production_plus_independent_minimal_probe"
+        if record_judge_decision_entropy
+        else "binary_pass_fail"
+    )
     print(
         "qa_runner_config "
         f"generator_backend={active_backend} generator_model={runner.model_id} "
@@ -1945,10 +2987,11 @@ def generate_video_qa_loop(
         f"visual_judge_backend={active_judge_backend} visual_judge_model={judge_runner.model_id} "
         f"judge_runner_shared_with_generator={judge_runner is runner} "
         f"visual_judge_reasoning_effort={judge_reasoning_effort or 'provider_default'} "
+        f"judge_video_source={judge_video_source} "
         f"generator_rationale_included={judge_include_generator_rationale} "
         f"judge_contract={judge_contract} "
         f"point_scoring={point_scoring_mode} "
-        "pass_fail_entropy_logits=legacy_archived_not_collected "
+        f"pass_fail_entropy_logits={'independent_minimal_probe_recorded' if record_judge_decision_entropy else 'not_collected'} "
         "answerability_choice_logits=legacy_archived_not_collected",
         flush=True,
     )
@@ -1956,11 +2999,16 @@ def generate_video_qa_loop(
     intermediate_rows = StreamingJsonlRows(intermediate_path, reset=not resume)
     accepted = StreamingJsonlRows(output_path, reset=not resume)
     rejected = StreamingJsonlRows(rejected_path, reset=not resume)
+    judge_entropy_rows = StreamingJsonlRows(
+        judge_entropy_path if record_judge_decision_entropy else None,
+        reset=not resume,
+    )
     if resume:
         accepted.load_existing()
         rejected.load_existing()
         prompts.load_existing()
         intermediate_rows.load_existing()
+        judge_entropy_rows.load_existing()
     quality_quota_counts: dict[str, int] | None = None
     # Archived resume-time quota restoration:
     # quota_source_rows = list(intermediate_rows) or [*accepted, *rejected]
@@ -2007,7 +3055,7 @@ def generate_video_qa_loop(
             clips,
             backend=judge_media_backend,
             allow_openai_video_input=allow_openai_video_input,
-            media_role="full",
+            media_role=judge_video_source,
         )
         if judge_runner is runner:
             prepared_video_uploads = prepare_runner_video_uploads(
@@ -2015,6 +3063,7 @@ def generate_video_qa_loop(
                 evidence_id=packet.get("evidence_id"),
                 generator_video_paths=video_paths,
                 full_video_paths=full_video_paths,
+                judge_media_role=judge_video_source,
             )
         else:
             prepared_video_uploads = {
@@ -2023,15 +3072,18 @@ def generate_video_qa_loop(
                     evidence_id=packet.get("evidence_id"),
                     generator_video_paths=video_paths,
                     full_video_paths=[],
+                    judge_media_role=judge_video_source,
                 ),
                 "judge": prepare_runner_video_uploads(
                     runner=judge_runner,
                     evidence_id=packet.get("evidence_id"),
                     generator_video_paths=[],
                     full_video_paths=full_video_paths,
+                    judge_media_role=judge_video_source,
                 ),
             }
         feedback = None
+        previous_generation = None
         if dry_run:
             qa = dry_run_qa(packet, question_type, generation_mode=generation_mode)
             # Archived discovery dry-run routing called build_relation_discovery_prompt
@@ -2074,6 +3126,9 @@ def generate_video_qa_loop(
                     "media_role": "generator",
                     "full_image_paths": full_image_paths,
                     "full_video_paths": full_video_paths,
+                    "judge_image_paths": full_image_paths,
+                    "judge_video_paths": full_video_paths,
+                    "judge_media_role": judge_video_source,
                     "prepared_video_uploads": prepared_video_uploads,
                     "human_audit": human_audit_packet(packet),
                 },
@@ -2083,6 +3138,7 @@ def generate_video_qa_loop(
                     "parallel": True,
                     "schema_branch": schema_formality_branch(schema_errors),
                     "generator_rationale_included": judge_include_generator_rationale,
+                    "judge_media_role": judge_video_source,
                     "pass_fail_only": True,
                     "pass_fail_entropy_logits": "legacy_archived_not_collected",
                     "answerability_choice_logits": "legacy_archived_not_collected",
@@ -2144,7 +3200,7 @@ def generate_video_qa_loop(
                     "prompt": evidence_groundedness_prompt,
                     "image_paths": full_image_paths,
                     "video_paths": full_video_paths,
-                    "media_role": "full",
+                    "media_role": judge_video_source,
                     "generator_rationale_included": judge_include_generator_rationale,
                     "pass_fail_only": True,
                     "point_scoring": point_scoring_mode,
@@ -2156,7 +3212,7 @@ def generate_video_qa_loop(
                     condition_clips,
                     backend=judge_media_backend,
                     allow_openai_video_input=allow_openai_video_input,
-                    media_role="full",
+                    media_role=judge_video_source,
                 )
                 prompts.append(
                     {
@@ -2168,13 +3224,13 @@ def generate_video_qa_loop(
                         "prompt": build_answerability_prompt(qa, condition),
                         "image_paths": cond_images,
                         "video_paths": cond_videos,
-                        "media_role": "full",
+                        "media_role": judge_video_source,
                         "condition_media": condition_media_for_clips(
                             condition=condition,
                             clips=condition_clips,
                             image_paths=cond_images,
                             video_paths=cond_videos,
-                            media_role="full",
+                            media_role=judge_video_source,
                         ),
                     }
                 )
@@ -2184,12 +3240,13 @@ def generate_video_qa_loop(
                         clips=condition_clips,
                         image_paths=cond_images,
                         video_paths=cond_videos,
-                        media_role="full",
+                        media_role=judge_video_source,
                     )
                 )
             qa["generation_trace"] = [dry_trace]
             qa["human_audit"] = human_audit_packet(packet)
             qa["generator_decode"] = decode_config
+            qa["judge_video_source"] = judge_video_source
             intermediate_rows.append(dry_trace)
             counts[question_type] += 1
             accepted.append(qa)
@@ -2197,6 +3254,9 @@ def generate_video_qa_loop(
 
         packet_rejections = []
         packet_trace = []
+        packet_entropy_rows: list[dict[str, Any]] = []
+        packet_final_status = "unknown"
+        packet_final_attempt: int | None = None
         last_review = None
         for attempt in range(1, max_attempts + 1):
             attempt_trace: dict[str, Any] = {
@@ -2205,12 +3265,16 @@ def generate_video_qa_loop(
                 "generation_mode": generation_mode,
                 "attempt": attempt,
                 "feedback_in": feedback,
+                "previous_generation_in": previous_generation,
                 "media": {
                     "image_paths": image_paths,
                     "video_paths": video_paths,
                     "media_role": "generator",
                     "full_image_paths": full_image_paths,
                     "full_video_paths": full_video_paths,
+                    "judge_image_paths": full_image_paths,
+                    "judge_video_paths": full_video_paths,
+                    "judge_media_role": judge_video_source,
                     "prepared_video_uploads": prepared_video_uploads,
                     "human_audit": human_audit_packet(packet),
                 },
@@ -2229,6 +3293,7 @@ def generate_video_qa_loop(
                 question_type,
                 feedback=feedback,
                 generation_mode=generation_mode,
+                previous_generation=previous_generation,
             )
             attempt_trace["generation"]["prompt"] = gen_prompt
             prompts.append(
@@ -2272,6 +3337,7 @@ def generate_video_qa_loop(
                 flush=True,
             )
             attempt_trace["generation"]["raw_output"] = raw_generation
+            previous_generation = str(raw_generation)
             try:
                 qa = extract_json_object(raw_generation)
             except Exception as exc:
@@ -2307,6 +3373,7 @@ def generate_video_qa_loop(
                 "evidence_groundedness": judge_runner.model_id,
                 "answerability": judge_runner.model_id,
             }
+            qa["judge_video_source"] = judge_video_source
             qa["source_urls"] = packet.get("source_urls", {})
             qa["video_evidence"] = video_evidence_for_packet(packet)
             qa.setdefault("referred_timestamps", [])
@@ -2347,9 +3414,11 @@ def generate_video_qa_loop(
                     full_image_paths=full_image_paths,
                     full_video_paths=full_video_paths,
                     attempt=attempt,
+                    judge_media_role=judge_video_source,
                     include_generator_rationale=judge_include_generator_rationale,
                     pass_fail_only=True,
                     quality_quota_counts=None,
+                    record_decision_entropy=record_judge_decision_entropy,
                 )
             except OpenRouterRequestError as exc:
                 # This is an infrastructure failure, not a negative judgment. Preserve the
@@ -2395,6 +3464,16 @@ def generate_video_qa_loop(
                 last_review = qa["review"]
                 attempt_trace["result"] = {"accepted": False, "reason": feedback}
                 packet_rejections.append({"attempt": attempt, "reason": feedback, "qa": qa})
+                if record_judge_decision_entropy:
+                    attempt_entropy_rows = production_entropy_rows_for_attempt(
+                        judge=judge,
+                        evidence_id=packet.get("evidence_id"),
+                        qa_id=qa.get("qa_id"),
+                        attempt=attempt,
+                        attempt_outcome="judge_gate_failed",
+                    )
+                    attempt_trace["judge_entropy"] = attempt_entropy_rows
+                    packet_entropy_rows.extend(attempt_entropy_rows)
                 continue
 
             qa["review"] = build_review_from_gates(
@@ -2404,7 +3483,11 @@ def generate_video_qa_loop(
                 accepted=True,
                 final_reason="passed all gates",
             )
-            strict_errors = validate_qa_item(qa, strict_review=True)
+            strict_errors = validate_qa_item(
+                qa,
+                strict_review=True,
+                require_decision_entropy=record_judge_decision_entropy,
+            )
             if strict_errors:
                 feedback = "Strict validation errors: " + "; ".join(strict_errors)
                 qa["review"] = build_review_from_gates(
@@ -2419,9 +3502,29 @@ def generate_video_qa_loop(
                 attempt_trace["schema_errors"] = strict_errors
                 attempt_trace["result"] = {"accepted": False, "reason": feedback}
                 packet_rejections.append({"attempt": attempt, "reason": feedback, "qa": qa})
+                if record_judge_decision_entropy:
+                    attempt_entropy_rows = production_entropy_rows_for_attempt(
+                        judge=judge,
+                        evidence_id=packet.get("evidence_id"),
+                        qa_id=qa.get("qa_id"),
+                        attempt=attempt,
+                        attempt_outcome="post_judge_schema_failed",
+                    )
+                    attempt_trace["judge_entropy"] = attempt_entropy_rows
+                    packet_entropy_rows.extend(attempt_entropy_rows)
                 continue
 
             attempt_trace["result"] = {"accepted": True, "reason": "passed all gates"}
+            if record_judge_decision_entropy:
+                attempt_entropy_rows = production_entropy_rows_for_attempt(
+                    judge=judge,
+                    evidence_id=packet.get("evidence_id"),
+                    qa_id=qa.get("qa_id"),
+                    attempt=attempt,
+                    attempt_outcome="accepted",
+                )
+                attempt_trace["judge_entropy"] = attempt_entropy_rows
+                packet_entropy_rows.extend(attempt_entropy_rows)
             qa["generation_trace"] = packet_trace
             last_review = qa["review"]
             accepted.append(qa)
@@ -2437,6 +3540,8 @@ def generate_video_qa_loop(
                 }
             )
             counts[question_type] += 1
+            packet_final_status = "accepted"
+            packet_final_attempt = attempt
             break
         else:
             rejected_row = {
@@ -2444,6 +3549,7 @@ def generate_video_qa_loop(
                 "question_type": question_type,
                 "generation_mode": generation_mode,
                 "generator_decode": decode_config,
+                "judge_video_source": judge_video_source,
                 "attempts": packet_rejections,
                 "generation_trace": packet_trace,
                 "human_audit": human_audit_packet(packet),
@@ -2452,6 +3558,22 @@ def generate_video_qa_loop(
                 rejected_row["review"] = last_review
             rejected.append(rejected_row)
             intermediate_rows.append({**rejected_row, "status": "rejected"})
+            packet_final_status = "rejected"
+            packet_final_attempt = max_attempts
+
+        if record_judge_decision_entropy:
+            for entropy_row in packet_entropy_rows:
+                entropy_row["packet_final_status"] = packet_final_status
+                entropy_row["packet_final_attempt"] = packet_final_attempt
+                entropy_row["is_final_attempt"] = (
+                    entropy_row.get("attempt") == packet_final_attempt
+                )
+                entropy_row["retry_followed"] = (
+                    isinstance(entropy_row.get("attempt"), int)
+                    and isinstance(packet_final_attempt, int)
+                    and entropy_row["attempt"] < packet_final_attempt
+                )
+                judge_entropy_rows.append(entropy_row)
 
     if prompts_path:
         write_jsonl(prompts_path, prompts)
@@ -2460,6 +3582,18 @@ def generate_video_qa_loop(
     write_jsonl(output_path, accepted)
     if rejected_path and rejected:
         write_jsonl(rejected_path, rejected)
+    if record_judge_decision_entropy:
+        entropy_summary = summarize_production_judge_entropy(judge_entropy_rows)
+        entropy_summary["tokenizer_preflight"] = entropy_tokenizer_preflight
+        if judge_entropy_summary_path:
+            write_json(judge_entropy_summary_path, entropy_summary)
+        if judge_entropy_report_path:
+            report_path = Path(judge_entropy_report_path)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                production_entropy_report_markdown(entropy_summary),
+                encoding="utf-8",
+            )
     return accepted
 
 
@@ -2495,11 +3629,40 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
         help="Run the text-only qa_formality judge on the generator runner instead of the visual judge runner.",
     )
     parser.add_argument(
+        "--judge-video-source",
+        choices=JUDGE_VIDEO_SOURCES,
+        default="full",
+        help=(
+            "Video source for evidence_groundedness and all answerability conditions. "
+            "'full' preserves the production default; 'pruned' is the judge-media ablation."
+        ),
+    )
+    parser.add_argument(
         "--judge-hide-generator-rationale",
         dest="judge_include_generator_rationale",
         action="store_false",
-        default=True,
-        help="Withhold generator_rationale from both review judges.",
+        default=False,
+        help="Compatibility no-op: generator_rationale is always withheld from review judges.",
+    )
+    parser.add_argument(
+        "--record-judge-decision-entropy",
+        action="store_true",
+        help=(
+            "Keep each detailed model judge as the production gate, then run a "
+            "second independent verdict-only call to record pass/fail entropy."
+        ),
+    )
+    parser.add_argument(
+        "--judge-entropy-output",
+        help="Attempt-level JSONL for integrated production judge entropy.",
+    )
+    parser.add_argument(
+        "--judge-entropy-summary-output",
+        help="Aggregate JSON summary grouped by judge, attempt result, and final packet result.",
+    )
+    parser.add_argument(
+        "--judge-entropy-report-output",
+        help="Markdown summary of the integrated production entropy run.",
     )
     # Archived scored/quota CLI plumbing. Keeping these commented prevents an old
     # launcher flag from reactivating score prompts in the production pipeline.
@@ -2532,6 +3695,9 @@ def main(argv: list[str] | None = None) -> int:
         prompts_path=args.prompts_output,
         rejected_path=args.rejected_output,
         intermediate_path=args.intermediate_output,
+        judge_entropy_path=args.judge_entropy_output,
+        judge_entropy_summary_path=args.judge_entropy_summary_output,
+        judge_entropy_report_path=args.judge_entropy_report_output,
         backend=args.backend,
         model_id=args.model_id,
         base_url=args.base_url,
@@ -2551,7 +3717,9 @@ def main(argv: list[str] | None = None) -> int:
         judge_max_new_tokens=args.judge_max_new_tokens,
         judge_reasoning_effort=args.judge_reasoning_effort,
         qa_formality_use_generator=args.qa_formality_use_generator,
+        judge_video_source=args.judge_video_source,
         judge_include_generator_rationale=args.judge_include_generator_rationale,
+        record_judge_decision_entropy=args.record_judge_decision_entropy,
         # Archived scored/quota CLI plumbing:
         # judge_pass_fail_only=args.judge_pass_fail_only,
         # judge_quality_quota=args.judge_quality_quota,

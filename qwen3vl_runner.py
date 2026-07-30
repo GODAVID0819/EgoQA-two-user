@@ -47,8 +47,10 @@ DEFAULT_SAMPLING_TOP_P = 0.9
 # Archived inactive score-token defaults:
 # DEFAULT_CHOICE_FIELD = "final_quality_score"
 # DEFAULT_SCORE_CHOICES = ("1", "2", "3")
-DEFAULT_CHOICE_FIELD = "status"
-DEFAULT_DECISION_CHOICES = ("PASS", "FAIL")
+# Sidecar choice-logit calls target the authoritative first field of a detailed
+# judge response. Lowercase pass/fail are each single Qwen3.6-27B tokens.
+DEFAULT_CHOICE_FIELD = "verdict"
+DEFAULT_DECISION_CHOICES = ("pass", "fail")
 
 
 class OpenRouterRequestError(RuntimeError):
@@ -77,7 +79,7 @@ def locate_choice_token(
     """Locate a JSON choice value and the token piece containing it.
 
     Token APIs expose pieces rather than character offsets.  Returning the
-    exact alternative token spellings lets each backend look up PASS/FAIL at the same
+    exact alternative token spellings lets each backend look up both choices at the same
     decoding step, including tokenizers that fold JSON punctuation or leading
     whitespace into a choice token.
     """
@@ -108,6 +110,8 @@ def locate_choice_token(
                 "generated_choice": choice,
                 "token_piece": piece,
                 "alternative_token_pieces": alternatives,
+                "field_name": field_name,
+                "generated_prefix_before_choice": text[:choice_start],
             }
         cursor = piece_end
     return None
@@ -131,7 +135,16 @@ def choice_logprobs_from_top_candidates(
         return {"available": False, "reason": f"could not locate JSON field {field_name!r}"}
     index = int(located["token_index"])
     if index >= len(top_candidates):
-        return {"available": False, "reason": "choice token has no matching logprob step"}
+        return {
+            "available": False,
+            "reason": "choice token has no matching logprob step",
+            "generated_choice": located["generated_choice"],
+            "token_index": index,
+            "field_name": field_name,
+            "generated_prefix_before_choice": located[
+                "generated_prefix_before_choice"
+            ],
+        }
     candidates = top_candidates[index]
     by_token = {
         str(candidate.get("token")): float(candidate["logprob"])
@@ -146,6 +159,10 @@ def choice_logprobs_from_top_candidates(
             "reason": "top-logprobs response omitted choice token(s): " + ", ".join(missing),
             "generated_choice": located["generated_choice"],
             "token_index": index,
+            "field_name": field_name,
+            "generated_prefix_before_choice": located[
+                "generated_prefix_before_choice"
+            ],
         }
     return {
         "available": True,
@@ -153,6 +170,8 @@ def choice_logprobs_from_top_candidates(
         "weight_type": "log_probability",
         "generated_choice": located["generated_choice"],
         "token_index": index,
+        "field_name": field_name,
+        "generated_prefix_before_choice": located["generated_prefix_before_choice"],
     }
 
 
@@ -817,6 +836,12 @@ class Qwen3VLTransformersRunner:
             result["choice_logits"] = {
                 "available": False,
                 "reason": "choice token has no captured logits step",
+                "generated_choice": located["generated_choice"],
+                "token_index": index,
+                "field_name": choice_field,
+                "generated_prefix_before_choice": located[
+                    "generated_prefix_before_choice"
+                ],
             }
             return result
         id_to_position = {token_id: position for position, token_id in enumerate(capture.ids)}
@@ -826,9 +851,13 @@ class Qwen3VLTransformersRunner:
             if len(encoded) != 1 or int(encoded[0]) not in id_to_position:
                 result["choice_logits"] = {
                     "available": False,
-                    "reason": f"choice {choice!r} is not a captured single token at the status step",
+                    "reason": f"choice {choice!r} is not a captured single token at the choice step",
                     "generated_choice": located["generated_choice"],
                     "token_index": index,
+                    "field_name": choice_field,
+                    "generated_prefix_before_choice": located[
+                        "generated_prefix_before_choice"
+                    ],
                 }
                 return result
             alternative_ids[choice] = int(encoded[0])
@@ -842,6 +871,8 @@ class Qwen3VLTransformersRunner:
             "weight_type": "logit",
             "generated_choice": located["generated_choice"],
             "token_index": index,
+            "field_name": choice_field,
+            "generated_prefix_before_choice": located["generated_prefix_before_choice"],
         }
         return result
 
