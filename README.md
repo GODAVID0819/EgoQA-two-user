@@ -651,6 +651,9 @@ restored by duration protection, it sends only the explicitly restored
 members. Images are ordered by original timestamp within each user. These are
 the frames sampled for CLIP (normally one per second), not every native video
 frame. Judges and answerability continue to receive the full original videos.
+Both pruning-output schemas are supported: newer packets read `sampled_frames`
+from packet diagnostics, while legacy group-relative packets recover the same
+sampled timeline from the saved frame files beside each cluster medoid.
 
 The original pruned-video launchers and centroid-only launchers are unchanged.
 Run the new launchers from

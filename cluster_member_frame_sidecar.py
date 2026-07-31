@@ -40,18 +40,17 @@ def _existing_file(*values: Any) -> Path | None:
 
 def _load_packet_diagnostics(
     packet: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], Path]:
+) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]], Path | None]:
     pruning = packet.get("paired_video_pruning")
     diagnostics_value = pruning.get("diagnostics_path") if isinstance(pruning, dict) else None
     if not diagnostics_value:
-        raise ValueError(
-            f"{packet.get('evidence_id')}: cluster-member sidecar requires pruning diagnostics"
-        )
+        # The older 30-second group-relative pruner stores cluster decisions
+        # directly on each clip and leaves sampled images beside the medoids.
+        # It predates packet-level diagnostics, so recover those images below.
+        return {}, {}, None
     diagnostics_path = Path(str(diagnostics_value))
     if not diagnostics_path.is_file():
-        raise FileNotFoundError(
-            f"{packet.get('evidence_id')}: pruning diagnostics are missing: {diagnostics_path}"
-        )
+        return {}, {}, None
     payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"{packet.get('evidence_id')}: pruning diagnostics must be an object")
@@ -76,12 +75,11 @@ def _load_packet_diagnostics(
     return temporal, sampled_by_side, diagnostics_path
 
 
-def _retained_member_rows(
+def _cluster_decisions(
     clip: dict[str, Any],
     *,
     side: str,
     packet_pruning: dict[str, Any],
-    sampled_frames: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     temporal = clip.get("temporal_pruning")
     temporal = temporal if isinstance(temporal, dict) else {}
@@ -93,6 +91,102 @@ def _retained_member_rows(
             f"{clip.get('clip_id') or clip.get('agent_dir') or side}: "
             "cluster-member decisions are unavailable"
         )
+    return [row for row in decisions if isinstance(row, dict)]
+
+
+_SAMPLED_FRAME_NAME = re.compile(
+    r"^frame_(?P<index>\d+)_(?P<timestamp>-?\d+(?:\.\d+)?)s\.[^.]+$"
+)
+
+
+def _recover_sampled_frames_from_cluster_paths(
+    clip: dict[str, Any],
+    *,
+    side: str,
+    packet_pruning: dict[str, Any],
+    evidence_parent: Path,
+) -> list[dict[str, Any]]:
+    """Recover the legacy sampled-frame list from medoid sibling files."""
+
+    decisions = _cluster_decisions(
+        clip,
+        side=side,
+        packet_pruning=packet_pruning,
+    )
+    required_indices = {
+        int(value)
+        for decision in decisions
+        for value in decision.get("member_indices", [])
+    }
+    if not required_indices:
+        raise ValueError(
+            f"{clip.get('clip_id') or side}: cluster decisions have no member indices"
+        )
+
+    candidate_directories: list[Path] = []
+    for decision in decisions:
+        source_value = decision.get("source_path") or decision.get("path")
+        if not source_value:
+            continue
+        source = Path(str(source_value))
+        candidates = [source]
+        if not source.is_absolute():
+            candidates.append(evidence_parent / source)
+        existing = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if existing is not None and existing.parent not in candidate_directories:
+            candidate_directories.append(existing.parent)
+
+    frames_by_index: dict[int, dict[str, Any]] = {}
+    for directory in candidate_directories:
+        for path in directory.glob("frame_*_*s.*"):
+            match = _SAMPLED_FRAME_NAME.match(path.name)
+            if not match or not path.is_file():
+                continue
+            frame_index = int(match.group("index"))
+            frames_by_index.setdefault(
+                frame_index,
+                {
+                    "timestamp_seconds": float(match.group("timestamp")),
+                    "path": str(path),
+                },
+            )
+
+    missing = sorted(required_indices - set(frames_by_index))
+    if missing:
+        searched = ", ".join(str(path) for path in candidate_directories[:3])
+        raise FileNotFoundError(
+            f"{clip.get('clip_id') or side}: legacy pruning packet has no diagnostics and "
+            f"sampled member files {missing[:8]} were not found beside its medoids; "
+            f"searched={searched or '<no existing medoid paths>'}"
+        )
+
+    maximum_index = max(required_indices)
+    return [
+        frames_by_index.get(
+            index,
+            {
+                "timestamp_seconds": float(index),
+                "path": "",
+            },
+        )
+        for index in range(maximum_index + 1)
+    ]
+
+
+def _retained_member_rows(
+    clip: dict[str, Any],
+    *,
+    side: str,
+    packet_pruning: dict[str, Any],
+    sampled_frames: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    temporal = clip.get("temporal_pruning")
+    temporal = temporal if isinstance(temporal, dict) else {}
+    decisions = _cluster_decisions(
+        clip,
+        side=side,
+        packet_pruning=packet_pruning,
+    )
 
     restored_values = temporal.get("restored_frame_indices")
     if not isinstance(restored_values, list):
@@ -331,6 +425,8 @@ def prepare_cluster_member_frame_evidence(
         "cluster_member_frame_count": 0,
         "minimum_frames_per_clip": None,
         "maximum_frames_per_clip": 0,
+        "diagnostics_backed_clip_count": 0,
+        "legacy_recovered_clip_count": 0,
     }
 
     def converted_rows() -> Iterable[dict[str, Any]]:
@@ -361,6 +457,17 @@ def prepare_cluster_member_frame_evidence(
                 )
                 if side not in {"left", "right"}:
                     side = "left" if clip_index == 0 else "right"
+                sampled_frames = sampled_by_side.get(side)
+                if sampled_frames:
+                    stats["diagnostics_backed_clip_count"] += 1
+                else:
+                    sampled_frames = _recover_sampled_frames_from_cluster_paths(
+                        clip,
+                        side=side,
+                        packet_pruning=packet_pruning,
+                        evidence_parent=evidence_path.parent,
+                    )
+                    stats["legacy_recovered_clip_count"] += 1
                 converted = _frame_only_clip(
                     clip,
                     side=side,
@@ -368,8 +475,12 @@ def prepare_cluster_member_frame_evidence(
                     output_dir=output_dir,
                     evidence_parent=evidence_path.parent,
                     packet_pruning=packet_pruning,
-                    sampled_frames=sampled_by_side[side],
-                    diagnostics_parent=diagnostics_path.parent,
+                    sampled_frames=sampled_frames,
+                    diagnostics_parent=(
+                        diagnostics_path.parent
+                        if diagnostics_path is not None
+                        else evidence_path.parent
+                    ),
                 )
                 frame_count = len(converted["frames"])
                 stats["clip_count"] += 1
