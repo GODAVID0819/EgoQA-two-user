@@ -898,7 +898,6 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
     clips = []
     packet_image_index = 1
     uses_centroid_frames = False
-    frame_media_modes: set[str] = set()
     for clip in packet.get("clips", []):
         gaze_summary = clip.get("gaze_summary") if isinstance(clip.get("gaze_summary"), dict) else {}
         clip_brief = {
@@ -912,9 +911,8 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
             "pruning_summary": temporal_pruning_brief(clip.get("temporal_pruning")),
             "projection_status": gaze_summary.get("projection_status"),
         }
-        if clip.get("force_frame_inputs") or clip.get("generator_media_mode") == "centroid_frames_only":
+        if clip.get("generator_media_mode") == "centroid_frames_only":
             frame_rows = []
-            frame_media_mode = str(clip.get("generator_media_mode") or "")
             for frame in clip.get("frames", []):
                 frame_row = {
                     "packet_image_index": packet_image_index,
@@ -922,14 +920,10 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
                     "original_timestamp_seconds": frame.get("timestamp_seconds"),
                     "retention_reason": frame.get("retention_reason"),
                 }
-                if frame_media_mode == "retained_cluster_frames_only":
-                    frame_row["cluster_member_order"] = frame.get("cluster_member_order")
-                    frame_row["is_cluster_medoid"] = frame.get("is_cluster_medoid")
                 frame_rows.append(frame_row)
                 packet_image_index += 1
             if frame_rows:
                 uses_centroid_frames = True
-                frame_media_modes.add(frame_media_mode)
                 clip_brief["generator_frame_input"] = {
                     "frame_count": len(frame_rows),
                     "ordering": "chronological by original timestamp within this user",
@@ -938,36 +932,19 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
         clips.append({key: value for key, value in clip_brief.items() if value is not None})
     generator_media_contract = None
     if uses_centroid_frames:
-        if frame_media_modes == {"retained_cluster_frames_only"}:
-            generator_media_contract = {
-                "mode": "retained_clip_cluster_member_images_only",
-                "packet_image_order": (
-                    "all required_users[0] retained sampled images first, followed by all "
-                    "required_users[1] retained sampled images; each user's images are in "
-                    "original timestamp order and use packet_image_index above"
-                ),
-                "limitations": (
-                    "These are sampled still images from retained cluster content, not a "
-                    "continuous video. They provide more within-cluster context than medoids "
-                    "alone, but gaps may remain. Do not infer unseen motion, transitions, "
-                    "duration, or events between images. Original timestamps are internal "
-                    "evidence metadata and must not appear in the question or options."
-                ),
-            }
-        else:
-            generator_media_contract = {
-                "mode": "retained_clip_cluster_centroid_images_only",
-                "packet_image_order": (
-                    "all required_users[0] centroid images first, followed by all "
-                    "required_users[1] centroid images; use packet_image_index above"
-                ),
-                "limitations": (
-                    "These are isolated representative still images, not a continuous video. "
-                    "Do not infer unseen motion, transitions, duration, or events between images. "
-                    "Original timestamps are internal evidence metadata and must not appear in the "
-                    "question or options."
-                ),
-            }
+        generator_media_contract = {
+            "mode": "retained_clip_cluster_centroid_images_only",
+            "packet_image_order": (
+                "all required_users[0] centroid images first, followed by all "
+                "required_users[1] centroid images; use packet_image_index above"
+            ),
+            "limitations": (
+                "These are isolated representative still images, not a continuous video. "
+                "Do not infer unseen motion, transitions, duration, or events between images. "
+                "Original timestamps are internal evidence metadata and must not appear in the "
+                "question or options."
+            ),
+        }
     brief = {
         "evidence_id": packet.get("evidence_id"),
         "required_users": required_users,

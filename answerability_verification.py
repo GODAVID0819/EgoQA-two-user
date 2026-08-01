@@ -14,7 +14,7 @@ from .qwen3vl_runner import (
     OPENROUTER_REASONING_EFFORTS,
     make_runner,
 )
-from .video_qa_loop import JUDGE_VIDEO_SOURCES, run_answerability_eval
+from .video_qa_loop import JUDGE_VIDEO_SOURCES, clips_for_users, run_answerability_eval
 
 
 DEFAULT_VERIFIER_MODEL_ID = "google/gemini-3.5-flash"
@@ -68,6 +68,77 @@ def _media_role_for_qa(qa: dict[str, Any], requested_role: str) -> str:
             f"{qa.get('qa_id')}: unsupported source judge_video_source={source_role!r}"
         )
     return source_role
+
+
+def _exact_condition_video_path(clip: dict[str, Any], media_role: str) -> Path | None:
+    """Resolve the requested judge video without silently downgrading full to pruned."""
+
+    keys = (
+        ("full_local_video", "original_local_video", "source_local_video")
+        if media_role == "full"
+        else ("local_video",)
+    )
+    for key in keys:
+        raw_path = str(clip.get(key) or "").strip()
+        if raw_path:
+            path = Path(raw_path)
+            if path.is_file():
+                return path
+    return None
+
+
+def preflight_answerability_media(
+    *,
+    accepted_rows: list[dict[str, Any]],
+    evidence_by_id: dict[str, dict[str, Any]],
+    media_role: str,
+) -> dict[str, Any]:
+    """Validate all condition media before the first potentially billable call."""
+
+    resolved_paths: set[str] = set()
+    role_counts: Counter[str] = Counter()
+    errors: list[str] = []
+    for qa in accepted_rows:
+        qa_id = str(qa.get("qa_id") or "")
+        evidence_id = str(qa.get("evidence_id") or "")
+        packet = evidence_by_id[evidence_id]
+        active_role = _media_role_for_qa(qa, media_role)
+        role_counts[active_role] += 1
+        required_users = list(qa.get("required_users") or [])
+        if len(required_users) < 2:
+            errors.append(f"{qa_id}: expected at least two required_users")
+            continue
+        for user in required_users:
+            clips = clips_for_users(packet, [user])
+            if len(clips) != 1:
+                errors.append(
+                    f"{qa_id}: expected exactly one evidence clip for user={user!r}, "
+                    f"found {len(clips)}"
+                )
+                continue
+            path = _exact_condition_video_path(clips[0], active_role)
+            if path is None:
+                required_keys = (
+                    "full_local_video/original_local_video/source_local_video"
+                    if active_role == "full"
+                    else "local_video"
+                )
+                errors.append(
+                    f"{qa_id}: no existing {active_role} video for user={user!r}; "
+                    f"checked {required_keys}"
+                )
+                continue
+            resolved_paths.add(str(path.resolve()))
+    if errors:
+        preview = "; ".join(errors[:10])
+        suffix = f"; ... {len(errors) - 10} more" if len(errors) > 10 else ""
+        raise ValueError(f"answerability media preflight failed: {preview}{suffix}")
+    return {
+        "passed": True,
+        "qa_count": len(accepted_rows),
+        "unique_video_count": len(resolved_paths),
+        "media_role_counts": dict(sorted(role_counts.items())),
+    }
 
 
 def _verification_record(
@@ -152,6 +223,12 @@ def verify_answerability(
         raise ValueError(
             "accepted QAs are missing evidence packets: " + ", ".join(missing_evidence[:5])
         )
+
+    media_preflight = preflight_answerability_media(
+        accepted_rows=accepted_rows,
+        evidence_by_id=evidence_by_id,
+        media_role=media_role,
+    )
 
     generation_summary: dict[str, Any] = {}
     if generation_summary_path is not None:
@@ -308,6 +385,7 @@ def verify_answerability(
         "verification_fail_count": len(final_rows) - passed_count,
         "verification_pass_rate": passed_count / len(final_rows),
         "complete_accepted_qa_coverage": True,
+        "media_preflight": media_preflight,
         "cpu_only_job": True,
         "output_path": str(output_path),
         "prompts_path": str(prompts_path),

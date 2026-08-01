@@ -777,6 +777,184 @@ downsampling; set
 `OPENROUTER_VIDEO_MAX_EDGE=0` and
 `OPENROUTER_VIDEO_FPS=0` only when original-encoding uploads are required.
 
+## Golden-label external-verifier benchmark
+
+Use `answerability_verification_benchmark.py` to compare stronger external
+verifiers against the manual review CSV. The benchmark uses only accepted QAs
+with a human `review_status` of `Pass` or `Fail`. `Pending`, `Unsure`, blank,
+and `Unset` rows are excluded rather than guessed.
+
+Every model arm receives the same three independent conditions for each QA:
+asker video only, evidence-provider video only, and both videos together. The
+deterministic gate still requires the asker-only call to miss the declared
+answer and the combined call to recover it; provider-only correctness remains
+an allowed diagnostic. There is exactly one external pass and no verifier
+output is returned to the generator or any retry loop.
+
+The checked-in benchmark configuration uses the six runs represented in
+`ablation_manual_review_fa662de7a5885094dd12.csv` and enables these arms:
+
+- `google/gemini-3.5-flash` at `high`, isolating reasoning effort from the old
+  minimal-effort experiment.
+- `google/gemini-3.1-pro-preview` at `high`, testing a larger frontier Gemini
+  model with native video input.
+- `qwen/qwen3-vl-235b-a22b-thinking` at provider-default thinking, testing a
+  large model from a different family.
+
+The old `google/gemini-3.5-flash`/`minimal` arm remains in the JSON config with
+`"enabled": false`; enable it only when a same-cohort baseline rerun is useful.
+
+On the cluster, copy the exported gold CSV to the default path shown below (or
+set `ANSWERABILITY_GOLD_CSV` to its absolute path), export the API key, and
+submit the CPU-only job:
+
+```bash
+cp ablation_manual_review_fa662de7a5885094dd12.csv \
+  egolife_two_user_qa/hpc/ablation_manual_review_fa662de7a5885094dd12.csv
+export OPENROUTER_API_KEY="..."
+sbatch egolife_two_user_qa/hpc/run_answerability_verifier_benchmark_cpu.sbatch
+```
+
+The launcher first runs a non-billable validation pass over the annotation-to-QA
+join, accepted status, evidence coverage, exact full/pruned video files, and
+OpenRouter video/reasoning capabilities. For the 140 labeled QAs, each enabled
+arm makes 420 calls. With the three default stronger arms, the plan reports
+1,260 calls before execution.
+
+Results are written under `outputs/answerability_verifier_benchmark/`:
+
+- `comparison.csv` and `comparison.json`: confusion matrices, accuracy,
+  balanced accuracy, failure recall/precision, false-accept rate, confidence
+  intervals, per-run metrics, per-error-tag metrics, and paired arm counts.
+- `predictions.jsonl`: the gold label, final gate, and all three condition
+  choices for every QA/model arm.
+- `disagreements.jsonl`: only model-versus-human disagreements for inspection.
+- `benchmark_plan.json`: the validated cohort and exact call count before the
+  first model request.
+
+To rescore completed outputs without another API call:
+
+```bash
+python -m egolife_two_user_qa.answerability_verification_benchmark score \
+  --config egolife_two_user_qa/hpc/answerability_verifier_benchmark.json
+```
+
+### Small manually annotated cohorts
+
+The benchmark also supports a single small annotation export without requiring
+the six-run configuration. `hpc/answerability_verifier_small_benchmark.json`
+expects one annotation run named `experiment` and takes the accepted-QA and
+evidence paths from environment variables. For the 19-row
+`ablation_manual_review_7d3817bdcbeb84ada5bd.csv` export (12 Pass, 7 Fail), run:
+
+```bash
+export OPENROUTER_API_KEY="..."
+export ANSWERABILITY_BENCHMARK_CONFIG="${PWD}/egolife_two_user_qa/hpc/answerability_verifier_small_benchmark.json"
+export ANSWERABILITY_GOLD_CSV="/path/to/ablation_manual_review_7d3817bdcbeb84ada5bd.csv"
+export ANSWERABILITY_ACCEPTED_QA="/path/to/the/source/qa_mcq.jsonl"
+export ANSWERABILITY_EVIDENCE_JSONL="/path/to/the/source/evidence_slice.jsonl"
+export ANSWERABILITY_BENCHMARK_OUTPUT_DIR="${PWD}/egolife_two_user_qa/outputs/answerability_verifier_benchmark_19"
+sbatch egolife_two_user_qa/hpc/run_answerability_verifier_benchmark_cpu.sbatch
+```
+
+The validation step matches the 19 annotated `qa_id` and `evidence_id` values
+against that accepted-only `qa_mcq.jsonl`; passing an unrelated QA file fails
+before any API request. The three enabled arms make 171 calls total (19 QAs ×
+3 conditions × 3 arms). Treat this cohort as a screening stage: one item changes
+raw accuracy by about 5.3 percentage points, so use balanced accuracy, the
+reported Wilson intervals, and the row-level disagreements before promoting the
+best arm to the 140-QA benchmark.
+
+### Accepted-only `qa_mcq.jsonl` test set
+
+For a new accepted-only set that does not yet have matching manual labels, use
+the test-set commands instead of assigning unrelated gold rows. The checked-in
+`hpc/answerability_verifier_qa_mcq_testset.json` targets the repository-root
+`qa_mcq.jsonl`. That file currently contains 27 valid, unique, accepted JSONL
+records (despite the informal 29-question count) and also contains one unique
+top-level evidence packet per QA, so it is safely used as both the accepted-QA
+and evidence input.
+
+On the cluster:
+
+```bash
+export OPENROUTER_API_KEY="..."
+sbatch egolife_two_user_qa/hpc/run_answerability_verifier_qa_mcq_testset_cpu.sbatch
+```
+
+The three configured OpenRouter arms make 243 calls total (27 QAs x 3 video
+conditions x 3 arms). `validate-set` checks accepted status, evidence IDs, and
+the exact full-video files before the first paid request. `run-set` writes
+`testset_summary.json`, `testset_summary.csv`, `testset_predictions.jsonl`, and
+`testset_disagreements.jsonl`. These report gate rates and cross-model
+agreement, but deliberately do not rank a model or claim accuracy without
+matching human Pass/Fail labels.
+
+To rebuild the summary after a resumed job without issuing calls:
+
+```bash
+python -m egolife_two_user_qa.answerability_verification_benchmark summarize-set \
+  --config egolife_two_user_qa/hpc/answerability_verifier_qa_mcq_testset.json
+```
+
+Once this exact set has been exported from the manual reviewer, use the normal
+gold-label `validate`, `run`, and `score` commands with that CSV. The existing
+19-row manual export has zero exact `qa_id` matches to this file, and the
+140-row export has only three, so neither is a valid full-set gold file.
+
+### Ten-QA Gemini 3.5 Flash pilot
+
+`hpc/answerability_verifier_pilot10_gemini35_high.json` defines a credit-capped
+pilot from the 27 accepted cluster-frame QAs and their matching
+`ablation_manual_review_cluster_frames.csv` export. The cohort is fixed by QA ID
+and contains exactly five human Pass rows and five human Fail rows. The Pass
+examples have manual answerability score A2; the Fail examples have A1, including
+clean asker-alone leakage cases and mixed grounding/answerability failures. The
+selected QA records are copied intact, while the manual F/E/A values are parsed
+from `reviewer_notes` into structured `manual_judge_scores` fields in
+`gold_labels.jsonl` and the scored predictions.
+
+Gemini 3.5 Flash exposes `high` as its maximum valid thinking level through
+OpenRouter, so the single arm sends `reasoning.effort="high"`. Each QA is called
+exactly three logical times: asker video only, provider video only, and the
+video pair. The plan is therefore 10 QAs, one arm, and 30 logical inference
+calls. Client-side OpenRouter retries default to zero in this launcher to avoid
+silently exceeding the pilot request budget.
+
+On the cluster, copy the matching manual export once and submit:
+
+```bash
+cp /path/to/ablation_manual_review_cluster_frames.csv \
+  egolife_two_user_qa/hpc/ablation_manual_review_cluster_frames.csv
+export OPENROUTER_API_KEY="..."
+sbatch egolife_two_user_qa/hpc/run_answerability_verifier_pilot10_cpu.sbatch
+```
+
+After the normal annotation/media/catalog preflight, the launcher reads
+`benchmark_plan.json` and hard-fails unless it contains 10 QAs, 5 Pass, 5 Fail,
+one Gemini 3.5 Flash/high arm, and 30 expected calls. Resume is enabled for
+completed QAs, but a request failure is not retried automatically.
+
+### Remaining-17 Gemini 3.5 Flash run
+
+After the ten-QA pilot, `hpc/answerability_verifier_remaining17_gemini35_high.json`
+selects the exact complement from the same 27 accepted cluster-frame QAs. The
+cohort contains 17 unique QAs (14 manual Pass and 3 manual Fail), and all 17
+have manual answerability score A2; the three overall Fail labels arise from
+other review dimensions. The model, `high` reasoning effort, full-video media,
+and three conditions per QA are unchanged from the pilot.
+
+The launcher disables client retries and hard-fails unless the validated plan
+contains one arm and exactly 51 logical calls:
+
+```bash
+export OPENROUTER_API_KEY="..."
+sbatch egolife_two_user_qa/hpc/run_answerability_verifier_remaining17_cpu.sbatch
+```
+
+Results are written under
+`outputs/answerability_verifier_remaining17_gemini35_high/`.
+
 ## Archived generation modes
 
 The former `clip_guided`, `discovery`, and `discovery_control` ablations are no
