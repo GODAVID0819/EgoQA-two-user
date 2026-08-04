@@ -7,6 +7,8 @@ import json
 import re
 from typing import Any
 
+from .schema import extract_json_object
+
 
 VIDEO_GENERATION_SCHEMA = {
     "qa_id": "string",
@@ -415,6 +417,13 @@ ANTI_ACTIVITY_QUERY_GUIDANCE = """Concurrent-activity restriction:
 """
 
 
+RESTORED_GENERATOR_COVERAGE_GUIDANCE = """Restored design safeguards:
+- Do not reveal or strongly suggest the correct answer in the question stem. Ask for the missing detail directly (for example, ask "What was next to the counter?" rather than "Was there a blue garbage bin next to the counter?") and place the candidate answer in the options.
+- Prefer casual everyday wording over formal language. Be creative in tone and wording, just like how somebody would naturally ask everyday.
+- Shared clock time or proximity is not a relation by itself. Do not generate a question whose answer is another person's concurrent activity. Never expose time values in the question or options.
+"""
+
+
 POSITIVE_EXAMPLES_GUIDANCE = """
 The following are structural hints, not categories to choose from. They are optional. Do not force generation to copy their wording, people, objects, actions, or setting. They only provide some examples of ideal questions. 
 
@@ -432,8 +441,6 @@ The following are structural hints, not categories to choose from. They are opti
 
 - State verification or change. Ask about an observed state the asker could not verify. Claim a change only when both the earlier and later states are visible; otherwise ask only about the observed state.
   Example structure: "I can't wait to eat whatever is being baked in the oven. Is the oven done with cooking and turned off?"
-
-All user-facing questions and options must avoid clock times, timestamps, timecodes, frame numbers, seconds from the start, and minute-mark citations. Precise times belong only in internal evidence and referred_timestamps fields.
 """
 
 
@@ -897,54 +904,78 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
     evidence_provider_user = required_users[1] if len(required_users) > 1 else None
     clips = []
     packet_image_index = 1
-    uses_centroid_frames = False
+    sampled_media_modes: set[str] = set()
+    sampled_frame_modes = {"centroid_frames_only", "retained_cluster_frames_only"}
+
     for clip in packet.get("clips", []):
         gaze_summary = clip.get("gaze_summary") if isinstance(clip.get("gaze_summary"), dict) else {}
+        generator_media_mode = clip.get("generator_media_mode")
+        pruning_summary = (
+            None
+            if generator_media_mode == "retained_cluster_frames_only"
+            else temporal_pruning_brief(clip.get("temporal_pruning"))
+        )
         clip_brief = {
-            "user": clip.get("agent_name"),
+            "user": clip.get("agent_name") or clip.get("user"),
             "day": clip.get("day"),
             "clip_clock": clip.get("clip_clock"),
             "duration_seconds": clip.get("duration_seconds"),
             "segment_count": clip.get("segment_count"),
             "local_video": clip.get("local_video"),
-            "generator_media_mode": clip.get("generator_media_mode"),
-            "pruning_summary": temporal_pruning_brief(clip.get("temporal_pruning")),
+            "generator_media_mode": generator_media_mode,
+            "pruning_summary": pruning_summary,
             "projection_status": gaze_summary.get("projection_status"),
         }
-        if clip.get("generator_media_mode") == "centroid_frames_only":
+
+        if generator_media_mode in sampled_frame_modes:
             frame_rows = []
             for frame in clip.get("frames", []):
-                frame_row = {
-                    "packet_image_index": packet_image_index,
-                    "cluster_index": frame.get("cluster_index"),
-                    "original_timestamp_seconds": frame.get("timestamp_seconds"),
-                    "retention_reason": frame.get("retention_reason"),
-                }
-                frame_rows.append(frame_row)
+                if not isinstance(frame, dict):
+                    continue
+                frame_rows.append(
+                    {
+                        "packet_image_index": packet_image_index,
+                        "original_timestamp_seconds": frame.get("timestamp_seconds"),
+                    }
+                )
                 packet_image_index += 1
             if frame_rows:
-                uses_centroid_frames = True
+                sampled_media_modes.add(str(generator_media_mode))
                 clip_brief["generator_frame_input"] = {
                     "frame_count": len(frame_rows),
                     "ordering": "chronological by original timestamp within this user",
                     "frames": frame_rows,
                 }
+
         clips.append({key: value for key, value in clip_brief.items() if value is not None})
+
     generator_media_contract = None
-    if uses_centroid_frames:
+    if sampled_media_modes:
+        if sampled_media_modes == {"centroid_frames_only"}:
+            mode = "retained_clip_cluster_centroid_images_only"
+            frame_description = "isolated representative still images"
+        elif sampled_media_modes == {"retained_cluster_frames_only"}:
+            mode = "retained_clip_cluster_member_images_only"
+            frame_description = "sampled still images from retained cluster content"
+        else:
+            mode = "mixed_sampled_frame_modes"
+            frame_description = "sampled still images"
+
         generator_media_contract = {
-            "mode": "retained_clip_cluster_centroid_images_only",
+            "mode": mode,
             "packet_image_order": (
-                "all required_users[0] centroid images first, followed by all "
-                "required_users[1] centroid images; use packet_image_index above"
+                "all required_users[0] sampled images first, followed by all "
+                "required_users[1] sampled images; each user's images are in original "
+                "timestamp order; use packet_image_index above when available"
             ),
             "limitations": (
-                "These are isolated representative still images, not a continuous video. "
-                "Do not infer unseen motion, transitions, duration, or events between images. "
-                "Original timestamps are internal evidence metadata and must not appear in the "
-                "question or options."
+                f"These are {frame_description}, not a continuous video. Adjacent supplied "
+                "images may be separated by omitted footage. Do not infer unseen motion, "
+                "transitions, duration, or events between images. Original timestamps are "
+                "internal evidence metadata and must not appear in the question or options."
             ),
         }
+
     brief = {
         "evidence_id": packet.get("evidence_id"),
         "required_users": required_users,
@@ -1118,27 +1149,40 @@ def _feedback_block(
     if not feedback and not previous_generation:
         return ""
 
-    previous_block = (
-        "\nThis is one failed sample:\n"
-        "<failed_sample>\n"
-        f"{previous_generation}\n"
-        "</failed_sample>\n"
-        if previous_generation
-        else ""
-    )
-    feedback_text = (
-        "\nThe reason it failed is:\n"
-        f"{feedback}\n"
-        if feedback
-        else ""
-    )
-    return (
-        f"{previous_block}"
-        f"{feedback_text}"
+    rejected_item: dict[str, Any] = {}
+    if previous_generation:
+        try:
+            parsed = extract_json_object(previous_generation)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed = {}
+        for field in ("question", "options", "correct", "answer"):
+            value = parsed.get(field)
+            if value not in (None, "", []):
+                rejected_item[field] = value
+
+    blocks = ["\nRetry context:"]
+    if rejected_item:
+        blocks.extend(
+            [
+                "<previous_rejected_item>",
+                json.dumps(rejected_item, ensure_ascii=False, indent=2),
+                "</previous_rejected_item>",
+            ]
+        )
+    if feedback:
+        blocks.extend(
+            [
+                "<exact_judge_feedback>",
+                feedback,
+                "</exact_judge_feedback>",
+            ]
+        )
+    blocks.append(
         "Generate a new question, options, answer, and evidence that avoid this failure. "
         "Use the failed sample only as context; do not assume any of its claims are correct, "
-        "and do not repeat the failed pattern.\n"
+        "and do not repeat the failed pattern."
     )
+    return "\n".join(blocks) + "\n"
 
 
 def _numbered_lines(lines: list[str]) -> str:
@@ -1177,11 +1221,10 @@ def build_video_generation_prompt(
         "Treat required_users[0] as the asker and write a natural first-person or shared-memory question from that user's perspective.",
         "Make the question a speaker-side information need: required_users[0]'s view should explain why the question naturally comes up, but should not already make the answer obvious.",
         "Choose the strongest natural grounded relation supported by the videos. It may be a speaker-side missing detail, comparison, identity link, handoff follow-up, state verification, temporal relation, sequence, interaction, or another coherent relation you discover. Do not force a family or default automatically to an object or isolated-activity question.",
-        "required_users[0]'s view alone must be insufficient. The question should not be answered by the asker on their own; It must require additional evidence from required_user[1].",
+        "required_users[0]'s view alone must be insufficient. The question should not be answered by the asker on their own; it must require additional evidence from required_users[1].",
         "The available evidence must make exactly one answer option correct.",
         "The timestamp is supplied on the top-left corner of each frame to infer exact timing. However, do not include participant names, clock times, timestamps, timecodes, frame numbers, seconds from the start, minute marks, filenames, or clip positions in the question or options. Precise times belong only in internal evidence and referred_timestamps fields.",
         "Fill the evidence field with each needed user's visible fact and a specific original-video timeframe.",
-        "Return every field in the JSON shape exactly. Do not omit single_user_answerability, combined_answerability, generator_rationale, why_two_users_needed, per_user_evidence_claims, referred_timestamps, or review.",
         "The answer field must exactly equal the correct option's text, and the correct option must be one of A, B, C, D, or E.",
     ]
 
@@ -1195,15 +1238,7 @@ def build_video_generation_prompt(
 - When 2D gaze coordinates are available, they indicate an attended image area. You may use nearby visible evidence, but do not invent exact gaze-to-object claims when projection is unclear.
 - single_user_answerability must contain one truthful entry for each required user. Do not manufacture insufficiency to fit an intended relation. For example, do not say an item was occluded or blurry when it was clearly visible in the video.
 - combined_answerability must explicitly say "sufficient because ..." and explain why the available views together support exactly one option.
-"""
-
-    design_block = """Design rules:
-- Treat required_users[0] as the asker. The question should sound like that person trying to remember or verify something from their own experience or querying external information that they do not possess.
-- Ask for a related missing detail supplied by required_users[1]: object identity, location, text, count, state, placement, outcome, follow-up, or another concrete visual fact.
-- Do not stitch together unrelated scenes just because they happen during the same interval.
-- Prefer casual everyday wording over formal language. Be creative in tone and wording, just like how somebody would naturally ask everyday.
-- Shared clock time or proximity is not a relation by itself. Do not generate a question whose answer is another person's concurrent activity. Never expose time values in the question or options.
-- Do not stitch unrelated scenes together, invent person or object continuity, or exaggerate a cross-view dependency.
+- Do not stitch unrelated scenes together, invent person or object continuity, or exaggerate a cross-view dependency merely because videos share a time interval.
 """
 
     return f"""You are generating one natural, evidence-grounded multiple-choice question from raw egocentric videos.
@@ -1219,7 +1254,7 @@ Your task:
 
 {ANTI_ACTIVITY_QUERY_GUIDANCE}
 
-{design_block}
+{RESTORED_GENERATOR_COVERAGE_GUIDANCE}
 
 {POSITIVE_EXAMPLES_GUIDANCE}
 
@@ -1441,7 +1476,7 @@ def build_evidence_groundedness_judge_prompt(
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
-You will see the same raw videos used by the generator. Judge only visual and temporal grounding. Do not fail for names, missing first-person wording, awkward phrasing, timestamp citations, or schema style. Do not decide whether a single-user condition is sufficient.
+You will see the full original videos for this evidence packet, which may be fuller than the sampled visual media shown to the generator. Judge only visual and temporal grounding. Do not fail for names, missing first-person wording, awkward phrasing, timestamp citations, or schema style. Do not decide whether a single-user condition is sufficient.
 
 evidence_groundedness asks whether the material claims and declared answer are supported by the videos and metadata:
 {rationale_rule}
@@ -1451,6 +1486,7 @@ evidence_groundedness asks whether the material claims and declared answer are s
 - For a cross-view activity-pair question, verify that every component activity used across the options actually occurs, because the distractors are supposed to recombine real activities. Verify that only the declared pair overlaps.
 - For a comparison whose options make concrete claims about both operands, verify the declared complete relation and ensure no alternative option is also supported.
 - Treat every object, action, person, state, identity, and continuity description as unverified. The generator may hallucinate or misidentify them.
+- When the generator received sampled still frames, do not accept a claimed transition, continuous action, or intermediate event merely because it seems plausible between adjacent images; verify it directly in the full original videos.
 - Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
 - Treat required_users[0] as the asker and required_users[1] as the evidence provider. For an ordinary information gap, verify the asker-side contextual anchor and provider-side answer-bearing detail.
 - For identity or role linkage, verify enough visible continuity or distinguishing evidence to establish same-person versus different-person rather than inferring identity from roles, timing, or option wording.

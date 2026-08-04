@@ -1137,6 +1137,7 @@ class OpenAICompatibleLocalRunner:
     """Call a local vLLM/SGLang/llama.cpp OpenAI-compatible server."""
 
     supports_choice_logits = True
+    preserve_http_errors = False
 
     def __init__(
         self,
@@ -1258,8 +1259,22 @@ class OpenAICompatibleLocalRunner:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # OpenRouter has its own structured retry/error handling below and
+            # therefore needs the original HTTPError.  Local servers do not:
+            # surface their response body plus a compact request summary so a
+            # packet-specific vLLM validation failure is actually actionable.
+            if self.preserve_http_errors:
+                raise
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"HTTP {exc.code} from {req.full_url}: {detail}; "
+                f"prompt_chars={len(prompt)} images={len(image_paths or [])} "
+                f"videos={len(video_paths or [])} max_tokens={self.max_new_tokens}"
+            ) from exc
         return data
 
     def _extra_request_payload(self) -> dict[str, Any]:
@@ -1274,6 +1289,7 @@ class OpenRouterRunner(OpenAICompatibleLocalRunner):
     # Gemini 2.5 Flash does not advertise logprobs/top_logprobs through OpenRouter.
     # Judges still emit their PASS/FAIL or A-E decision; only entropy diagnostics are absent.
     supports_choice_logits = False
+    preserve_http_errors = True
 
     def __init__(
         self,

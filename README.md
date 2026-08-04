@@ -605,10 +605,8 @@ the sidecar does not extract one-second intervals, run ffmpeg, or build a new
 pruned MP4. Evidence-groundedness and answerability still receive the full
 original synchronized videos.
 
-The current `run_qa_packets_*.sbatch` launchers and
-`run_qa_packet_slice_100.sh` worker are unchanged. The sidecar has separate
-launchers, evidence JSONL, frame assets, QA outputs, and a post-run media-routing
-verification:
+The centroid experiment remains on its separate launchers, evidence JSONL,
+frame assets, QA outputs, and post-run media-routing verification:
 
 Run these commands from the project root
 `/scratch/${USER}/Long-video-understanding-clip`. The sidecar launchers, its
@@ -641,35 +639,81 @@ Each sidecar packet uses `generator_media_mode="centroid_frames_only"`, stores
 the ordered images in `clips[*].frames`, removes generator-video routing, and
 retains `clips[*].full_local_video` for the visual checks.
 
-## Retained-cluster-member-frame generator sidecar
+## Default retained-cluster-member-frame generation
 
-This second additive sidecar gives the generator more context without
-reconstructing an MP4. It reads the same saved CLIP pruning diagnostics as the
-centroid sidecar. For every cluster kept by pruning, it sends all of that
-cluster's CLIP-sampled member frames; for a cluster otherwise pruned but partly
-restored by duration protection, it sends only the explicitly restored
-members. Images are ordered by original timestamp within each user. These are
-the frames sampled for CLIP (normally one per second), not every native video
-frame. Judges and answerability continue to receive the full original videos.
-Both pruning-output schemas are supported: newer packets read `sampled_frames`
-from packet diagnostics, while legacy group-relative packets recover the same
-sampled timeline from the saved frame files beside each cluster medoid.
+The default production launchers give the generator the frames in clusters that
+survived pruning, without reconstructing an MP4. They read the saved CLIP
+pruning diagnostics and, for every retained cluster, send all of that cluster's
+CLIP-sampled member frames. For a cluster otherwise pruned but partly restored
+by duration protection, they send only the explicitly restored members. Images
+are ordered by original timestamp within each user. These are the frames sampled
+for CLIP (normally one per second), not every native video frame. Judges and
+answerability continue to receive the full original videos. Both pruning-output
+schemas are supported: newer packets read `sampled_frames` from packet
+diagnostics, while legacy group-relative packets recover the same sampled
+timeline from the saved frame files beside each cluster medoid.
 
-The original pruned-video launchers and centroid-only launchers are unchanged.
-Run the new launchers from
+Run the default 300-packet production split from
 `/scratch/${USER}/Long-video-understanding-clip`:
 
 ```bash
-sbatch hpc/run_cluster_member_frame_qa_packets_001_100.sbatch
-sbatch hpc/run_cluster_member_frame_qa_packets_101_200.sbatch
-sbatch hpc/run_cluster_member_frame_qa_packets_201_300.sbatch
+sbatch hpc/run_qa_packets_001_100.sbatch
+sbatch hpc/run_qa_packets_101_200.sbatch
+sbatch hpc/run_qa_packets_201_300.sbatch
 ```
+
+These standard launchers now delegate to
+`run_cluster_member_frame_qa_packet_slice_100.sh`. The explicitly named
+`run_cluster_member_frame_qa_packets_*.sbatch` launchers remain equivalent
+aliases. The lower-level `run_qa_packet_slice_100.sh` worker still accepts
+already-prepared evidence directly, so controlled pruned-video ablations remain
+available without changing this production default.
 
 Outputs default to `outputs/qa_300_cluster_member_frame_sidecar/`. Override the
 source with `CLUSTER_MEMBER_SIDECAR_SOURCE_EVIDENCE` or the output root with
-`CLUSTER_MEMBER_SIDECAR_OUTPUT_ROOT`. Each packet uses
+`CLUSTER_MEMBER_SIDECAR_OUTPUT_ROOT`. Each prepared packet uses
 `generator_media_mode="retained_cluster_frames_only"` and routes an ordered
 image list to Qwen with no generator MP4.
+
+## DAY3-7 RLHF annotation run
+
+Two independent 48-hour H100 jobs create 100 new evidence pairs apiece and
+generate questions for future annotation. The jobs use only `DAY3` through
+`DAY7`; `DAY1` and `DAY2` are excluded. Synchronized `(day, time_token)` groups
+are assigned by a stable SHA-256 parity partition, so the two jobs can run
+concurrently without selecting the same source group.
+
+```bash
+sbatch hpc/run_rlhf_annotation_day3_7_pairs_001_100.sbatch
+sbatch hpc/run_rlhf_annotation_day3_7_pairs_101_200.sbatch
+```
+
+Both jobs write beneath the exact directory
+`egolife_two_user_qa/outputs/RLHF annotation run/`:
+
+```text
+source_packets/
+  pairs_001_100/evidence_pruned_pairs.jsonl
+  pairs_101_200/evidence_pruned_pairs.jsonl
+question_generation/
+  pairs_001_100/
+  pairs_101_200/
+```
+
+Each source cohort is verified to contain exactly 100 unique evidence IDs and
+100 unique synchronized groups from `DAY3`-`DAY7`. Question generation uses the
+default retained-cluster-member representation: the generator receives all
+one-FPS sampled members of clusters that survived pruning, while visual judges
+and answerability checks receive the full original videos. Each generation
+directory includes accepted and rejected JSONL, prompt traces, a CSV annotation
+export, a human-review sheet, and routing verification.
+
+The shared worker is
+`hpc/run_rlhf_annotation_day3_7_100_worker.sh`. Override
+`RLHF_ANNOTATION_OUTPUT_ROOT` to relocate the complete run or
+`EGOLIFE2U_CACHE_DIR` to change the video cache. Model and generation overrides
+supported by the established QA worker, such as `QWEN_MODEL_ID`,
+`MAX_ATTEMPTS`, and `RESUME_GENERATION`, are inherited.
 
 ## Fixed 001–100 QA ablations
 
@@ -954,6 +998,59 @@ sbatch egolife_two_user_qa/hpc/run_answerability_verifier_remaining17_cpu.sbatch
 
 Results are written under
 `outputs/answerability_verifier_remaining17_gemini35_high/`.
+
+### Question-only balanced option-rotation follow-up
+
+`question_only_option_rotation_benchmark.py` tests whether Gemini can recover
+the declared answer without seeing either video and whether a preferred answer
+letter explains asker-only successes. The frozen cohort is the 17 QAs marked
+`Pass` in `ablation_manual_review_cluster_frames.updated.csv`.
+
+Each question receives five independent text-only calls. The correct semantic
+answer occupies A, B, C, D, and E exactly once. The implementation uses a
+cyclic Latin-square rotation, so every distractor also occupies every answer
+position exactly once; no rotation gets an independently randomized distractor
+order. Prompts contain only the raw question, the five displayed choices, and
+a JSON response-format instruction. No image path, video path, evidence claim,
+user identity, rationale, or original answer letter is sent to the model.
+
+The single arm is `google/gemini-3.5-flash` at `high` reasoning with greedy
+decoding. The validated hard cap is 17 questions x 5 rotations = 85 billable
+calls, with zero media inputs and zero automatic retries or JSON-repair calls.
+
+```bash
+export OPENROUTER_API_KEY="..."
+sbatch egolife_two_user_qa/hpc/run_question_only_option_rotation_17_cpu.sbatch
+```
+
+The launcher validates the exact 17 manual-Pass IDs, materializes all 85
+prompts before the first API call, and proves that every semantic option appears
+once at each letter. `--resume` skips completed call keys after an infrastructure
+failure without repeating them.
+
+Results are written under
+`outputs/question_only_option_rotation_17_gemini35_high/`:
+
+- `summary.json`: overall accuracy, chosen-letter distribution, accuracy at
+  each correct-answer position, and counts of 5/5 semantic solutions versus
+  fixed-letter behavior.
+- `per_question.csv` and `per_question.jsonl`: five-condition choice pattern,
+  correct count, and classification for every QA.
+- `position_summary.csv`: aggregate results when the correct answer is at each
+  of A through E.
+- `calls.jsonl`: raw model response and canonical/display option mappings for
+  every call.
+- `non_five_of_five.jsonl`: questions that were not answered correctly under
+  all five rotations.
+- `benchmark_plan.json`, `rotation_plan.jsonl`, and `prompts.jsonl`: the exact
+  preflighted cohort and text-only intervention for audit.
+
+To rebuild summaries without another model call:
+
+```bash
+python -m egolife_two_user_qa.question_only_option_rotation_benchmark summarize \
+  --config egolife_two_user_qa/hpc/question_only_option_rotation_17_gemini35_high.json
+```
 
 ## Archived generation modes
 
