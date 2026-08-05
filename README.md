@@ -715,6 +715,104 @@ The shared worker is
 supported by the established QA worker, such as `QWEN_MODEL_ID`,
 `MAX_ATTEMPTS`, and `RESUME_GENERATION`, are inherited.
 
+## Fixed-six reward-model candidate collection
+
+`reward_candidate_collection.py` is a separate data-collection controller for
+future reward-model training. The Slurm launcher builds its evidence from
+scratch: it fetches a raw EgoLife manifest for the requested days, filters it
+to the requested clock window, mines and downloads synchronized two-user
+pairs with the current CLIP-pruning pipeline, and materializes the retained
+cluster-member frames. The resulting internal
+`evidence_build/evidence_cluster_member_frames.jsonl` is then frozen for the
+candidate collector. None of these stages alters the production QA loop.
+
+For each selected packet the controller retains exactly six structurally valid
+generations. A feedback loop has at most three attempts and stops on the first
+production-gate pass. The controller then starts a fresh, independent loop
+until the fixed quota is reached. Both passing and failing valid attempts are
+retained, so progressive revisions remain available as natural preference
+trajectories. Malformed JSON is recorded and replaced, but it consumes neither
+the six-candidate quota nor one of the three valid attempts in its current
+judge loop. Raw generator calls and valid loop attempts have separate counters.
+Only a structurally valid, judged candidate can be the semantic parent of a
+feedback refinement; a replacement before the first valid candidate is an
+independent root. Structural errors from malformed calls are passed forward as
+format-repair feedback without making the malformed text part of the candidate
+lineage.
+
+Generation uses the existing retained CLIP-cluster-member frames. Its prompt
+explicitly describes them as sparse, chronologically ordered samples and
+forbids unsupported inference about actions, transitions, or moments between
+frames. The existing parallel formality, groundedness, and answerability path
+remains unchanged and receives the full original videos. Those same two
+full-video paths are the media references recorded for future reward-model
+examples. Automated PASS or FAIL is metadata rather than a human label.
+Sampling defaults to temperature `0.70`, top-p `0.95`, and top-k `40`, with a
+stable unique seed for every generation identity.
+
+On the cluster, both launchers belong in the project-root `hpc/` directory,
+next to the current `env_qwen3vl.sh`, `cuda_slurm.py`, and `cuda.py`. The worker
+discovers the project root from that location rather than depending on the
+project directory's name. It activates the existing
+`/scratch/$USER/conda/envs/qwen3vl-smoke` environment through the root helper
+and verifies its Python prefix, required Qwen/CLIP imports, one visible CUDA
+GPU, and bfloat16 support before building evidence.
+
+The recommended submission divides one start-inclusive/end-exclusive interval
+into two non-overlapping halves and immediately submits one independent H100
+job for each half. `REWARD_TOTAL_PACKET_COUNT` is the total across both jobs;
+100 becomes 50 packets and 300 questions per half:
+
+```bash
+cd /scratch/$USER/Long-video-understanding-clip
+
+REWARD_WINDOW_LABEL=day1_4_full_day \
+REWARD_DAYS=DAY1,DAY2,DAY3,DAY4 \
+REWARD_START_CLOCK=06:00 \
+REWARD_END_CLOCK=18:00 \
+REWARD_TOTAL_PACKET_COUNT=100 \
+bash hpc/submit_reward_candidate_collection_two_halves.sh
+```
+
+This example submits `[06:00,12:00)` and `[12:00,18:00)` concurrently with
+distinct output labels. Set `REWARD_SUBMIT_DRY_RUN=1` to print and validate the
+two submissions without calling `sbatch`. Use `REWARD_OUTPUT_ROOT` to relocate
+both outputs; the submitter intentionally ignores the single-job
+`REWARD_OUTPUT_DIR` override so the concurrent jobs cannot collide. The
+underlying worker remains
+available for a single custom window through
+`hpc/run_reward_candidate_collection_qwen36_27b.sbatch` and its per-job
+`REWARD_PACKET_COUNT` variable.
+
+The worker defaults to `Qwen/Qwen3.6-27B`, one GPU, and one resident model
+shared by generation and the serialized local judge calls. Different window
+labels create different output directories and can run concurrently. Set
+`REWARD_OUTPUT_DIR` explicitly and `REWARD_RESUME=1` to resume an interrupted
+window with the exact same configuration.
+
+Each window directory retains the raw and filtered manifests, CLIP-pruned pair
+evidence, and generated frame sidecar beneath `evidence_build/`. No external
+reward-evidence path is required. Candidate outputs are divided into groups of
+25 source packets. A 100-packet run therefore creates:
+
+```text
+packet_groups/
+  packets_001_025/  # 25 packets, exactly 150 candidates
+  packets_026_050/  # 25 packets, exactly 150 candidates
+  packets_051_075/  # 25 packets, exactly 150 candidates
+  packets_076_100/  # 25 packets, exactly 150 candidates
+```
+
+Each group contains its own `evidence_manifest.jsonl`, `candidates.jsonl`,
+`candidate_details.jsonl`, `packet_summaries.jsonl`,
+`malformed_outputs.jsonl`, `discarded_packets.jsonl`, `group_summary.json`, and
+`packet_records/*.json` restart checkpoints. The root contains only the small
+`packet_groups.jsonl`, `collection_summary.json`, run manifest, and complete
+evidence manifest. All artifacts are ordinary uncompressed JSON or JSONL. A
+successful 100-packet run is required to contain all 600 candidates; a missing
+six-candidate packet makes final verification fail instead of silently
+producing a short dataset.
+
 ## Fixed 001–100 QA ablations
 
 Two one-factor arms reuse the saved

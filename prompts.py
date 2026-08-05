@@ -21,9 +21,16 @@ VIDEO_GENERATION_SCHEMA = {
     "evidence": [
         {
             "user": "name",
-            "needed_fact": "specific visible fact from this user's own video",
-            "timeframe": "specific start-end time range, or an approximate moment, in this user's video",
-            "frames_used": ["video-level evidence or approximate moment labels"],
+            "needed_fact": (
+                "specific directly visible fact from this user's supplied visual evidence"
+            ),
+            "timeframe": (
+                "specific supported time range or approximate moment in this user's "
+                "supplied visual evidence"
+            ),
+            "frames_used": [
+                "supplied-visual-evidence references or approximate moment labels"
+            ],
         }
     ],
     "referred_timestamps": [
@@ -37,7 +44,10 @@ VIDEO_GENERATION_SCHEMA = {
         "Jake": "insufficient because the asker alone only provides ...",
         "Alice": "sufficient/insufficient because the evidence provider alone ...",
     },
-    "combined_answerability": "sufficient because the required users' videos together support exactly one option",
+    "combined_answerability": (
+        "sufficient because the required users' supplied visual evidence together "
+        "supports exactly one option"
+    ),
     "generator_rationale": (
         "why this is a natural first-person information need and what missing-detail or relational "
         "structure the question expresses"
@@ -47,7 +57,10 @@ VIDEO_GENERATION_SCHEMA = {
         "overstating either view's individual necessity"
     ),
     "per_user_evidence_claims": [
-        {"user": "name", "claim": "claim grounded in that user's own video"}
+        {
+            "user": "name",
+            "claim": "claim grounded in that user's supplied visual evidence",
+        }
     ],
     "review": {
         "generator_self_check": "why the asker alone cannot answer this, why the wording is natural and timestamp-free, and why any activity relation is not semantically shallow",
@@ -363,13 +376,14 @@ STRICT_JSON_OUTPUT_CONTRACT = """Output contract:
 QUESTION_TYPE_GENERATION_INSTRUCTIONS = {
     "commonality": (
         "Create a commonality question only when the shared state, consequence, or follow-up "
-        "becomes clear by combining a speaker-side anchor from one required user's video with "
-        "a related missing detail visible only in another required user's video. Do not ask "
-        "about an object, action, or room state that each single video reveals independently."
+        "becomes clear by combining a speaker-side anchor from one required user's visual "
+        "evidence with a related missing detail visible only in another required user's "
+        "visual evidence. Do not ask about an object, action, or room state that each "
+        "single-user evidence set reveals independently."
     ),
     "difference": (
         "Create a difference question whose answer identifies a meaningful contrast, "
-        "asymmetry, or complementary detail between the required users' egocentric videos."
+        "asymmetry, or complementary detail between the required users' visual evidence."
     ),
 }
 
@@ -410,7 +424,7 @@ ARCHIVED_CONCURRENT_ACTIVITY_GUIDANCE = """Concurrent-activity guidance:
 
 ANTI_ACTIVITY_QUERY_GUIDANCE = """Concurrent-activity restriction:
 - Do not generate a question whose answer is what one person was doing while or when another person was doing something else.
-- This restriction applies even when the anchor event is concrete, the videos are synchronized, or the temporal overlap can be verified.
+- This restriction applies even when the anchor event is concrete, the supplied evidence comes from synchronized recordings, or the temporal overlap can be verified.
 - Do not generate reverse-direction variants that fix the evidence-provider event and ask what the asker was doing.
 - Do not generate options that encode pairs of concurrent activities.
 - Instead, ask for a concrete missing object, identity, state, location, placement, outcome, consequence, explanation, interaction result, or follow-up that reflects a natural speaker-side information need.
@@ -898,6 +912,22 @@ def temporal_pruning_brief(temporal_pruning: dict[str, Any] | None) -> dict[str,
     return brief
 
 
+SAMPLED_FRAME_GENERATOR_MEDIA_MODES = {
+    "centroid_frames_only",
+    "retained_cluster_frames_only",
+}
+
+
+def generator_uses_sampled_frames(packet: dict[str, Any]) -> bool:
+    if packet.get("generator_media_mode") in SAMPLED_FRAME_GENERATOR_MEDIA_MODES:
+        return True
+    return any(
+        isinstance(clip, dict)
+        and clip.get("generator_media_mode") in SAMPLED_FRAME_GENERATOR_MEDIA_MODES
+        for clip in packet.get("clips") or []
+    )
+
+
 def video_packet_brief(packet: dict[str, Any]) -> str:
     required_users = list(packet.get("required_users") or [])
     speaker_user = required_users[0] if required_users else None
@@ -905,7 +935,7 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
     clips = []
     packet_image_index = 1
     sampled_media_modes: set[str] = set()
-    sampled_frame_modes = {"centroid_frames_only", "retained_cluster_frames_only"}
+    sampled_frame_modes = SAMPLED_FRAME_GENERATOR_MEDIA_MODES
 
     for clip in packet.get("clips", []):
         gaze_summary = clip.get("gaze_summary") if isinstance(clip.get("gaze_summary"), dict) else {}
@@ -1089,7 +1119,12 @@ Rules for using these hints:
 """
 
 
-def object_guidance_brief(packet: dict[str, Any], *, max_objects: int = 6) -> dict[str, Any]:
+def object_guidance_brief(
+    packet: dict[str, Any],
+    *,
+    max_objects: int = 6,
+    sampled_frame_input: bool = False,
+) -> dict[str, Any]:
     """Return compact object-detection hints for prompt injection."""
 
     hints = packet.get("object_hints")
@@ -1120,22 +1155,39 @@ def object_guidance_brief(packet: dict[str, Any], *, max_objects: int = 6) -> di
         "candidate_key_objects": rows,
         "warning": (
             "Object hints are VLM detections from sampled frames. They are attention anchors only; "
-            "verify object identity, location, state, and cross-user relation from the raw videos."
+            "verify object identity, location, state, and cross-user relation from "
+            + (
+                "the supplied sampled frames."
+                if sampled_frame_input
+                else "the raw videos."
+            )
         ),
     }
 
 
-def object_guidance_block(packet: dict[str, Any]) -> str:
-    brief = object_guidance_brief(packet)
+def object_guidance_block(
+    packet: dict[str, Any],
+    *,
+    sampled_frame_input: bool = False,
+) -> str:
+    brief = object_guidance_brief(
+        packet,
+        sampled_frame_input=sampled_frame_input,
+    )
     if not brief.get("available"):
         return ""
+    visual_source = (
+        "the supplied sampled frames"
+        if sampled_frame_input
+        else "the raw videos"
+    )
     return f"""Object-detection hints, for attention guidance only:
 {json.dumps(brief, ensure_ascii=False, indent=2)}
 
 Rules for using these hints:
-- Consider these objects as attention cues, but do not prefer an object question over a stronger comparison, state, interaction, temporal, or other relation supported by the raw videos.
+- Consider these objects as attention cues, but do not prefer an object question over a stronger comparison, state, interaction, temporal, or other relation supported by {visual_source}.
 - Treat the detected object name and bounding box as a pointer, not a fact.
-- Verify the object and answer from the raw videos before using it in the question, answer, options, or evidence fields.
+- Verify the object and answer from {visual_source} before using it in the question, answer, options, or evidence fields.
 - Do not mention object detection, bounding boxes, coordinates, detector models, sampled frames, or hint scores in the question or answer options.
 - Ignore these hints if they do not support a natural two-user information need.
 """
@@ -1213,22 +1265,70 @@ def build_video_generation_prompt(
         feedback,
         previous_generation=previous_generation,
     )
-    object_block = object_guidance_block(packet)
+    sampled_frame_input = generator_uses_sampled_frames(packet)
+    object_block = object_guidance_block(
+        packet,
+        sampled_frame_input=sampled_frame_input,
+    )
+    if sampled_frame_input:
+        generator_opening = """You are generating one natural, evidence-grounded multiple-choice question from egocentric visual evidence.
+
+Input: chronologically ordered sampled frames retained from multiple people's egocentric recordings during the same synchronized interval.
+
+These images are sparse samples rather than continuous video. Use only objects, states, actions, and relationships that are directly visible in the supplied frames and supported by the provided packet metadata.
+
+Do not infer an action, transition, handoff, state change, temporal sequence, or event occurring between sampled frames unless both relevant states or moments are visibly supported by the supplied evidence.
+
+Before returning the question, verify that every claim in the question, answer, options, evidence fields, and rationale is grounded in the supplied sampled frames.
+
+Do not use captions, subtitles, transcripts, pre-written observations, or outside knowledge."""
+        relation_source = "the supplied sampled frames"
+        timestamp_instruction = (
+            "Original timestamps may be supplied as internal metadata for ordering and "
+            "evidence bookkeeping. Do not treat timestamp proximity as proof of an unseen "
+            "event or transition. Do not include participant names, clock times, timestamps, "
+            "timecodes, frame numbers, seconds from the start, minute marks, filenames, or "
+            "clip positions in the question or options."
+        )
+        evidence_timeframe_instruction = (
+            "Fill the evidence field with each needed user's directly visible fact and the "
+            "specific supplied-frame moment or supported timeframe."
+        )
+        single_user_visibility = "the supplied sampled frames"
+        interval_wording = "the frame sets come from the same synchronized interval"
+    else:
+        generator_opening = """You are generating one natural, evidence-grounded multiple-choice question from raw egocentric videos.
+
+Input: raw videos from multiple people during the same time interval. They may be near each other or in different places. Look directly at the videos and use only visual evidence, video metadata, and provided 2D gaze coordinates when available. Do not use captions, subtitles, transcripts, pre-written observations, or outside knowledge."""
+        relation_source = "the supplied videos"
+        timestamp_instruction = (
+            "The timestamp is supplied on the top-left corner of each frame to infer exact "
+            "timing. However, do not include participant names, clock times, timestamps, "
+            "timecodes, frame numbers, seconds from the start, minute marks, filenames, or "
+            "clip positions in the question or options. Precise times belong only in internal "
+            "evidence and referred_timestamps fields."
+        )
+        evidence_timeframe_instruction = (
+            "Fill the evidence field with each needed user's visible fact and a specific "
+            "original-video timeframe."
+        )
+        single_user_visibility = "the supplied video"
+        interval_wording = "the videos share a time interval"
 
     task_lines = [
         "Generate exactly one five-option multiple-choice question.",
         *([type_requirement] if type_requirement else []),
         "Treat required_users[0] as the asker and write a natural first-person or shared-memory question from that user's perspective.",
         "Make the question a speaker-side information need: required_users[0]'s view should explain why the question naturally comes up, but should not already make the answer obvious.",
-        "Choose the strongest natural grounded relation supported by the videos. It may be a speaker-side missing detail, comparison, identity link, handoff follow-up, state verification, temporal relation, sequence, interaction, or another coherent relation you discover. Do not force a family or default automatically to an object or isolated-activity question.",
+        f"Choose the strongest natural grounded relation supported by {relation_source}. It may be a speaker-side missing detail, comparison, identity link, handoff follow-up, state verification, temporal relation, sequence, interaction, or another coherent relation you discover. Do not force a family or default automatically to an object or isolated-activity question.",
         "required_users[0]'s view alone must be insufficient. The question should not be answered by the asker on their own; it must require additional evidence from required_users[1].",
         "The available evidence must make exactly one answer option correct.",
-        "The timestamp is supplied on the top-left corner of each frame to infer exact timing. However, do not include participant names, clock times, timestamps, timecodes, frame numbers, seconds from the start, minute marks, filenames, or clip positions in the question or options. Precise times belong only in internal evidence and referred_timestamps fields.",
-        "Fill the evidence field with each needed user's visible fact and a specific original-video timeframe.",
+        timestamp_instruction,
+        evidence_timeframe_instruction,
         "The answer field must exactly equal the correct option's text, and the correct option must be one of A, B, C, D, or E.",
     ]
 
-    guidelines_block = """Guidelines:
+    guidelines_block = f"""Guidelines:
 - Use natural, informal, everyday first-person or shared-memory wording with I, me, my, we, us, or our.
 - Do not ask required_users[1] a second-person question and do not name any participant in the question or options. 
 - Do not refer to locations ambiguously, for example merely saying "the other room". Always specify with more detail; Perhaps identify the room as the living room or bedroom, or find some details that distinguishes the room and refer to that, something like "the room with a blue painting on the wall".
@@ -1236,16 +1336,14 @@ def build_video_generation_prompt(
 - Make all five options multi-word, plausible, mutually exclusive, and parallel in grammar, length, and specificity. Keep distractor options grounded in the same scene type. Do not make the correct option obvious by specificity, grammar, or option length.
 - Lead with the information request, then place first-person context when it helps identify the event or object. Prefer a direct interrogative opening such as what, which, where, who, how, did, was, or were. You can also start with "I was ...", "We were ...", "When I ...", "While I ...", "After I ...", "Once I ...", etc, then proceed to asking the question.
 - When 2D gaze coordinates are available, they indicate an attended image area. You may use nearby visible evidence, but do not invent exact gaze-to-object claims when projection is unclear.
-- single_user_answerability must contain one truthful entry for each required user. Do not manufacture insufficiency to fit an intended relation. For example, do not say an item was occluded or blurry when it was clearly visible in the video.
+- single_user_answerability must contain one truthful entry for each required user. Do not manufacture insufficiency to fit an intended relation. For example, do not say an item was occluded or blurry when it was clearly visible in {single_user_visibility}.
 - combined_answerability must explicitly say "sufficient because ..." and explain why the available views together support exactly one option.
-- Do not stitch unrelated scenes together, invent person or object continuity, or exaggerate a cross-view dependency merely because videos share a time interval.
+- Do not stitch unrelated scenes together, invent person or object continuity, or exaggerate a cross-view dependency merely because {interval_wording}.
 """
 
-    return f"""You are generating one natural, evidence-grounded multiple-choice question from raw egocentric videos.
+    return f"""{generator_opening}
 
 {STRICT_JSON_OUTPUT_CONTRACT}
-
-Input: raw videos from multiple people during the same time interval. They may be near each other or in different places. Look directly at the videos and use only visual evidence, video metadata, and provided 2D gaze coordinates when available. Do not use captions, subtitles, transcripts, or pre-written observations.
 
 Your task:
 {_numbered_lines(task_lines)}
