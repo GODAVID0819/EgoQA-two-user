@@ -15,6 +15,7 @@ from .checkpoint import (
     load_classification_heads,
     load_lora_adapter,
     save_checkpoint,
+    validate_checkpoint_runtime_contract,
 )
 from .config import ReviewerV1Config
 from .data import EvidenceRecord, load_annotation_csv, sha256_file, validate_split_manifest
@@ -292,8 +293,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if manifest is None or not args.checkpoint:
             raise ValueError("evaluate requires --split-manifest and --checkpoint")
         contract = load_checkpoint_contract(args.checkpoint)
-        if contract.get("stage") != config.stage:
-            raise ValueError("checkpoint stage mismatch")
+        validate_checkpoint_runtime_contract(
+            contract,
+            stage=config.stage,
+            active_heads=config.active_heads,
+            lora_enabled=config.lora_enabled,
+            model_name_or_path=config.model_name_or_path,
+            reviewer_config=config.to_dict(),
+            actual_lora_targets=targets,
+        )
         if contract["csv_sha256"] != audit.csv_sha256:
             raise ValueError("checkpoint CSV hash mismatch")
         if contract.get("split_sha256") != sha256_file(args.split_manifest):

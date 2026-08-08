@@ -5,12 +5,84 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from training.grpo_v3.experiments.human_preference_reviewer.v1.checkpoint import checkpoint_head_names
+from training.grpo_v3.experiments.human_preference_reviewer.v1.checkpoint import (
+    checkpoint_head_names,
+    validate_checkpoint_runtime_contract,
+)
 
 
 class CheckpointContractTests(unittest.TestCase):
     def test_stage0_checkpoint_contains_only_evidence_head(self) -> None:
         self.assertEqual(checkpoint_head_names(("evidence_quality",)), ("evidence_head",))
+
+    def test_runtime_rejects_checkpoint_stage_head_lora_or_model_drift(self) -> None:
+        contract = {
+            "stage": "stage0",
+            "active_heads": ["evidence_quality"],
+            "lora_enabled": False,
+            "model_name_or_path": "Qwen/Qwen3-VL-8B-Instruct",
+        }
+        validate_checkpoint_runtime_contract(
+            contract,
+            stage="stage0",
+            active_heads=("evidence_quality",),
+            lora_enabled=False,
+            model_name_or_path="Qwen/Qwen3-VL-8B-Instruct",
+        )
+        for key, bad_value in (
+            ("stage", "stage2"),
+            ("active_heads", ["evidence_quality", "answerability", "qa_formality"]),
+            ("lora_enabled", True),
+            ("model_name_or_path", "wrong-model"),
+        ):
+            altered = dict(contract)
+            altered[key] = bad_value
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "runtime contract mismatch"):
+                validate_checkpoint_runtime_contract(
+                    altered,
+                    stage="stage0",
+                    active_heads=("evidence_quality",),
+                    lora_enabled=False,
+                    model_name_or_path="Qwen/Qwen3-VL-8B-Instruct",
+                )
+
+    def test_runtime_rejects_lora_hyperparameter_and_target_drift(self) -> None:
+        expected_config = {
+            "last_n_shared_blocks": 2,
+            "lora_target_modules": ["q_proj", "v_proj"],
+            "lora_r": 8,
+            "lora_alpha": 16,
+            "lora_dropout": 0.05,
+            "lora_bias": "none",
+        }
+        contract = {
+            "stage": "stage2",
+            "active_heads": ["evidence_quality", "answerability", "qa_formality"],
+            "lora_enabled": True,
+            "model_name_or_path": "Qwen/Qwen3-VL-8B-Instruct",
+            **expected_config,
+            "actual_lora_targets": ["layer34.q_proj", "layer35.q_proj"],
+        }
+        validate_checkpoint_runtime_contract(
+            contract,
+            stage="stage2",
+            active_heads=("evidence_quality", "answerability", "qa_formality"),
+            lora_enabled=True,
+            model_name_or_path="Qwen/Qwen3-VL-8B-Instruct",
+            reviewer_config=expected_config,
+            actual_lora_targets=("layer34.q_proj", "layer35.q_proj"),
+        )
+        altered = dict(contract, lora_r=4)
+        with self.assertRaisesRegex(ValueError, "runtime contract mismatch"):
+            validate_checkpoint_runtime_contract(
+                altered,
+                stage="stage2",
+                active_heads=("evidence_quality", "answerability", "qa_formality"),
+                lora_enabled=True,
+                model_name_or_path="Qwen/Qwen3-VL-8B-Instruct",
+                reviewer_config=expected_config,
+                actual_lora_targets=("layer34.q_proj", "layer35.q_proj"),
+            )
 
 
 @unittest.skipUnless(importlib.util.find_spec("torch"), "PyTorch is verified in the Torch training environment")

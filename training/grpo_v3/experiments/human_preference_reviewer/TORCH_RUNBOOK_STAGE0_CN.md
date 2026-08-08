@@ -24,23 +24,12 @@ export CSV_PATH=${DATA_DIR}/rlhf_candidate_scores_day5_7_full_100_HM.csv
 export MEDIA_MAP=${DATA_DIR}/media_map.json
 export MODEL_DIR=/scratch/xl6775/models/Qwen3-VL-8B-Instruct
 export OUTPUT_ROOT=${PROJECT_ROOT}/outputs/human_preference_reviewer
+export TRAIN_ENV=/scratch/xl6775/envs/egoqa-ms-swift-v4.2.2-vllm024
+export PYTHON=${TRAIN_ENV}/bin/python
 mkdir -p logs "${DATA_DIR}" "${OUTPUT_ROOT}"
 ```
 
-如需从 Windows 上传，仅上传 Reviewer 白名单文件和 CSV，不上传视频、模型、输出或 checkpoint：
-
-```text
-sftp xl6775@greene.hpc.nyu.edu
-lcd C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user-reviewer-v1
-cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean
-put -r training/grpo_v3/experiments/human_preference_reviewer
-put -r hpc/grpo_v3/human_preference_reviewer
-put -r tests/training/grpo_v3/experiments/human_preference_reviewer
-put hpc/shared/env_qwen3vl.sh hpc/shared/env_qwen3vl.sh
-put training/torch_storage_preflight.py training/torch_storage_preflight.py
-```
-
-如果集群项目目录是 Git checkout，优先直接拉取完整白名单分支，避免遗漏依赖：
+代码只通过 Git 分支同步，避免递归 SFTP 把目录上传到错误层级：
 
 ```bash
 git status --short
@@ -51,17 +40,26 @@ git pull --ff-only origin feature/multimodal-reviewer-training
 
 `git status --short` 非空时先停止，不覆盖合作者的本地修改。
 
+CSV 使用单文件 SFTP 上传到明确远端目录：
+
+```text
+sftp xl6775@greene.hpc.nyu.edu
+lcd C:/Users/20661/Documents/xwechat_files/wxid_i096w25uhusk22_e748/msg/file/2026-08
+cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/data_RLHF/reviewer_v1
+put "rlhf_candidate_scores_day5_7_full_100_HM (1)(1).csv" rlhf_candidate_scores_day5_7_full_100_HM.csv
+```
+
 ## 3. 零 GPU Gate
 
 ```bash
-python -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit annotation-csv \
+"${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit annotation-csv \
   --csv "${CSV_PATH}" --output "${DATA_DIR}/annotation_audit_stage0.json" \
   --split-output "${DATA_DIR}/split_2_1_1.json" \
   --train-evidence-count 2 --validation-evidence-count 1 --locked-test-evidence-count 1
-python -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit media-map \
+"${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit media-map \
   --csv "${CSV_PATH}" --dataset-root /scratch/xl6775/datasets/EgoLife \
   --output "${MEDIA_MAP}"
-python -m unittest discover \
+"${PYTHON}" -m unittest discover \
   -s tests/training/grpo_v3/experiments/human_preference_reviewer/v1 -p 'test_*.py' -v
 bash -n hpc/grpo_v3/human_preference_reviewer/stage0/common.sh
 bash -n hpc/grpo_v3/human_preference_reviewer/stage0/structure_probe.sbatch
@@ -90,7 +88,7 @@ JOB_RAW=$(sbatch --parsable hpc/grpo_v3/human_preference_reviewer/stage0/smoke1.
 JOB_ID=${JOB_RAW%%;*}
 sacct -j "${JOB_ID}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
 SMOKE_DIR=${OUTPUT_ROOT}/stage0_smoke_${JOB_ID}
-python -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["status"]=="passed"; assert r["stage"]=="stage0"; assert r["active_heads"]==["evidence_quality"]; assert r["head_parameter_delta_nonzero"]; assert not r["lora_parameter_delta_nonzero"]; print(r["parameter_audit"])' "${SMOKE_DIR}/training_result.json"
+"${PYTHON}" -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["status"]=="passed"; assert r["stage"]=="stage0"; assert r["active_heads"]==["evidence_quality"]; assert r["head_parameter_delta_nonzero"]; assert not r["lora_parameter_delta_nonzero"]; print(r["parameter_audit"])' "${SMOKE_DIR}/training_result.json"
 test -s "${SMOKE_DIR}/checkpoint/classification_heads.pt"
 test ! -e "${SMOKE_DIR}/checkpoint/lora_adapter.pt"
 test -s "${SMOKE_DIR}/storage_preflight.json"
@@ -103,7 +101,7 @@ JOB_RAW=$(sbatch --parsable hpc/grpo_v3/human_preference_reviewer/stage0/overfit
 JOB_ID=${JOB_RAW%%;*}
 sacct -j "${JOB_ID}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
 OVERFIT_DIR=${OUTPUT_ROOT}/stage0_overfit_${JOB_ID}
-python -c 'import json,sys; r=json.load(open(sys.argv[1])); d=r["repeated_candidate_loss"]; n=sum(x["improved"] for x in d.values()); print({"repeated":len(d),"improved":n,"throughput":r["throughput"]}); assert len(d)>=6 and n/len(d)>=0.75' "${OVERFIT_DIR}/training_result.json"
+"${PYTHON}" -c 'import json,sys; r=json.load(open(sys.argv[1])); d=r["repeated_candidate_loss"]; n=sum(x["improved"] for x in d.values()); print({"repeated":len(d),"improved":n,"throughput":r["throughput"]}); assert len(d)>=6 and n/len(d)>=0.75' "${OVERFIT_DIR}/training_result.json"
 ```
 
 只有 Structure、Smoke、Overfit 三个 Gate 全部通过，才进入 Stage 1。不要在 Stage 0 结果上运行正式 locked test。

@@ -16,12 +16,13 @@ class ReviewerV1RunbookTests(unittest.TestCase):
         for required in (
             "Evidence Quality", "--stage stage0", "Structure", "Smoke", "Overfit",
             "sacct", "storage_preflight.json", "training_result.json", "本阶段不能证明",
-            "hpc/shared/env_qwen3vl.sh", "training/torch_storage_preflight.py",
-            "tests/training/grpo_v3/experiments/human_preference_reviewer",
+            "feature/multimodal-reviewer-training",
+            '"${PYTHON}" -m unittest discover',
         ):
             self.assertIn(required, text)
         for forbidden in ("evaluate.sbatch", "train.sbatch", "--stage stage2", "Bradley"):
             self.assertNotIn(forbidden, text)
+        self.assertNotIn("put -r", text)
 
     def test_collaborator_readme_explains_complete_framework_and_stages(self) -> None:
         text = README.read_text(encoding="utf-8")

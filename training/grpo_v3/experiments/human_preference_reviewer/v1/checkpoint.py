@@ -22,6 +22,39 @@ def checkpoint_head_names(active_heads: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(HEAD_BY_FIELD[name] for name in active_heads)
 
 
+def validate_checkpoint_runtime_contract(
+    contract: Mapping[str, Any],
+    *,
+    stage: str,
+    active_heads: tuple[str, ...],
+    lora_enabled: bool,
+    model_name_or_path: str,
+    reviewer_config: Mapping[str, Any] | None = None,
+    actual_lora_targets: tuple[str, ...] | None = None,
+) -> None:
+    expected = {
+        "stage": stage,
+        "active_heads": list(active_heads),
+        "lora_enabled": lora_enabled,
+        "model_name_or_path": model_name_or_path,
+    }
+    if reviewer_config is not None:
+        for key in (
+            "last_n_shared_blocks", "lora_target_modules", "lora_r", "lora_alpha",
+            "lora_dropout", "lora_bias",
+        ):
+            expected[key] = reviewer_config.get(key)
+    if actual_lora_targets is not None:
+        expected["actual_lora_targets"] = list(actual_lora_targets)
+    mismatches = {
+        key: {"checkpoint": contract.get(key), "runtime": value}
+        for key, value in expected.items()
+        if contract.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(f"checkpoint runtime contract mismatch: {mismatches}")
+
+
 def _json(path: Path, value: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(dict(value), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
