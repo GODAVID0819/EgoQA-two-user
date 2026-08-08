@@ -32,6 +32,22 @@ class ReviewerV1ConfigTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 ReviewerV1Config(**kwargs)
 
+    def test_stage0_enables_only_evidence_head_and_disables_lora(self) -> None:
+        config = ReviewerV1Config(stage="stage0")
+
+        self.assertEqual(config.active_heads, ("evidence_quality",))
+        self.assertFalse(config.lora_enabled)
+
+    def test_stage2_remains_the_complete_default(self) -> None:
+        config = ReviewerV1Config()
+
+        self.assertEqual(config.stage, "stage2")
+        self.assertEqual(
+            config.active_heads,
+            ("evidence_quality", "answerability", "qa_formality"),
+        )
+        self.assertTrue(config.lora_enabled)
+
 
 if __name__ == "__main__":
     unittest.main()

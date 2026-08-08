@@ -6,6 +6,20 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 OUTPUT_FIELDS = ("evidence_logits", "answerability_logits", "formality_logits")
+HEAD_MODULES = {
+    "evidence_quality": "evidence_head",
+    "answerability": "answerability_head",
+    "qa_formality": "formality_head",
+}
+
+
+def head_module_names(active_heads: Sequence[str]) -> tuple[str, ...]:
+    unsupported = [name for name in active_heads if name not in HEAD_MODULES]
+    if unsupported:
+        raise ValueError(f"unsupported active head: {unsupported}")
+    if not active_heads:
+        raise ValueError("at least one active head is required")
+    return tuple(HEAD_MODULES[name] for name in active_heads)
 
 
 def last_nonpadding_indices_reference(attention_mask: Sequence[Sequence[int]]) -> list[int]:
@@ -20,9 +34,9 @@ def last_nonpadding_indices_reference(attention_mask: Sequence[Sequence[int]]) -
 
 @dataclass
 class ReviewerOutput:
-    evidence_logits: Any
-    answerability_logits: Any
-    formality_logits: Any
+    evidence_logits: Any | None = None
+    answerability_logits: Any | None = None
+    formality_logits: Any | None = None
     pooled_hidden: Any | None = None
 
 
@@ -38,15 +52,20 @@ if nn is not None:
     class ReviewerV1(nn.Module):
         """Wrap a Qwen3-VL backbone with three independent classification heads."""
 
-        def __init__(self, backbone: nn.Module, hidden_size: int) -> None:
+        def __init__(
+            self,
+            backbone: nn.Module,
+            hidden_size: int,
+            active_heads: Sequence[str] = ("evidence_quality", "answerability", "qa_formality"),
+        ) -> None:
             super().__init__()
             if hidden_size <= 0:
                 raise ValueError("hidden_size must be positive")
             self.backbone = backbone
             self.hidden_size = int(hidden_size)
-            self.evidence_head = nn.Linear(hidden_size, 3)
-            self.answerability_head = nn.Linear(hidden_size, 3)
-            self.formality_head = nn.Linear(hidden_size, 3)
+            self.active_heads = tuple(active_heads)
+            for module_name in head_module_names(self.active_heads):
+                setattr(self, module_name, nn.Linear(hidden_size, 3))
 
         def _last_hidden(self, inputs: dict[str, Any]) -> Any:
             base_model = getattr(self.backbone, "model", None)
@@ -61,6 +80,9 @@ if nn is not None:
                 output_hidden_states=True,
                 return_dict=True,
             )
+            hidden = getattr(outputs, "last_hidden_state", None)
+            if hidden is not None:
+                return hidden
             hidden_states = getattr(outputs, "hidden_states", None)
             if not hidden_states:
                 raise RuntimeError("backbone output does not expose a final hidden state")
@@ -78,10 +100,15 @@ if nn is not None:
             last_indices = positions.masked_fill(attention_mask == 0, -1).max(dim=-1).values
             batch_indices = torch.arange(hidden.shape[0], device=hidden.device)
             pooled = hidden[batch_indices, last_indices.to(hidden.device)]
+            # Keep numerically stable FP32 heads while preserving gradients into BF16 LoRA.
+            first_head = getattr(self, head_module_names(self.active_heads)[0])
+            head_input = pooled.to(dtype=first_head.weight.dtype)
             return ReviewerOutput(
-                evidence_logits=self.evidence_head(pooled),
-                answerability_logits=self.answerability_head(pooled),
-                formality_logits=self.formality_head(pooled),
+                evidence_logits=(self.evidence_head(head_input) if hasattr(self, "evidence_head") else None),
+                answerability_logits=(
+                    self.answerability_head(head_input) if hasattr(self, "answerability_head") else None
+                ),
+                formality_logits=(self.formality_head(head_input) if hasattr(self, "formality_head") else None),
                 pooled_hidden=pooled,
             )
 else:
