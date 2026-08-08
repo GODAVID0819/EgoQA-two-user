@@ -1,19 +1,30 @@
 from __future__ import annotations
 
+import csv
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from training.grpo_v3.experiments.human_preference_reviewer.v1.train import (
+    _parser,
     load_media_map,
     select_evidence,
 )
-from tests.training.grpo_v3.experiments.human_preference_reviewer.v1.test_data import rows_for, AnnotationDataTests
+from tests.training.grpo_v3.experiments.human_preference_reviewer.v1.test_data import FIELDS, rows_for
 from training.grpo_v3.experiments.human_preference_reviewer.v1.data import load_annotation_csv
 
 
-class TrainContractTests(AnnotationDataTests):
+class TrainContractTests(unittest.TestCase):
+    def _write(self, rows: list[dict[str, str]]) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "annotations.csv"
+        with path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
+        return path
     def test_select_evidence_uses_manifest_ids_only(self) -> None:
         records = tuple(
             load_annotation_csv(self._write(rows_for(f"e{index}"))).eligible_evidence[0]
@@ -40,6 +51,18 @@ class TrainContractTests(AnnotationDataTests):
         mapping.write_text(json.dumps({"https://example.test/a.mp4": str(directory / "missing.mp4")}), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "missing or empty"):
             load_media_map(mapping)
+
+    def test_cli_accepts_explicit_stage0_mode(self) -> None:
+        args = _parser().parse_args([
+            "smoke",
+            "--csv", "annotations.csv",
+            "--media-map", "media.json",
+            "--model", "Qwen3-VL-8B-Instruct",
+            "--output-dir", "out",
+            "--stage", "stage0",
+        ])
+
+        self.assertEqual(args.stage, "stage0")
 
 
 if __name__ == "__main__":
