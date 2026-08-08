@@ -8,6 +8,18 @@ from typing import Any, Mapping
 
 
 HEAD_NAMES = ("evidence_head", "answerability_head", "formality_head")
+HEAD_BY_FIELD = {
+    "evidence_quality": "evidence_head",
+    "answerability": "answerability_head",
+    "qa_formality": "formality_head",
+}
+
+
+def checkpoint_head_names(active_heads: tuple[str, ...]) -> tuple[str, ...]:
+    unsupported = [name for name in active_heads if name not in HEAD_BY_FIELD]
+    if unsupported:
+        raise ValueError(f"unsupported active head: {unsupported}")
+    return tuple(HEAD_BY_FIELD[name] for name in active_heads)
 
 
 def _json(path: Path, value: Mapping[str, Any]) -> None:
@@ -26,27 +38,33 @@ def save_checkpoint(
     scheduler: object | None = None,
     trainer_state: Mapping[str, Any] | None = None,
     processor: object | None = None,
+    active_heads: tuple[str, ...] = ("evidence_quality", "answerability", "qa_formality"),
+    lora_enabled: bool = True,
 ) -> None:
     import torch
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    heads = {name: getattr(reviewer, name).state_dict() for name in HEAD_NAMES}
+    head_names = checkpoint_head_names(active_heads)
+    heads = {name: getattr(reviewer, name).state_dict() for name in head_names}
     torch.save(heads, output / "classification_heads.pt")
     adapter = {
         name: parameter.detach().cpu()
         for name, parameter in reviewer.state_dict().items()  # type: ignore[attr-defined]
         if ".lora_A." in name or ".lora_B." in name
     }
-    if not adapter:
+    if lora_enabled and not adapter:
         raise ValueError("checkpoint has no LoRA adapter parameters")
-    torch.save(adapter, output / "lora_adapter.pt")
+    if lora_enabled:
+        torch.save(adapter, output / "lora_adapter.pt")
     contract = {
         **dict(config),
         "csv_sha256": csv_sha256,
         "split_sha256": split_sha256,
         "label_mapping": {"1": 0, "2": 1, "3": 2},
-        "head_names": list(HEAD_NAMES),
+        "active_heads": list(active_heads),
+        "lora_enabled": lora_enabled,
+        "head_names": list(head_names),
         "lora_parameter_names": sorted(adapter),
     }
     _json(output / "reviewer_v1_config.json", contract)
@@ -64,9 +82,11 @@ def load_classification_heads(reviewer: object, checkpoint_dir: str | Path) -> N
     import torch
 
     state = torch.load(Path(checkpoint_dir) / "classification_heads.pt", map_location="cpu", weights_only=True)
-    if set(state) != set(HEAD_NAMES):
+    contract = load_checkpoint_contract(checkpoint_dir)
+    head_names = checkpoint_head_names(tuple(contract.get("active_heads") or ()))
+    if set(state) != set(head_names):
         raise ValueError("checkpoint classification-head contract mismatch")
-    for name in HEAD_NAMES:
+    for name in head_names:
         getattr(reviewer, name).load_state_dict(state[name], strict=True)
 
 
@@ -75,9 +95,17 @@ def load_lora_adapter(reviewer: object, checkpoint_dir: str | Path) -> None:
 
     state = torch.load(Path(checkpoint_dir) / "lora_adapter.pt", map_location="cpu", weights_only=True)
     current = reviewer.state_dict()  # type: ignore[attr-defined]
-    missing = sorted(set(state) - set(current))
-    if missing:
-        raise ValueError(f"checkpoint LoRA names are absent from model: {missing}")
+    current_lora = {
+        name for name in current if ".lora_A." in name or ".lora_B." in name
+    }
+    contract_lora = set(load_checkpoint_contract(checkpoint_dir).get("lora_parameter_names") or [])
+    if set(state) != current_lora or set(state) != contract_lora:
+        raise ValueError(
+            "checkpoint LoRA parameter set mismatch; "
+            f"missing_from_file={sorted(current_lora - set(state))}, "
+            f"unexpected_in_file={sorted(set(state) - current_lora)}, "
+            f"contract_difference={sorted(set(state) ^ contract_lora)}"
+        )
     current.update(state)
     reviewer.load_state_dict(current, strict=True)  # type: ignore[attr-defined]
 

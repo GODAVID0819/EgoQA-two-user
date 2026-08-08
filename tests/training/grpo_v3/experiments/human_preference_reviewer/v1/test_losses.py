@@ -5,6 +5,7 @@ import math
 import unittest
 
 from training.grpo_v3.experiments.human_preference_reviewer.v1.losses import (
+    active_loss_names,
     grade_to_target,
     mean_three_losses_reference,
 )
@@ -22,9 +23,31 @@ class AbsoluteLossContractTests(unittest.TestCase):
         self.assertTrue(math.isfinite(value))
         self.assertAlmostEqual(value, 0.7)
 
+    def test_stage0_routes_only_evidence_loss(self) -> None:
+        self.assertEqual(
+            active_loss_names(("evidence_quality",)),
+            ("evidence_loss",),
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported active head"):
+            active_loss_names(("overall_utility",))
+
 
 @unittest.skipUnless(importlib.util.find_spec("torch"), "PyTorch is verified in the Torch training environment")
 class TorchAbsoluteLossTests(unittest.TestCase):
+    def test_stage0_cross_entropy_is_the_total_loss(self) -> None:
+        import torch
+        from training.grpo_v3.experiments.human_preference_reviewer.v1.losses import reviewer_losses
+        from training.grpo_v3.experiments.human_preference_reviewer.v1.modeling import ReviewerOutput
+
+        logits = torch.tensor([[1.0, 0.0, -1.0]], requires_grad=True)
+        losses = reviewer_losses(
+            ReviewerOutput(evidence_logits=logits),
+            {"evidence_quality": torch.tensor([1])},
+            active_heads=("evidence_quality",),
+        )
+        self.assertEqual(set(losses), {"loss", "evidence_loss"})
+        self.assertIs(losses["loss"], losses["evidence_loss"])
+
     def test_three_cross_entropies_are_finite(self) -> None:
         import torch
         from training.grpo_v3.experiments.human_preference_reviewer.v1.losses import reviewer_losses

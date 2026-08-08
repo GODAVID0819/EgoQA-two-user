@@ -6,6 +6,7 @@ import re
 from typing import Any, Iterable, Sequence
 
 from .config import ReviewerV1Config
+from .modeling import head_module_names
 
 
 def locate_shared_language_layers(model: object) -> tuple[str, Sequence[object]]:
@@ -29,8 +30,13 @@ def expected_lora_targets(
     *,
     last_n: int,
     projections: Sequence[str],
+    expected_layer_count: int | None = None,
 ) -> tuple[str, ...]:
     path, layers = locate_shared_language_layers(model)
+    if expected_layer_count is not None and len(layers) != expected_layer_count:
+        raise ValueError(
+            f"Reviewer v1 expected {expected_layer_count} shared language blocks; found {len(layers)}"
+        )
     if last_n <= 0 or len(layers) < last_n:
         raise ValueError("invalid number of final shared blocks")
     targets: list[str] = []
@@ -59,6 +65,7 @@ def inject_reviewer_lora(model: object, config: ReviewerV1Config) -> tuple[objec
         model,
         last_n=config.last_n_shared_blocks,
         projections=config.lora_target_modules,
+        expected_layer_count=config.expected_shared_block_count,
     )
     indices = target_layer_indices(model, last_n=config.last_n_shared_blocks)
     for parameter in model.parameters():  # type: ignore[attr-defined]
@@ -90,10 +97,14 @@ def inject_reviewer_lora(model: object, config: ReviewerV1Config) -> tuple[objec
 
 
 def audit_trainable_parameter_names(
-    names: Iterable[str], *, expected_layer_indices: Sequence[int]
+    names: Iterable[str],
+    *,
+    expected_layer_indices: Sequence[int],
+    active_heads: Sequence[str] = ("evidence_quality", "answerability", "qa_formality"),
+    lora_enabled: bool = True,
 ) -> dict[str, object]:
     names = tuple(str(name) for name in names)
-    allowed_head_prefixes = ("evidence_head.", "answerability_head.", "formality_head.")
+    allowed_head_prefixes = tuple(f"{name}." for name in head_module_names(active_heads))
     layer_tokens = tuple(f".layers.{index}." for index in expected_layer_indices)
     unexpected = []
     lora_names = []
@@ -103,7 +114,7 @@ def audit_trainable_parameter_names(
             head_names.append(name)
             continue
         is_lora = ".lora_A." in name or ".lora_B." in name
-        if is_lora and any(token in name for token in layer_tokens) and re.search(r"\.(q_proj|v_proj)\.", name):
+        if lora_enabled and is_lora and any(token in name for token in layer_tokens) and re.search(r"\.(q_proj|v_proj)\.", name):
             lora_names.append(name)
             continue
         unexpected.append(name)
@@ -117,11 +128,18 @@ def audit_trainable_parameter_names(
     }
 
 
-def parameter_audit(reviewer: object, *, expected_layer_indices: Sequence[int]) -> dict[str, object]:
+def parameter_audit(
+    reviewer: object,
+    *,
+    expected_layer_indices: Sequence[int],
+    active_heads: Sequence[str] = ("evidence_quality", "answerability", "qa_formality"),
+    lora_enabled: bool = True,
+) -> dict[str, object]:
     total = 0
     trainable = 0
     names = []
     head_count = 0
+    head_counts = {"evidence_head": 0, "answerability_head": 0, "formality_head": 0}
     lora_count = 0
     for name, parameter in reviewer.named_parameters():  # type: ignore[attr-defined]
         count = int(parameter.numel())
@@ -132,13 +150,20 @@ def parameter_audit(reviewer: object, *, expected_layer_indices: Sequence[int]) 
         names.append(name)
         if name.startswith(("evidence_head.", "answerability_head.", "formality_head.")):
             head_count += count
+            head_counts[name.split(".", 1)[0]] += count
         if ".lora_A." in name or ".lora_B." in name:
             lora_count += count
-    result = audit_trainable_parameter_names(names, expected_layer_indices=expected_layer_indices)
+    result = audit_trainable_parameter_names(
+        names,
+        expected_layer_indices=expected_layer_indices,
+        active_heads=active_heads,
+        lora_enabled=lora_enabled,
+    )
     result.update({
         "total_parameter_count": total,
         "trainable_parameter_count": trainable,
         "head_parameter_count": head_count,
+        "head_parameter_counts": head_counts,
         "lora_parameter_count": lora_count,
     })
     return result

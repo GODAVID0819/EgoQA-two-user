@@ -64,6 +64,12 @@ class LoraPlacementTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "v_proj"):
             expected_lora_targets(model, last_n=2, projections=("q_proj", "v_proj"))
 
+    def test_rejects_non_qwen3_vl_8b_layer_count(self) -> None:
+        with self.assertRaisesRegex(ValueError, "36"):
+            expected_lora_targets(
+                FakeModel(32), last_n=2, projections=("q_proj", "v_proj"), expected_layer_count=36
+            )
+
     def test_trainable_audit_allows_only_heads_and_expected_lora(self) -> None:
         names = (
             "evidence_head.weight", "answerability_head.bias", "formality_head.weight",
@@ -75,6 +81,23 @@ class LoraPlacementTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "unexpected trainable"):
             audit_trainable_parameter_names(names + ("backbone.visual.weight",), expected_layer_indices=(34, 35))
+
+    def test_stage0_audit_allows_only_evidence_head_and_no_lora(self) -> None:
+        result = audit_trainable_parameter_names(
+            ("evidence_head.weight", "evidence_head.bias"),
+            expected_layer_indices=(),
+            active_heads=("evidence_quality",),
+            lora_enabled=False,
+        )
+        self.assertEqual(result["lora_parameter_names"], [])
+        for forbidden in ("answerability_head.weight", "backbone.x.lora_A.default.weight"):
+            with self.subTest(forbidden=forbidden), self.assertRaisesRegex(ValueError, "unexpected trainable"):
+                audit_trainable_parameter_names(
+                    ("evidence_head.weight", forbidden),
+                    expected_layer_indices=(),
+                    active_heads=("evidence_quality",),
+                    lora_enabled=False,
+                )
 
 
 if __name__ == "__main__":
