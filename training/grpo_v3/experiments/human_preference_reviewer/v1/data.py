@@ -270,16 +270,18 @@ def build_split_manifest(
     required = train_count + validation_count + locked_test_count
     if any(not isinstance(value, int) or value <= 0 for value in (train_count, validation_count, locked_test_count)):
         raise ValueError("split counts must be positive integers")
-    if len(records) != required:
-        raise ValueError(f"need exactly {required} eligible evidence IDs; found {len(records)}")
+    if len(records) < required:
+        raise ValueError(f"need at least {required} eligible evidence IDs; found {len(records)}")
     by_id = {record.evidence_id: record for record in records}
     if len(by_id) != len(records):
         raise ValueError("duplicate evidence_id in split input")
     evidence_ids = sorted(by_id)
     random.Random(seed).shuffle(evidence_ids)
-    train_ids = sorted(evidence_ids[:train_count])
-    validation_ids = sorted(evidence_ids[train_count:train_count + validation_count])
-    locked_test_ids = sorted(evidence_ids[train_count + validation_count:])
+    selected_ids = evidence_ids[:required]
+    reserve_ids = sorted(evidence_ids[required:])
+    train_ids = sorted(selected_ids[:train_count])
+    validation_ids = sorted(selected_ids[train_count:train_count + validation_count])
+    locked_test_ids = sorted(selected_ids[train_count + validation_count:required])
     split_ids = {"train": train_ids, "validation": validation_ids, "locked_test": locked_test_ids}
     sets = [set(value) for value in split_ids.values()]
     if sets[0] & sets[1] or sets[0] & sets[2] or sets[1] & sets[2]:
@@ -289,6 +291,7 @@ def build_split_manifest(
         "split_unit": "evidence_id",
         "seed": seed,
         "csv_sha256": csv_sha256,
+        "reserve_evidence_ids": reserve_ids,
         **{f"{name}_evidence_ids": values for name, values in split_ids.items()},
         "label_support": {
             name: _support(by_id[evidence_id] for evidence_id in ids)

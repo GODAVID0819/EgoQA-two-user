@@ -117,8 +117,18 @@ class AnnotationDataTests(unittest.TestCase):
 
     def test_split_rejects_insufficient_evidence(self) -> None:
         records = [load_annotation_csv(self._write(rows_for(f"e-{index}"))).eligible_evidence[0] for index in range(5)]
-        with self.assertRaisesRegex(ValueError, "need exactly 6"):
+        with self.assertRaisesRegex(ValueError, "need at least 6"):
             build_split_manifest(records, train_count=2, validation_count=2, locked_test_count=2)
+
+    def test_split_keeps_excess_completed_evidence_as_reserve(self) -> None:
+        records = [load_annotation_csv(self._write(rows_for(f"e-{index}"))).eligible_evidence[0] for index in range(7)]
+
+        manifest = build_split_manifest(records, train_count=2, validation_count=2, locked_test_count=2, seed=9)
+
+        selected = sum((manifest[f"{name}_evidence_ids"] for name in ("train", "validation", "locked_test")), [])
+        self.assertEqual(len(selected), 6)
+        self.assertEqual(len(manifest["reserve_evidence_ids"]), 1)
+        self.assertFalse(set(selected) & set(manifest["reserve_evidence_ids"]))
 
 
 if __name__ == "__main__":
