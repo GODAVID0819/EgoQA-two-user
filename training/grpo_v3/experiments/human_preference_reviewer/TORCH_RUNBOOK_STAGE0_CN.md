@@ -35,7 +35,21 @@ lcd C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user-reviewer-v1
 cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean
 put -r training/grpo_v3/experiments/human_preference_reviewer
 put -r hpc/grpo_v3/human_preference_reviewer
+put -r tests/training/grpo_v3/experiments/human_preference_reviewer
+put hpc/shared/env_qwen3vl.sh hpc/shared/env_qwen3vl.sh
+put training/torch_storage_preflight.py training/torch_storage_preflight.py
 ```
+
+如果集群项目目录是 Git checkout，优先直接拉取完整白名单分支，避免遗漏依赖：
+
+```bash
+git status --short
+git fetch origin feature/multimodal-reviewer-training
+git switch feature/multimodal-reviewer-training
+git pull --ff-only origin feature/multimodal-reviewer-training
+```
+
+`git status --short` 非空时先停止，不覆盖合作者的本地修改。
 
 ## 3. 零 GPU Gate
 
