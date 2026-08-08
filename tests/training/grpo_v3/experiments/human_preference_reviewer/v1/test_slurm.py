@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from pathlib import Path
 
 
@@ -10,6 +11,18 @@ STAGE0_HPC = ROOT / "hpc/grpo_v3/human_preference_reviewer/stage0"
 
 
 class ReviewerV1SlurmTests(unittest.TestCase):
+    def test_minimal_shared_runtime_dependencies_are_present(self) -> None:
+        from training.torch_storage_preflight import validate_storage_environment
+
+        self.assertTrue((ROOT / "hpc/shared/env_qwen3vl.sh").is_file())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            result = validate_storage_environment(
+                allowed_root=root,
+                environ={"HOME": str(root / "home")},
+                required_variables=("HOME",),
+            )
+        self.assertEqual(result["status"], "passed")
     def test_stage0_jobs_are_isolated_and_explicitly_disable_lora(self) -> None:
         for name in ("smoke1", "overfit_probe"):
             text = (STAGE0_HPC / f"{name}.sbatch").read_text(encoding="utf-8")
