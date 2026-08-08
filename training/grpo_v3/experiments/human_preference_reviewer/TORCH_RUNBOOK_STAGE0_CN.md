@@ -9,43 +9,100 @@
 - multimodal representation 能送入 Evidence Quality 三分类 head；
 - Evidence loss、backward、optimizer、checkpoint 链路工作；
 - 只有 Evidence head 更新，backbone 保持冻结；
-- 小数据上能观察到同一 candidate 的 loss 下降。
+- 在同一固定 probe set 上统一比较训练前后指标，证明 Evidence head 的平均 CE 明显下降且预测不塌缩为单一等级。
 
 本阶段不能证明 Reviewer 已经能在 unseen evidence 上复现人类评分，也不能证明 LoRA 或三任务联合训练有效。
 
 ## 2. 登录与变量
 
+当前 `EgoQA-two-user-grpo-clean` 可能保留 QA/GRPO 的未提交实验修改。不要在该目录中直接切换 Reviewer 分支，也不要把 Reviewer 远端分支 `pull`、`merge` 或 `rebase` 到当前 GRPO 分支。Reviewer 使用独立 Git worktree：
+
 ```bash
 ssh xl6775@greene.hpc.nyu.edu
-cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean
-export PROJECT_ROOT=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean
-export DATA_DIR=${PROJECT_ROOT}/data_RLHF/reviewer_v1
-export CSV_PATH=${DATA_DIR}/rlhf_candidate_scores_day5_7_full_100_HM.csv
-export MEDIA_MAP=${DATA_DIR}/media_map.json
-export MODEL_DIR=/scratch/xl6775/models/Qwen3-VL-8B-Instruct
-export OUTPUT_ROOT=${PROJECT_ROOT}/outputs/human_preference_reviewer
-export TRAIN_ENV=/scratch/xl6775/envs/egoqa-ms-swift-v4.2.2-vllm024
-export PYTHON=${TRAIN_ENV}/bin/python
-mkdir -p logs "${DATA_DIR}" "${OUTPUT_ROOT}"
 ```
 
-代码只通过 Git 分支同步，避免递归 SFTP 把目录上传到错误层级：
+确认终端提示符已经位于 Torch 登录节点后，再执行下面整段命令；不要在登录前把两段一起粘贴：
 
 ```bash
-git status --short
-git fetch origin feature/multimodal-reviewer-training
-git switch feature/multimodal-reviewer-training
-git pull --ff-only origin feature/multimodal-reviewer-training
+export SOURCE_ROOT=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean
+export REVIEWER_ROOT=/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1
+export REVIEWER_BRANCH=feature/multimodal-reviewer-training
+export REVIEWER_READY=1
+
+if [[ ! -d "${SOURCE_ROOT}" ]]; then
+  echo "STOP: SOURCE_ROOT 不存在：${SOURCE_ROOT}"
+  REVIEWER_READY=0
+else
+  cd "${SOURCE_ROOT}"
+  git worktree list
+  git fetch origin "${REVIEWER_BRANCH}"
+fi
+
+if [[ "${REVIEWER_READY}" == 1 && ! -e "${REVIEWER_ROOT}" ]]; then
+  if git show-ref --verify --quiet "refs/heads/${REVIEWER_BRANCH}"; then
+    git worktree add "${REVIEWER_ROOT}" "${REVIEWER_BRANCH}"
+  else
+    git worktree add -b "${REVIEWER_BRANCH}" \
+      "${REVIEWER_ROOT}" "origin/${REVIEWER_BRANCH}"
+  fi
+fi
+
+if [[ "${REVIEWER_READY}" == 1 ]]; then
+  ACTUAL_ROOT=$(git -C "${REVIEWER_ROOT}" rev-parse --show-toplevel 2>/dev/null)
+  ACTUAL_BRANCH=$(git -C "${REVIEWER_ROOT}" branch --show-current 2>/dev/null)
+  if [[ "${ACTUAL_ROOT}" != "${REVIEWER_ROOT}" || "${ACTUAL_BRANCH}" != "${REVIEWER_BRANCH}" ]]; then
+    echo "STOP: Reviewer worktree 路径或分支不符合预期"
+    REVIEWER_READY=0
+  elif [[ -n "$(git -C "${REVIEWER_ROOT}" status --porcelain)" ]]; then
+    echo "STOP: Reviewer worktree 存在本地修改，禁止自动同步"
+    git -C "${REVIEWER_ROOT}" status --short
+    REVIEWER_READY=0
+  fi
+fi
+
+if [[ "${REVIEWER_READY}" == 1 ]]; then
+  cd "${REVIEWER_ROOT}"
+  if git fetch origin "${REVIEWER_BRANCH}" && \
+     git merge --ff-only "origin/${REVIEWER_BRANCH}"; then
+    LOCAL_HEAD=$(git rev-parse HEAD)
+    REMOTE_HEAD=$(git rev-parse "origin/${REVIEWER_BRANCH}")
+    echo "local : ${LOCAL_HEAD}"
+    echo "remote: ${REMOTE_HEAD}"
+    if [[ "${LOCAL_HEAD}" != "${REMOTE_HEAD}" ]]; then
+      echo "STOP: Reviewer 本地 HEAD 与远端分支不一致"
+      REVIEWER_READY=0
+    fi
+  else
+    echo "STOP: Reviewer 分支 fetch 或 fast-forward 失败"
+    REVIEWER_READY=0
+  fi
+fi
+
+if [[ "${REVIEWER_READY}" == 1 ]]; then
+  export PROJECT_ROOT=${REVIEWER_ROOT}
+  export DATA_DIR=${PROJECT_ROOT}/data_RLHF/reviewer_v1
+  export CSV_PATH=${DATA_DIR}/rlhf_candidate_scores_day5_7_full_100_HM.csv
+  export MEDIA_MAP=${DATA_DIR}/media_map.json
+  export MODEL_DIR=/scratch/xl6775/models/Qwen3-VL-8B-Instruct
+  export OUTPUT_ROOT=${PROJECT_ROOT}/outputs/human_preference_reviewer
+  export TRAIN_ENV=/scratch/xl6775/envs/egoqa-ms-swift-v4.2.2-vllm024
+  export PYTHON=${TRAIN_ENV}/bin/python
+  mkdir -p logs "${DATA_DIR}" "${OUTPUT_ROOT}"
+else
+  echo "STOP: 未设置 Reviewer 训练变量，请先处理上面的 worktree 问题。"
+fi
 ```
 
-`git status --short` 非空时先停止，不覆盖合作者的本地修改。
+验收条件：当前目录为 `/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1`，当前分支为 `feature/multimodal-reviewer-training`，`LOCAL_HEAD` 与 `REMOTE_HEAD` 完全一致，且 `git status --short` 无输出。原 `EgoQA-two-user-grpo-clean` 目录及其本地修改不会被移动、stash 或覆盖。
+
+如果命令报告本地 Reviewer 分支已被其他 worktree 使用，先运行 `git worktree list` 找到并复用已有目录；不要删除目录，也不要使用 `git worktree add --force`。
 
 CSV 使用单文件 SFTP 上传到明确远端目录：
 
 ```text
 sftp xl6775@greene.hpc.nyu.edu
 lcd C:/Users/20661/Documents/xwechat_files/wxid_i096w25uhusk22_e748/msg/file/2026-08
-cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/data_RLHF/reviewer_v1
+cd /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/data_RLHF/reviewer_v1
 put "rlhf_candidate_scores_day5_7_full_100_HM (1)(1).csv" rlhf_candidate_scores_day5_7_full_100_HM.csv
 ```
 
@@ -54,8 +111,8 @@ put "rlhf_candidate_scores_day5_7_full_100_HM (1)(1).csv" rlhf_candidate_scores_
 ```bash
 "${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit annotation-csv \
   --csv "${CSV_PATH}" --output "${DATA_DIR}/annotation_audit_stage0.json" \
-  --split-output "${DATA_DIR}/split_2_1_1.json" \
-  --train-evidence-count 2 --validation-evidence-count 1 --locked-test-evidence-count 1
+  --split-output "${DATA_DIR}/split_4_1_1.json" \
+  --train-evidence-count 4 --validation-evidence-count 1 --locked-test-evidence-count 1
 "${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit media-map \
   --csv "${CSV_PATH}" --dataset-root /scratch/xl6775/datasets/EgoLife \
   --output "${MEDIA_MAP}"
@@ -67,7 +124,7 @@ bash -n hpc/grpo_v3/human_preference_reviewer/stage0/smoke1.sbatch
 bash -n hpc/grpo_v3/human_preference_reviewer/stage0/overfit_probe.sbatch
 ```
 
-必须确认 `annotation_audit_stage0.json`、`split_2_1_1.json`、`media_map.json` 存在且非空。
+必须确认 `annotation_audit_stage0.json`、`split_4_1_1.json`、`media_map.json` 存在且非空。`split_4_1_1.json` 的 train label support 必须覆盖 Evidence Quality 的 1、2、3 三个等级。
 
 ## 4. Structure Gate
 
@@ -96,13 +153,30 @@ test -s "${SMOKE_DIR}/storage_preflight.json"
 
 ## 6. Overfit Gate
 
+这个 Gate 在同一固定 probe set 上比较训练前和训练后结果，只证明单 head 可被训练，不代表 validation、locked test 或 unseen evidence 泛化能力。
+
 ```bash
 JOB_RAW=$(sbatch --parsable hpc/grpo_v3/human_preference_reviewer/stage0/overfit_probe.sbatch)
 JOB_ID=${JOB_RAW%%;*}
 sacct -j "${JOB_ID}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
 OVERFIT_DIR=${OUTPUT_ROOT}/stage0_overfit_${JOB_ID}
-"${PYTHON}" -c 'import json,sys; r=json.load(open(sys.argv[1])); d=r["repeated_candidate_loss"]; n=sum(x["improved"] for x in d.values()); print({"repeated":len(d),"improved":n,"throughput":r["throughput"]}); assert len(d)>=6 and n/len(d)>=0.75' "${OVERFIT_DIR}/training_result.json"
+"${PYTHON}" - "${OVERFIT_DIR}/training_result.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+gate = result["controlled_overfit_gate"]
+print("probe_evidence_ids=", result["probe_evidence_ids"])
+print("probe_label_support=", result["probe_label_support"])
+print("pre_train_metrics=", result["pre_train_metrics"]["evidence_quality"])
+print("post_train_metrics=", result["post_train_metrics"]["evidence_quality"])
+print("controlled_overfit_gate=", gate)
+assert gate["passed"], gate
+PY
 ```
+
+Gate 同时要求：平均 CE 相对下降至少 30%、至少 80% candidate 的 loss 下降、accuracy 至少提升 20 个百分点，并且训练后预测至少覆盖两个等级。`repeated_candidate_loss` 仅作为辅助诊断，不再决定通过。
 
 只有 Structure、Smoke、Overfit 三个 Gate 全部通过，才进入 Stage 1。不要在 Stage 0 结果上运行正式 locked test。
 

@@ -54,6 +54,136 @@ def select_evidence(
     return tuple(by_id[evidence_id] for evidence_id in ids)
 
 
+def _candidate_observation(
+    *,
+    evidence_id: str,
+    candidate_id: str,
+    label: int,
+    probabilities: Sequence[float],
+    loss: float,
+) -> dict[str, Any]:
+    values = [float(value) for value in probabilities]
+    if len(values) != 3 or not all(math.isfinite(value) for value in values):
+        raise ValueError("candidate probabilities must contain three finite values")
+    if label not in (1, 2, 3) or not math.isfinite(float(loss)):
+        raise ValueError("candidate observation requires a valid grade and finite loss")
+    return {
+        "evidence_id": str(evidence_id),
+        "candidate_id": str(candidate_id),
+        "label": int(label),
+        "prediction": max(range(3), key=values.__getitem__) + 1,
+        "probabilities": values,
+        "loss": float(loss),
+    }
+
+
+def _controlled_overfit_gate(
+    pre_metrics: Mapping[str, Any],
+    post_metrics: Mapping[str, Any],
+    *,
+    minimum_loss_reduction: float = 0.30,
+    minimum_improved_ratio: float = 0.80,
+    minimum_accuracy_gain: float = 0.20,
+    minimum_prediction_classes: int = 2,
+) -> dict[str, Any]:
+    """Compare one fixed probe set before and after head-only training."""
+
+    def observations(metrics: Mapping[str, Any]) -> dict[tuple[str, str], Mapping[str, Any]]:
+        rows = metrics.get("candidate_results")
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("controlled overfit metrics require non-empty candidate_results")
+        indexed: dict[tuple[str, str], Mapping[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, Mapping):
+                raise ValueError("candidate_results entries must be mappings")
+            key = (str(row.get("evidence_id") or ""), str(row.get("candidate_id") or ""))
+            if not all(key) or key in indexed:
+                raise ValueError("candidate_results require unique evidence and candidate identities")
+            indexed[key] = row
+        return indexed
+
+    pre_rows = observations(pre_metrics)
+    post_rows = observations(post_metrics)
+    if set(pre_rows) != set(post_rows):
+        raise ValueError("pre/post metrics must contain the same candidate identities")
+
+    per_candidate: list[dict[str, Any]] = []
+    for key in sorted(pre_rows):
+        pre_row = pre_rows[key]
+        post_row = post_rows[key]
+        if int(pre_row["label"]) != int(post_row["label"]):
+            raise ValueError(f"pre/post label mismatch for candidate {key}")
+        pre_loss = float(pre_row["loss"])
+        post_loss = float(post_row["loss"])
+        per_candidate.append({
+            "evidence_id": key[0],
+            "candidate_id": key[1],
+            "label": int(pre_row["label"]),
+            "pre_loss": pre_loss,
+            "post_loss": post_loss,
+            "loss_delta": post_loss - pre_loss,
+            "improved": post_loss < pre_loss,
+            "pre_prediction": int(pre_row["prediction"]),
+            "post_prediction": int(post_row["prediction"]),
+        })
+
+    pre_loss = float(pre_metrics["loss"])
+    post_loss = float(post_metrics["loss"])
+    pre_accuracy = float(pre_metrics["accuracy"])
+    post_accuracy = float(post_metrics["accuracy"])
+    finite = all(math.isfinite(value) for value in (pre_loss, post_loss, pre_accuracy, post_accuracy))
+    finite = finite and all(
+        math.isfinite(float(row["pre_loss"])) and math.isfinite(float(row["post_loss"]))
+        for row in per_candidate
+    )
+    loss_reduction_ratio = (
+        (pre_loss - post_loss) / pre_loss
+        if finite and pre_loss > 0 else 0.0
+    )
+    improved_count = sum(bool(row["improved"]) for row in per_candidate)
+    improved_ratio = improved_count / len(per_candidate)
+    accuracy_gain = post_accuracy - pre_accuracy
+    prediction_class_count = len({int(row["post_prediction"]) for row in per_candidate})
+
+    failures: list[str] = []
+    if not finite:
+        failures.append("nonfinite_pre_or_post_metric")
+    if not post_loss < pre_loss:
+        failures.append("post_loss_not_lower_than_pre_loss")
+    if not loss_reduction_ratio >= minimum_loss_reduction:
+        failures.append("loss_reduction_below_minimum")
+    if not improved_ratio >= minimum_improved_ratio:
+        failures.append("improved_candidate_ratio_below_minimum")
+    if not accuracy_gain >= minimum_accuracy_gain:
+        failures.append("accuracy_gain_below_minimum")
+    if prediction_class_count < minimum_prediction_classes:
+        failures.append("prediction_class_count_below_minimum")
+
+    return {
+        "passed": not failures,
+        "thresholds": {
+            "minimum_loss_reduction": minimum_loss_reduction,
+            "minimum_improved_candidate_ratio": minimum_improved_ratio,
+            "minimum_accuracy_gain": minimum_accuracy_gain,
+            "minimum_prediction_classes": minimum_prediction_classes,
+        },
+        "measurements": {
+            "candidate_count": len(per_candidate),
+            "pre_train_loss": pre_loss,
+            "post_train_loss": post_loss,
+            "loss_reduction_ratio": loss_reduction_ratio,
+            "improved_candidate_count": improved_count,
+            "improved_candidate_ratio": improved_ratio,
+            "pre_train_accuracy": pre_accuracy,
+            "post_train_accuracy": post_accuracy,
+            "accuracy_gain": accuracy_gain,
+            "post_prediction_class_count": prediction_class_count,
+        },
+        "failures": failures,
+        "per_candidate_pre_post": per_candidate,
+    }
+
+
 def _move(value: Any, device: str) -> Any:
     return value.to(device) if hasattr(value, "to") else value
 
@@ -184,6 +314,7 @@ def _evaluate(
     labels = {field: [] for field in active_heads}
     probabilities = {field: [] for field in labels}
     loss_values = {field: [] for field in labels}
+    candidate_results = {field: [] for field in labels}
     reviewer.eval()
     with torch.no_grad():
         for evidence in records:
@@ -204,15 +335,31 @@ def _evaluate(
                 }
                 for field in active_heads:
                     logits, loss = pairs[field]
-                    labels[field].append(candidate.labels()[field])
-                    probabilities[field].append(torch.softmax(logits[0].float(), dim=-1).cpu().tolist())
-                    loss_values[field].append(float(loss.detach().float().cpu()))
-    return {
-        field: classification_metrics(
+                    label = candidate.labels()[field]
+                    probability = torch.softmax(logits[0].float(), dim=-1).cpu().tolist()
+                    loss_value = float(loss.detach().float().cpu())
+                    labels[field].append(label)
+                    probabilities[field].append(probability)
+                    loss_values[field].append(loss_value)
+                    candidate_results[field].append(_candidate_observation(
+                        evidence_id=evidence.evidence_id,
+                        candidate_id=candidate.candidate_id,
+                        label=label,
+                        probabilities=probability,
+                        loss=loss_value,
+                    ))
+    result: dict[str, Any] = {}
+    for field in labels:
+        metrics = classification_metrics(
             labels[field], probabilities[field], loss=sum(loss_values[field]) / len(loss_values[field])
         )
-        for field in labels
-    }
+        metrics["candidate_results"] = candidate_results[field]
+        metrics["prediction_counts"] = {
+            str(grade): sum(row["prediction"] == grade for row in candidate_results[field])
+            for grade in (1, 2, 3)
+        }
+        result[field] = metrics
+    return result
 
 
 def _verify_checkpoint_reload_in_place(
@@ -318,11 +465,44 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         result = {"status": "passed", "split": args.split, "metrics": metrics, "parameter_audit": param_audit}
         _write_json(Path(args.output_dir) / "evaluation_result.json", result)
         return result
+    controlled_probe = args.command == "fit" and config.stage == "stage0"
+    probe_evidence_ids = [record.evidence_id for record in records] if controlled_probe else []
+    probe_label_support: dict[str, dict[str, int]] = {}
+    if controlled_probe:
+        for field in config.active_heads:
+            probe_label_support[field] = {
+                str(grade): sum(
+                    candidate.labels()[field] == grade
+                    for evidence in records
+                    for candidate in evidence.candidates
+                )
+                for grade in (1, 2, 3)
+            }
+        missing_probe_grades = [
+            f"{field}:{grade}"
+            for field, support in probe_label_support.items()
+            for grade, count in support.items()
+            if count == 0
+        ]
+        if missing_probe_grades:
+            raise ValueError(
+                "controlled Stage 0 probe must cover all grades; "
+                f"missing support: {missing_probe_grades}"
+            )
+    pre_train_metrics = (
+        _evaluate(
+            reviewer, records,
+            media_map=media_map, processor=processor, process_vision_info=process_vision_info,
+            device=args.device, active_heads=config.active_heads,
+        )
+        if controlled_probe else None
+    )
     initial = {
         name: parameter.detach().cpu().clone()
         for name, parameter in reviewer.named_parameters() if parameter.requires_grad
     }
     history = []
+    epoch_probe_metrics: list[dict[str, Any]] = []
     gradient_routes = None
     global_step = 0
     reviewer.train()
@@ -358,6 +538,27 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             })
             if global_step >= args.max_steps:
                 break
+        if controlled_probe:
+            epoch_metrics = _evaluate(
+                reviewer, records,
+                media_map=media_map, processor=processor,
+                process_vision_info=process_vision_info, device=args.device,
+                active_heads=config.active_heads,
+            )
+            epoch_probe_metrics.append({
+                "epoch": epoch + 1,
+                "global_step": global_step,
+                "metrics": {
+                    field: {
+                        "loss": metrics["loss"],
+                        "accuracy": metrics["accuracy"],
+                        "macro_f1": metrics["macro_f1"],
+                        "prediction_counts": metrics["prediction_counts"],
+                    }
+                    for field, metrics in epoch_metrics.items()
+                },
+            })
+            reviewer.train()
         if global_step >= args.max_steps:
             break
     deltas = {
@@ -393,6 +594,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    post_train_metrics = (
+        _evaluate(
+            reviewer, records,
+            media_map=media_map, processor=processor, process_vision_info=process_vision_info,
+            device=args.device, active_heads=config.active_heads,
+        )
+        if controlled_probe else None
+    )
+    controlled_overfit_gate = None
+    per_candidate_pre_post: list[dict[str, Any]] = []
+    if controlled_probe:
+        field = config.active_heads[0]
+        controlled_overfit_gate = _controlled_overfit_gate(
+            pre_train_metrics[field], post_train_metrics[field]
+        )
+        per_candidate_pre_post = controlled_overfit_gate["per_candidate_pre_post"]
     validation_metrics = None
     if args.command == "fit" and manifest is not None:
         validation_metrics = _evaluate(
@@ -416,7 +633,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         reviewer, output_dir / "checkpoint", lora_enabled=config.lora_enabled
     )
     result = {
-        "status": "passed", "mode": args.command, "global_step": global_step,
+        "status": (
+            "passed"
+            if controlled_overfit_gate is None or controlled_overfit_gate["passed"]
+            else "failed_controlled_overfit_gate"
+        ),
+        "mode": args.command, "global_step": global_step,
         "stage": config.stage,
         "active_heads": list(config.active_heads),
         "stage0_framework_validation": config.stage == "stage0",
@@ -425,6 +647,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "gradient_routes": gradient_routes,
         "parameter_audit": param_audit,
         "validation_metrics": validation_metrics,
+        "probe_evidence_ids": probe_evidence_ids,
+        "probe_label_support": probe_label_support,
+        "pre_train_metrics": pre_train_metrics,
+        "post_train_metrics": post_train_metrics,
+        "epoch_probe_metrics": epoch_probe_metrics,
+        "per_candidate_pre_post": per_candidate_pre_post,
+        "controlled_overfit_gate": controlled_overfit_gate,
         "throughput": {
             "elapsed_seconds": elapsed_seconds,
             "candidate_steps_per_hour": global_step * 3600.0 / max(elapsed_seconds, 1e-9),
@@ -477,7 +706,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     result = run(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0
+    return 0 if result.get("status") == "passed" else 2
 
 
 if __name__ == "__main__":

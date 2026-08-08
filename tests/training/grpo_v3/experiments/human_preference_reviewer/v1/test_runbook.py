@@ -18,11 +18,16 @@ class ReviewerV1RunbookTests(unittest.TestCase):
             "sacct", "storage_preflight.json", "training_result.json", "本阶段不能证明",
             "feature/multimodal-reviewer-training",
             '"${PYTHON}" -m unittest discover',
+            "split_4_1_1.json", "pre_train_metrics", "post_train_metrics",
+            "controlled_overfit_gate", "同一固定 probe set",
         ):
             self.assertIn(required, text)
         for forbidden in ("evaluate.sbatch", "train.sbatch", "--stage stage2", "Bradley"):
             self.assertNotIn(forbidden, text)
         self.assertNotIn("put -r", text)
+        self.assertNotIn("exit ", text)
+        self.assertNotIn("logout", text)
+        self.assertNotIn("set -euo pipefail", text)
 
     def test_collaborator_readme_explains_complete_framework_and_stages(self) -> None:
         text = README.read_text(encoding="utf-8")

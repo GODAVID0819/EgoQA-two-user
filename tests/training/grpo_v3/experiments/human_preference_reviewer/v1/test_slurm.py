@@ -33,8 +33,12 @@ class ReviewerV1SlurmTests(unittest.TestCase):
         smoke = (STAGE0_HPC / "smoke1.sbatch").read_text(encoding="utf-8")
         overfit = (STAGE0_HPC / "overfit_probe.sbatch").read_text(encoding="utf-8")
         self.assertIn("--max-steps 1", smoke)
-        self.assertIn("split_2_1_1.json", overfit)
-        self.assertIn("--train-evidence-count 2", overfit)
+        self.assertIn("split_4_1_1.json", overfit)
+        self.assertIn("--train-evidence-count 4", overfit)
+        self.assertIn("--max-steps 480", overfit)
+        self.assertIn("--epochs 20", overfit)
+        self.assertIn('controlled_overfit_gate', overfit)
+        self.assertIn('gate["passed"]', overfit)
 
     def test_all_jobs_are_single_h100_scratch_first_and_jobid_scoped(self) -> None:
         for name in ("structure_probe", "smoke1", "overfit_probe", "train", "evaluate"):
