@@ -9,6 +9,7 @@ from pathlib import Path
 from training.grpo_v3.experiments.human_preference_reviewer.v1.data import (
     build_split_manifest,
     load_annotation_csv,
+    validate_split_manifest,
 )
 
 
@@ -99,7 +100,7 @@ class AnnotationDataTests(unittest.TestCase):
 
         features = candidate.model_features()
 
-        self.assertEqual(set(features), {"candidate_id", "question", "options", "correct", "answer"})
+        self.assertEqual(set(features), {"question", "options", "correct", "answer"})
         serialized = json.dumps(features)
         for forbidden in ("private note", "reviewer_id", "aggregate_rank", "fea_total_score"):
             self.assertNotIn(forbidden, serialized)
@@ -129,6 +130,65 @@ class AnnotationDataTests(unittest.TestCase):
         self.assertEqual(len(selected), 6)
         self.assertEqual(len(manifest["reserve_evidence_ids"]), 1)
         self.assertFalse(set(selected) & set(manifest["reserve_evidence_ids"]))
+
+    def test_manifest_validation_rejects_cross_split_overlap(self) -> None:
+        manifest = {
+            "train_evidence_ids": ["e1", "e2"],
+            "validation_evidence_ids": ["e2", "e3"],
+            "locked_test_evidence_ids": ["e4"],
+            "reserve_evidence_ids": ["e5"],
+        }
+
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            validate_split_manifest(manifest)
+
+    def test_manifest_validation_enforces_contract_and_exact_counts(self) -> None:
+        manifest = {
+            "contract_version": "wrong",
+            "split_unit": "candidate_id",
+            "csv_sha256": "HASH",
+            "train_evidence_ids": ["e1"],
+            "validation_evidence_ids": ["e2"],
+            "locked_test_evidence_ids": ["e3"],
+            "reserve_evidence_ids": [],
+        }
+        with self.assertRaisesRegex(ValueError, "contract_version"):
+            validate_split_manifest(manifest, expected_counts=(1, 1, 1), require_contract=True)
+        manifest.update(contract_version="human_preference_reviewer_absolute_v1", split_unit="evidence_id")
+        validate_split_manifest(manifest, expected_counts=(1, 1, 1), require_contract=True)
+        with self.assertRaisesRegex(ValueError, "expected 2"):
+            validate_split_manifest(manifest, expected_counts=(2, 1, 1), require_contract=True)
+
+    def test_split_retries_deterministically_until_all_splits_have_support(self) -> None:
+        records = []
+        for index in range(9):
+            rows = rows_for(f"e-{index}")
+            grade = 3 if index < 3 else (2 if index < 6 else 1)
+            for row in rows:
+                row["answerability_score"] = str(grade)
+                row["fea_total_score"] = str(
+                    int(row["formality_score"]) + int(row["evidence_grounding_score"]) + grade
+                )
+            records.append(load_annotation_csv(self._write(rows)).eligible_evidence[0])
+
+        first = build_split_manifest(records, train_count=3, validation_count=3, locked_test_count=3, seed=4)
+        second = build_split_manifest(records, train_count=3, validation_count=3, locked_test_count=3, seed=4)
+
+        self.assertEqual(first, second)
+        self.assertGreaterEqual(first["selection_attempt"], 0)
+        for split in ("train", "validation", "locked_test"):
+            self.assertGreater(first["label_support"][split]["answerability"]["3"], 0)
+
+    def test_formal_split_rejects_missing_grade_support(self) -> None:
+        records = []
+        for index in range(6):
+            rows = rows_for(f"e-{index}")
+            for row in rows:
+                row["answerability_score"] = "1"
+                row["fea_total_score"] = str(int(row["formality_score"]) + int(row["evidence_grounding_score"]) + 1)
+            records.append(load_annotation_csv(self._write(rows)).eligible_evidence[0])
+        with self.assertRaisesRegex(ValueError, "class support"):
+            build_split_manifest(records, train_count=2, validation_count=2, locked_test_count=2)
 
 
 if __name__ == "__main__":

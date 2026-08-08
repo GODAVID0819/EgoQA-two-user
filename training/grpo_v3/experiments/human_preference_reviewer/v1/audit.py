@@ -11,6 +11,27 @@ from .data import build_split_manifest, load_annotation_csv
 from .lora import expected_lora_targets, locate_shared_language_layers
 
 
+def build_media_map(csv_path: str | Path, dataset_root: str | Path) -> dict[str, str]:
+    audit = load_annotation_csv(csv_path)
+    root = Path(dataset_root)
+    sources = {
+        source
+        for evidence in audit.eligible_evidence
+        for source in (evidence.video_a_source, evidence.video_b_source)
+    }
+    result: dict[str, str] = {}
+    marker = "/resolve/main/"
+    for source in sorted(sources):
+        if marker not in source:
+            raise ValueError(f"unsupported media URL; expected Hugging Face resolve/main path: {source}")
+        relative = source.split(marker, 1)[1]
+        local = root.joinpath(*relative.split("/"))
+        if not local.is_file() or local.stat().st_size <= 0:
+            raise ValueError(f"materialized video is missing or empty: {local}")
+        result[source] = str(local.resolve())
+    return result
+
+
 def annotation_audit_report(
     csv_path: str | Path,
     *,
@@ -41,6 +62,7 @@ def annotation_audit_report(
             locked_test_count=locked_test_count,
             seed=seed,
             csv_sha256=audit.csv_sha256,
+            require_full_class_support=min(train_count, validation_count, locked_test_count) >= 10,
         )
     return report
 
@@ -52,6 +74,10 @@ def structure_report(model_name_or_path: str, *, expected_layer_count: int = 36)
     except ImportError as error:
         raise RuntimeError("transformers and accelerate are required for the structure probe") from error
     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+    if getattr(config, "model_type", None) != "qwen3_vl":
+        raise RuntimeError(
+            f'expected model_type="qwen3_vl"; found {getattr(config, "model_type", None)!r}'
+        )
     with init_empty_weights():
         model = AutoModelForImageTextToText.from_config(config, trust_remote_code=True)
     path, layers = locate_shared_language_layers(model)
@@ -72,6 +98,7 @@ def structure_report(model_name_or_path: str, *, expected_layer_count: int = 36)
     return {
         "status": "passed",
         "model_class": type(model).__name__,
+        "model_type": config.model_type,
         "shared_stack_path": path,
         "shared_layer_count": len(layers),
         "target_layer_indices": [len(layers) - 2, len(layers) - 1],
@@ -106,6 +133,10 @@ def _parser() -> argparse.ArgumentParser:
     structure.add_argument("--model", required=True)
     structure.add_argument("--expected-layer-count", type=int, default=36)
     structure.add_argument("--output")
+    media = subparsers.add_parser("media-map", help="resolve annotated Hugging Face URLs to local videos")
+    media.add_argument("--csv", required=True)
+    media.add_argument("--dataset-root", required=True)
+    media.add_argument("--output", required=True)
     return parser
 
 
@@ -123,6 +154,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.split_output and "split_manifest" in report:
             _write(args.split_output, report["split_manifest"])
         return 2 if args.require_formal_split and report["status"] != "passed" else 0
+    if args.command == "media-map":
+        mapping = build_media_map(args.csv, args.dataset_root)
+        _write(args.output, mapping)
+        return 0
     _write(args.output, structure_report(args.model, expected_layer_count=args.expected_layer_count))
     return 0
 

@@ -49,7 +49,6 @@ class CandidateRecord:
 
     def model_features(self) -> dict[str, Any]:
         return {
-            "candidate_id": self.candidate_id,
             "question": self.question,
             "options": list(self.options),
             "correct": self.correct,
@@ -258,6 +257,45 @@ def _support(records: Iterable[EvidenceRecord]) -> dict[str, dict[str, int]]:
     }
 
 
+def validate_split_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    expected_counts: tuple[int, int, int] | None = None,
+    require_contract: bool = False,
+) -> None:
+    """Reject duplicate or overlapping evidence IDs before any split is consumed."""
+    if require_contract:
+        if manifest.get("contract_version") != CONTRACT_VERSION:
+            raise ValueError("split manifest contract_version mismatch")
+        if manifest.get("split_unit") != "evidence_id":
+            raise ValueError("split manifest split_unit must be evidence_id")
+        if not str(manifest.get("csv_sha256") or "").strip():
+            raise ValueError("split manifest csv_sha256 is required")
+    names = ("train", "validation", "locked_test", "reserve")
+    split_sets: dict[str, set[str]] = {}
+    for name in names:
+        key = f"{name}_evidence_ids"
+        raw = manifest.get(key, [])
+        if not isinstance(raw, list):
+            raise ValueError(f"{key} must be a list")
+        ids = [str(value) for value in raw]
+        if name != "reserve" and not ids:
+            raise ValueError(f"{key} must not be empty")
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"duplicate evidence_id within {key}")
+        split_sets[name] = set(ids)
+    if expected_counts is not None:
+        for name, expected in zip(names[:3], expected_counts):
+            actual = len(split_sets[name])
+            if actual != expected:
+                raise ValueError(f"{name}_evidence_ids expected {expected}, found {actual}")
+    for index, left in enumerate(names):
+        for right in names[index + 1:]:
+            overlap = sorted(split_sets[left] & split_sets[right])
+            if overlap:
+                raise ValueError(f"evidence_id overlap between {left} and {right}: {overlap}")
+
+
 def build_split_manifest(
     records: Sequence[EvidenceRecord],
     *,
@@ -266,6 +304,7 @@ def build_split_manifest(
     locked_test_count: int,
     seed: int = 42,
     csv_sha256: str | None = None,
+    require_full_class_support: bool = True,
 ) -> dict[str, Any]:
     required = train_count + validation_count + locked_test_count
     if any(not isinstance(value, int) or value <= 0 for value in (train_count, validation_count, locked_test_count)):
@@ -275,26 +314,46 @@ def build_split_manifest(
     by_id = {record.evidence_id: record for record in records}
     if len(by_id) != len(records):
         raise ValueError("duplicate evidence_id in split input")
-    evidence_ids = sorted(by_id)
-    random.Random(seed).shuffle(evidence_ids)
-    selected_ids = evidence_ids[:required]
-    reserve_ids = sorted(evidence_ids[required:])
-    train_ids = sorted(selected_ids[:train_count])
-    validation_ids = sorted(selected_ids[train_count:train_count + validation_count])
-    locked_test_ids = sorted(selected_ids[train_count + validation_count:required])
-    split_ids = {"train": train_ids, "validation": validation_ids, "locked_test": locked_test_ids}
-    sets = [set(value) for value in split_ids.values()]
-    if sets[0] & sets[1] or sets[0] & sets[2] or sets[1] & sets[2]:
-        raise RuntimeError("evidence overlap detected after split")
-    return {
+    maximum_attempts = 10_000 if require_full_class_support else 1
+    missing_support: list[str] = []
+    for selection_attempt in range(maximum_attempts):
+        evidence_ids = sorted(by_id)
+        random.Random(seed + selection_attempt).shuffle(evidence_ids)
+        selected_ids = evidence_ids[:required]
+        reserve_ids = sorted(evidence_ids[required:])
+        split_ids = {
+            "train": sorted(selected_ids[:train_count]),
+            "validation": sorted(selected_ids[train_count:train_count + validation_count]),
+            "locked_test": sorted(selected_ids[train_count + validation_count:required]),
+        }
+        label_support = {
+            name: _support(by_id[evidence_id] for evidence_id in ids)
+            for name, ids in split_ids.items()
+        }
+        missing_support = [
+            f"{split}:{field}:{grade}"
+            for split, fields in label_support.items()
+            for field, grades in fields.items()
+            for grade, count in grades.items()
+            if count == 0
+        ]
+        if not require_full_class_support or not missing_support:
+            break
+    else:
+        raise ValueError(
+            f"could not find a split with full class support after {maximum_attempts} attempts; "
+            f"last missing support: {missing_support}"
+        )
+    manifest = {
         "contract_version": CONTRACT_VERSION,
         "split_unit": "evidence_id",
         "seed": seed,
+        "selection_attempt": selection_attempt,
         "csv_sha256": csv_sha256,
         "reserve_evidence_ids": reserve_ids,
         **{f"{name}_evidence_ids": values for name, values in split_ids.items()},
-        "label_support": {
-            name: _support(by_id[evidence_id] for evidence_id in ids)
-            for name, ids in split_ids.items()
-        },
+        "label_support": label_support,
+        "full_class_support_required": require_full_class_support,
     }
+    validate_split_manifest(manifest)
+    return manifest

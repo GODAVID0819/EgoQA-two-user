@@ -31,7 +31,9 @@ class PromptingTests(unittest.TestCase):
         self.assertIn("Video A (speaker): Jake", text)
         self.assertIn("Video B (provider): Shure", text)
         self.assertIn("What happened?", text)
-        for forbidden in ("evidence_quality", "answerability_score", "overall_rank", '"rank"'):
+        for forbidden in (
+            "candidate_01", "evidence_quality", "answerability_score", "overall_rank", '"rank"'
+        ):
             self.assertNotIn(forbidden, text)
 
 
