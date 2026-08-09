@@ -11,6 +11,43 @@ STAGE0_HPC = ROOT / "hpc/grpo_v3/human_preference_reviewer/stage0"
 
 
 class ReviewerV1SlurmTests(unittest.TestCase):
+    def test_runtime_defaults_target_reviewer_repo_and_new_annotation_csv(self) -> None:
+        common = (HPC / "common.sh").read_text(encoding="utf-8")
+        self.assertIn("/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1", common)
+        self.assertIn("rlhf_candidate_scores_merged_70_packets.csv", common)
+        self.assertNotIn("EgoQA-two-user-grpo-clean", common)
+
+        for directory in (HPC, STAGE0_HPC):
+            for path in directory.glob("*.sbatch"):
+                with self.subTest(path=path):
+                    text = path.read_text(encoding="utf-8")
+                    self.assertIn("/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1", text)
+                    self.assertNotIn("EgoQA-two-user-grpo-clean", text)
+
+    def test_formal_train_and_evaluation_use_sixty_ten_validation_contract(self) -> None:
+        train = (HPC / "train.sbatch").read_text(encoding="utf-8")
+        evaluate = (HPC / "evaluate.sbatch").read_text(encoding="utf-8")
+
+        for text in (train, evaluate):
+            self.assertIn("split_60_10.json", text)
+            self.assertNotIn("split_40_10_10.json", text)
+        self.assertIn("--train-evidence-count 60", train)
+        self.assertIn("--validation-evidence-count 10", train)
+        self.assertIn("--locked-test-evidence-count 0", train)
+        self.assertIn('EVAL_SPLIT="validation"', evaluate)
+        self.assertNotIn('EVAL_SPLIT="${EVAL_SPLIT:-validation}"', evaluate)
+
+    def test_media_job_materializes_exact_current_csv_contract(self) -> None:
+        path = HPC / "prepare_media.sbatch"
+        self.assertTrue(path.is_file())
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("rlhf_candidate_scores_merged_70_packets.csv", text)
+        self.assertIn('assert len(required) == 140', text)
+        self.assertIn('assert len(media_map) == 140', text)
+        self.assertIn("snapshot_download", text)
+        self.assertIn("audit media-map", text)
+        self.assertNotIn("EgoQA-two-user-grpo-clean", text)
+
     def test_minimal_shared_runtime_dependencies_are_present(self) -> None:
         from training.torch_storage_preflight import validate_storage_environment
 

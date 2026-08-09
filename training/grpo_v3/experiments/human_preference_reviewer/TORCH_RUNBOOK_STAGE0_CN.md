@@ -81,7 +81,7 @@ fi
 if [[ "${REVIEWER_READY}" == 1 ]]; then
   export PROJECT_ROOT=${REVIEWER_ROOT}
   export DATA_DIR=${PROJECT_ROOT}/data_RLHF/reviewer_v1
-  export CSV_PATH=${DATA_DIR}/rlhf_candidate_scores_day5_7_full_100_HM.csv
+  export CSV_PATH=${DATA_DIR}/rlhf_candidate_scores_merged_70_packets.csv
   export MEDIA_MAP=${DATA_DIR}/media_map.json
   export MODEL_DIR=/scratch/xl6775/models/Qwen3-VL-8B-Instruct
   export OUTPUT_ROOT=${PROJECT_ROOT}/outputs/human_preference_reviewer
@@ -103,7 +103,13 @@ CSV 使用单文件 SFTP 上传到明确远端目录：
 sftp xl6775@greene.hpc.nyu.edu
 lcd C:/Users/20661/Documents/xwechat_files/wxid_i096w25uhusk22_e748/msg/file/2026-08
 cd /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/data_RLHF/reviewer_v1
-put "rlhf_candidate_scores_day5_7_full_100_HM (1)(1).csv" rlhf_candidate_scores_day5_7_full_100_HM.csv
+put "rlhf_candidate_scores_merged_70_packets.csv" rlhf_candidate_scores_merged_70_packets.csv
+```
+
+上传后应得到 SHA-256：
+
+```text
+32679019FD7C665A0632E9885405BDF13C77B51386EFC56E7B29B24192210CD7
 ```
 
 ## 3. 零 GPU Gate

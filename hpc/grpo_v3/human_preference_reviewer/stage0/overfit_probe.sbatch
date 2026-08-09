@@ -5,12 +5,12 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=05:00:00
-#SBATCH --output=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean/logs/reviewer-s0-overfit-%j.out
-#SBATCH --error=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean/logs/reviewer-s0-overfit-%j.err
+#SBATCH --output=/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/logs/reviewer-s0-overfit-%j.out
+#SBATCH --error=/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/logs/reviewer-s0-overfit-%j.err
 set -euo pipefail
 MODE=stage0_overfit
 export MODE
-PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
+PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1}"
 source "${PROJECT_ROOT}/hpc/grpo_v3/human_preference_reviewer/stage0/common.sh"
 SMALL_SPLIT="${DATA_DIR}/split_4_1_1.json"
 test -s "${SMALL_SPLIT}"

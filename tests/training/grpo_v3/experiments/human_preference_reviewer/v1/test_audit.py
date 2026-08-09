@@ -29,6 +29,15 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(report["formal_split_gate"]["eligible_evidence_count"], 1)
         self.assertEqual(report["formal_split_gate"]["missing_evidence_count"], 59)
 
+    def test_cli_defaults_use_sixty_ten_without_locked_test(self) -> None:
+        from training.grpo_v3.experiments.human_preference_reviewer.v1.audit import _parser
+
+        args = _parser().parse_args(["annotation-csv", "--csv", "annotations.csv"])
+
+        self.assertEqual(args.train_evidence_count, 60)
+        self.assertEqual(args.validation_evidence_count, 10)
+        self.assertEqual(args.locked_test_evidence_count, 0)
+
     def test_media_map_resolves_huggingface_relative_paths(self) -> None:
         rows = rows_for("e1")
         rows[0]["video_1_source"] = "https://huggingface.co/datasets/lmms-lab/EgoLife/resolve/main/A1/DAY5/a.mp4"

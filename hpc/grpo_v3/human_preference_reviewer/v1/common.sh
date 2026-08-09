@@ -2,13 +2,13 @@
 set -euo pipefail
 
 NETID=xl6775
-PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
+PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/outputs/human_preference_reviewer/v1}"
 TRAIN_ENV="${TRAIN_ENV:-/scratch/xl6775/envs/egoqa-ms-swift-v4.2.2-vllm024}"
 FFMPEG_ENV="${FFMPEG_ENV:-/scratch/xl6775/envs/egoqa-ffmpeg-runtime}"
 MODEL_DIR="${MODEL_DIR:-/scratch/xl6775/models/Qwen3-VL-8B-Instruct}"
 DATA_DIR="${DATA_DIR:-${PROJECT_ROOT}/data_RLHF/reviewer_v1}"
-CSV_PATH="${CSV_PATH:-${DATA_DIR}/rlhf_candidate_scores_day5_7_full_100_HM.csv}"
+CSV_PATH="${CSV_PATH:-${DATA_DIR}/rlhf_candidate_scores_merged_70_packets.csv}"
 MEDIA_MAP="${MEDIA_MAP:-${DATA_DIR}/media_map.json}"
 MODE="${MODE:?MODE must be set by the sbatch entrypoint}"
 

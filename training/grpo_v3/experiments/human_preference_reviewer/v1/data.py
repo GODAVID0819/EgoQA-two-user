@@ -149,7 +149,7 @@ def _parse_candidate(row: Mapping[str, str]) -> CandidateRecord:
         raise ValueError(f"candidate {candidate_id} has partially populated grades")
     total_raw = _text(row.get("fea_total_score"))
     if all(populated):
-        if not total_raw or int(total_raw) != sum(int(value) for value in grades.values()):
+        if total_raw and int(total_raw) != sum(int(value) for value in grades.values()):
             raise ValueError(f"candidate {candidate_id} has inconsistent fea_total_score")
     elif total_raw:
         raise ValueError(f"candidate {candidate_id} has fea_total_score without grades")
@@ -279,7 +279,7 @@ def validate_split_manifest(
         if not isinstance(raw, list):
             raise ValueError(f"{key} must be a list")
         ids = [str(value) for value in raw]
-        if name != "reserve" and not ids:
+        if name in {"train", "validation"} and not ids:
             raise ValueError(f"{key} must not be empty")
         if len(ids) != len(set(ids)):
             raise ValueError(f"duplicate evidence_id within {key}")
@@ -307,8 +307,10 @@ def build_split_manifest(
     require_full_class_support: bool = True,
 ) -> dict[str, Any]:
     required = train_count + validation_count + locked_test_count
-    if any(not isinstance(value, int) or value <= 0 for value in (train_count, validation_count, locked_test_count)):
-        raise ValueError("split counts must be positive integers")
+    if any(not isinstance(value, int) or value <= 0 for value in (train_count, validation_count)):
+        raise ValueError("train_count and validation_count must be positive integers")
+    if not isinstance(locked_test_count, int) or locked_test_count < 0:
+        raise ValueError("locked_test_count must be a non-negative integer")
     if len(records) < required:
         raise ValueError(f"need at least {required} eligible evidence IDs; found {len(records)}")
     by_id = {record.evidence_id: record for record in records}
@@ -328,7 +330,7 @@ def build_split_manifest(
         }
         label_support = {
             name: _support(by_id[evidence_id] for evidence_id in ids)
-            for name, ids in split_ids.items()
+            for name, ids in split_ids.items() if ids
         }
         missing_support = [
             f"{split}:{field}:{grade}"
@@ -355,5 +357,8 @@ def build_split_manifest(
         "label_support": label_support,
         "full_class_support_required": require_full_class_support,
     }
-    validate_split_manifest(manifest)
+    validate_split_manifest(
+        manifest,
+        expected_counts=(train_count, validation_count, locked_test_count),
+    )
     return manifest

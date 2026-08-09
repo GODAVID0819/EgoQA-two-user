@@ -1,15 +1,30 @@
 # 多模态 Reviewer 训练框架
 
-本目录实现两段同步 egocentric 视频与一个 QA candidate 的监督式 Reviewer。完整 v1 输出 Evidence Quality、Answerability、QA Formality 三个独立的三分类结果；Overall ranking 只保留在数据合同中，当前不训练。
+本目录实现 `两段同步第一视角视频 + 一条 QA candidate` 的监督式 Reviewer。Reviewer v1 输出三个彼此独立的三分类结果：
+
+- Evidence Quality；
+- Answerability；
+- QA Formality。
+
+每个标签均为 `1/2/3`，训练前显式映射到交叉熵所需的 `0/1/2`。Overall ranking 只保留在数据合同中，当前不训练 Overall Utility、pairwise 或 tie loss。
+
+## 当前数据合同
+
+- 文件：`rlhf_candidate_scores_merged_70_packets.csv`；
+- SHA-256：`32679019FD7C665A0632E9885405BDF13C77B51386EFC56E7B29B24192210CD7`；
+- 420 行、70 个 evidence、每个 evidence 恰好 6 条 candidate；
+- 正式划分：60 个 training evidence、10 个 validation evidence、0 个 locked test，即 `60/10/0`；
+- 按 `evidence_id` 划分，两个集合不得重叠；
+- 本轮 validation 可用于 checkpoint 选择；未来取得独立新标注后，再建立 locked test。
 
 ## 分阶段启用
 
-- Stage 0：只训练 Evidence Quality head，整个 backbone 完全冻结，用于验证框架。
+- Stage 0：只训练 Evidence Quality head，backbone 完全冻结，验证训练链路确实可学习。
 - Stage 1：Evidence Quality head 加最后两个 shared blocks 的 LoRA。
 - Stage 2：三个独立 heads 共同训练，共享最后两个 blocks 的 LoRA。
-- Stage 3：以后增加 Overall Utility 与 ranking supervision。
+- Stage 3：以后增加 Overall Utility 与 ranking supervision，另行设计。
 
-Stage 2 的最小 LoRA 目标是：
+Stage 2 的最小 LoRA 目标为：
 
 ```text
 model.language_model.layers.34.self_attn.q_proj
@@ -18,17 +33,13 @@ model.language_model.layers.35.self_attn.q_proj
 model.language_model.layers.35.self_attn.v_proj
 ```
 
-原始 backbone、vision tower 和三个分类 head 之外的参数保持冻结。Stage 0 连 LoRA 也不注入，只允许 `evidence_head.*` 更新。
+原始 backbone、vision tower 和非 LoRA 参数保持冻结。Stage 0 连 LoRA 也不注入，只允许 `evidence_head.*` 更新。
 
 ## 主要入口
 
-- `v1/data.py`：CSV、每个 evidence 恰好 6 candidates、evidence-level split。
-- `v1/modeling.py`：共享 representation 与可选择的分类 heads。
-- `v1/train.py`：Stage 0–2 的训练、评估和参数 Gate。
-- `v1/audit.py`：零 GPU 数据审计、视频映射、Qwen3-VL 结构检查。
-- `TORCH_RUNBOOK_STAGE0_CN.md`：首轮单 head 集群验证。
-- `TORCH_RUNBOOK_V1_CN.md`：完整三 head + LoRA 流程；Stage 0 通过前不要执行正式训练。
-
-## 当前数据边界
-
-最新 CSV 有 100 个 evidence、每个 6 candidates；严格 completed 只有 44 个，因此正式 40/10/10 仍缺 16 个。Answerability 等级 3 目前只有 1 条。Stage 0 使用小样本 Gate，不代表最终 unseen-evidence 效果。
+- `v1/data.py`：CSV 合同与 evidence-level split；
+- `v1/modeling.py`：共享表示与可选择的分类 heads；
+- `v1/train.py`：Stage 0–2 训练、评估和参数 Gate；
+- `v1/audit.py`：零 GPU 数据审计、视频映射、模型结构检查；
+- `TORCH_RUNBOOK_STAGE0_CN.md`：单 head 框架验证；
+- `TORCH_RUNBOOK_V1_CN.md`：60/10 正式三 head + LoRA 训练与 validation。

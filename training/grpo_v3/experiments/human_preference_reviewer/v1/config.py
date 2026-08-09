@@ -19,9 +19,9 @@ class ReviewerV1Config:
     lora_dropout: float = 0.05
     lora_bias: str = "none"
     include_mlp_lora: bool = False
-    train_evidence_count: int = 40
+    train_evidence_count: int = 60
     validation_evidence_count: int = 10
-    locked_test_evidence_count: int = 10
+    locked_test_evidence_count: int = 0
     seed: int = 42
 
     def __post_init__(self) -> None:
@@ -43,13 +43,13 @@ class ReviewerV1Config:
             raise ValueError("LoRA dropout must be in [0, 1)")
         if self.lora_bias != "none":
             raise ValueError("Reviewer v1 keeps all base-model bias parameters frozen")
-        counts = (
-            self.train_evidence_count,
-            self.validation_evidence_count,
-            self.locked_test_evidence_count,
-        )
-        if any(not isinstance(value, int) or value <= 0 for value in counts):
-            raise ValueError("split counts must be positive integers")
+        if any(
+            not isinstance(value, int) or value <= 0
+            for value in (self.train_evidence_count, self.validation_evidence_count)
+        ):
+            raise ValueError("train and validation split counts must be positive integers")
+        if not isinstance(self.locked_test_evidence_count, int) or self.locked_test_evidence_count < 0:
+            raise ValueError("locked test count must be a non-negative integer")
 
     @property
     def active_heads(self) -> tuple[str, ...]:

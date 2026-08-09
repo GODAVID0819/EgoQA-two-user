@@ -5,12 +5,12 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=03:00:00
-#SBATCH --output=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean/logs/reviewer-v1-smoke-%j.out
-#SBATCH --error=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean/logs/reviewer-v1-smoke-%j.err
+#SBATCH --output=/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/logs/reviewer-v1-smoke-%j.out
+#SBATCH --error=/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/logs/reviewer-v1-smoke-%j.err
 set -euo pipefail
 MODE=smoke
 export MODE
-PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
+PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1}"
 source "${PROJECT_ROOT}/hpc/grpo_v3/human_preference_reviewer/v1/common.sh"
 echo "SLURM_JOB_ID=${SLURM_JOB_ID} OUTDIR=${OUTDIR}"
 "${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.train smoke \

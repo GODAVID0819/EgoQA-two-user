@@ -61,9 +61,19 @@ Stage 0 优先选择 Evidence Quality，因为当前 completed 标注的 1/2/3 �
 8. checkpoint save/reload；
 9. 输出 Evidence accuracy、macro-F1、confusion matrix、逐等级 precision/recall、expected-score MAE。
 
-Stage 0 不执行正式 40/10/10 locked-test 结论，也不要求 LoRA 梯度。
+Stage 0 不执行正式 validation 结论，也不要求 LoRA 梯度。
 
-## 5. 提交边界
+## 5. 当前正式数据划分
+
+当前标注文件含 420 条 candidate、70 个 evidence，每个 evidence 恰好 6 条。固定随机种子 42 后，正式合同为：
+
+- training：60 个 evidence；
+- validation：10 个 evidence；
+- locked test：0 个 evidence。
+
+因此本轮记为 `60/10/0`。validation 用于训练过程监控和 checkpoint 选择，不得同时宣称为独立 locked test；未来需要用新的未参与开发决策的数据补建 locked test。
+
+## 6. 提交边界
 
 新远端分支只提交 Reviewer 所需的白名单文件：
 
@@ -75,7 +85,7 @@ Stage 0 不执行正式 40/10/10 locked-test 结论，也不要求 LoRA 梯度�
 不提交 CSV、视频、模型、checkpoint、输出、日志、临时审计结果或 archived 副本。
 不删除远端基线中与 Reviewer 无关的历史文件，避免让协作者审查无关的大规模删除。
 
-## 6. 文档边界
+## 7. 文档边界
 
 分支提供两份面向协作者的短文档：
 

@@ -67,6 +67,31 @@ class TrainContractTests(unittest.TestCase):
         self.assertEqual([row.evidence_id for row in select_evidence(records, manifest, "train")], ["e0"])
         self.assertEqual([row.evidence_id for row in select_evidence(records, manifest, "locked_test")], ["e2"])
 
+    def test_select_evidence_rejects_an_intentionally_empty_split(self) -> None:
+        records = load_annotation_csv(self._write(rows_for("e0"))).eligible_evidence
+        manifest = {
+            "train_evidence_ids": ["e0"],
+            "validation_evidence_ids": ["e0"],
+            "locked_test_evidence_ids": [],
+        }
+
+        with self.assertRaisesRegex(ValueError, "split locked_test is empty"):
+            select_evidence(records, manifest, "locked_test")
+
+    def test_train_cli_defaults_use_sixty_ten_without_locked_test(self) -> None:
+        args = _parser().parse_args([
+            "fit",
+            "--csv", "a.csv",
+            "--split-manifest", "split.json",
+            "--media-map", "media.json",
+            "--model", "model",
+            "--output-dir", "out",
+        ])
+
+        self.assertEqual(args.train_evidence_count, 60)
+        self.assertEqual(args.validation_evidence_count, 10)
+        self.assertEqual(args.locked_test_evidence_count, 0)
+
     def test_media_map_requires_existing_nonempty_local_files(self) -> None:
         directory = Path(tempfile.mkdtemp())
         video = directory / "clip.mp4"

@@ -62,7 +62,9 @@ def annotation_audit_report(
             locked_test_count=locked_test_count,
             seed=seed,
             csv_sha256=audit.csv_sha256,
-            require_full_class_support=min(train_count, validation_count, locked_test_count) >= 10,
+            require_full_class_support=min(
+                count for count in (train_count, validation_count, locked_test_count) if count > 0
+            ) >= 10,
         )
     return report
 
@@ -124,9 +126,9 @@ def _parser() -> argparse.ArgumentParser:
     annotation.add_argument("--csv", required=True)
     annotation.add_argument("--output")
     annotation.add_argument("--split-output")
-    annotation.add_argument("--train-evidence-count", type=int, default=40)
+    annotation.add_argument("--train-evidence-count", type=int, default=60)
     annotation.add_argument("--validation-evidence-count", type=int, default=10)
-    annotation.add_argument("--locked-test-evidence-count", type=int, default=10)
+    annotation.add_argument("--locked-test-evidence-count", type=int, default=0)
     annotation.add_argument("--seed", type=int, default=42)
     annotation.add_argument("--require-formal-split", action="store_true")
     structure = subparsers.add_parser("structure", help="inspect Qwen3-VL shared blocks without loading weights")

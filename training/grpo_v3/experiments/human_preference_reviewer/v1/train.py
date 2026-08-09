@@ -45,7 +45,9 @@ def select_evidence(
     if split not in {"train", "validation", "locked_test"}:
         raise ValueError(f"unsupported split: {split}")
     ids = [str(value) for value in manifest.get(f"{split}_evidence_ids") or []]
-    if len(ids) != len(set(ids)) or not ids:
+    if not ids:
+        raise ValueError(f"split {split} is empty and cannot be evaluated or trained")
+    if len(ids) != len(set(ids)):
         raise ValueError(f"split {split} must contain unique evidence IDs")
     by_id = {record.evidence_id: record for record in records}
     missing = sorted(set(ids) - set(by_id))
@@ -696,9 +698,9 @@ def _parser() -> argparse.ArgumentParser:
         child.add_argument("--max-steps", type=int, default=1 if command == "smoke" else 1000000)
         child.add_argument("--seed", type=int, default=42)
         child.add_argument("--stage", choices=("stage0", "stage1", "stage2"), default="stage2")
-        child.add_argument("--train-evidence-count", type=int, default=40)
+        child.add_argument("--train-evidence-count", type=int, default=60)
         child.add_argument("--validation-evidence-count", type=int, default=10)
-        child.add_argument("--locked-test-evidence-count", type=int, default=10)
+        child.add_argument("--locked-test-evidence-count", type=int, default=0)
     return parser
 
 

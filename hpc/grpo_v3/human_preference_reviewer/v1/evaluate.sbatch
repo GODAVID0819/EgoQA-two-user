@@ -5,17 +5,17 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=05:00:00
-#SBATCH --output=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean/logs/reviewer-v1-eval-%j.out
-#SBATCH --error=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean/logs/reviewer-v1-eval-%j.err
+#SBATCH --output=/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/logs/reviewer-v1-eval-%j.out
+#SBATCH --error=/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/logs/reviewer-v1-eval-%j.err
 set -euo pipefail
 MODE=evaluate
 export MODE
-PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
+PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1}"
 source "${PROJECT_ROOT}/hpc/grpo_v3/human_preference_reviewer/v1/common.sh"
 echo "SLURM_JOB_ID=${SLURM_JOB_ID} OUTDIR=${OUTDIR}"
-FORMAL_SPLIT="${DATA_DIR}/split_40_10_10.json"
+FORMAL_SPLIT="${DATA_DIR}/split_60_10.json"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:?submit with --export=ALL,CHECKPOINT_DIR=/absolute/checkpoint/path}"
-EVAL_SPLIT="${EVAL_SPLIT:-validation}"
+EVAL_SPLIT="validation"
 test -s "${FORMAL_SPLIT}"
 test -s "${CHECKPOINT_DIR}/reviewer_v1_config.json"
 "${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.train evaluate \

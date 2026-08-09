@@ -1,328 +1,348 @@
-# Reviewer v1 Torch 运行手册
+# Reviewer v1 Torch Runbook
 
-本手册服从 `docs/TORCH_EXPERIMENT_META_RULES_CN.md`。Markdown 只供人工阅读，不是远端作业依赖。
-
-## 1. 范围与硬 Gate
+本手册服从 `docs/TORCH_EXPERIMENT_META_RULES_CN.md`，用于运行完整的 **最后两层 LoRA + 三个三分类 heads**。Stage 0 单 head Gate 已通过后，再按本文执行。
 
 ```text
-零 GPU → Structure Probe → Smoke → Overfit Probe → 40/10/10 Train → Validation → Locked Test
+零 GPU → 媒体准备 → Structure Probe → Smoke → Overfit Probe → 60/10 Train → Validation
 ```
 
-Reviewer v1 只训练 Qwen3-VL-8B 最后两个 shared language blocks 的 q/v LoRA 与三个独立 3-class heads。不运行 overall preference、pairwise/tie loss、GRPO 或 no-video ablation。
+本轮只有 60 个 training evidence 和 10 个 validation evidence，没有 locked test。Validation 可用于开发判断和 checkpoint 选择，但不能写成独立测试集结果。
 
-当前 CSV SHA-256：
+## 1. 固定合同
 
-```text
-F3E006B3A488A3ACA86C8F3B1862392EF3576A73BA78EA202E40F7754DB730AC
-```
+- 模型：`Qwen3-VL-8B-Instruct`；
+- LoRA：shared language blocks 34、35 的 `q_proj`、`v_proj`；
+- heads：Evidence Quality、Answerability、QA Formality；
+- 总损失：三个三分类交叉熵等权平均；
+- CSV：`rlhf_candidate_scores_merged_70_packets.csv`；
+- CSV SHA-256：`32679019FD7C665A0632E9885405BDF13C77B51386EFC56E7B29B24192210CD7`；
+- 数据：420 rows、70 evidence、每个 evidence 6 candidates；
+- 划分：`60/10/0`，manifest 为 `split_60_10.json`；
+- 视频：140 个唯一 MP4，覆盖 Day 1、Day 5、Day 6。
 
-当前严格可用数据为 44 completed evidence；正式 40/10/10 还缺 16 个。现在可以执行前四个 Gate，不能提交正式 Train 或 Locked Test。
+当前明确不训练 Overall Utility、Bradley–Terry、tie loss、GRPO reward，也不进行 full backbone finetuning。
 
-## 2. 每次 SSH 初始化
+## 2. 每次 SSH 登录后设置变量
+
+下面命令不会关闭 SSH 会话。若某个 Gate 失败，保留当前终端检查日志。
 
 ```bash
-NETID=xl6775
-TORCH_ACCOUNT=torch_pr_674_tandon_advanced
 PROJECT_ROOT=/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1
 OUTPUT_ROOT=${PROJECT_ROOT}/outputs/human_preference_reviewer/v1
 DATA_DIR=${PROJECT_ROOT}/data_RLHF/reviewer_v1
 TRAIN_ENV=/scratch/xl6775/envs/egoqa-ms-swift-v4.2.2-vllm024
 FFMPEG_ENV=/scratch/xl6775/envs/egoqa-ffmpeg-runtime
 MODEL_DIR=/scratch/xl6775/models/Qwen3-VL-8B-Instruct
-EGO_LIFE_ROOT=/scratch/xl6775/datasets/EgoLife
-CSV_PATH=${DATA_DIR}/rlhf_candidate_scores_day5_7_full_100_HM.csv
+DATASET_ROOT=/scratch/xl6775/datasets/EgoLife
+CSV_PATH=${DATA_DIR}/rlhf_candidate_scores_merged_70_packets.csv
 MEDIA_MAP=${DATA_DIR}/media_map.json
+FORMAL_SPLIT=${DATA_DIR}/split_60_10.json
 PYTHON=${TRAIN_ENV}/bin/python
-export PROJECT_ROOT OUTPUT_ROOT DATA_DIR TRAIN_ENV FFMPEG_ENV MODEL_DIR EGO_LIFE_ROOT CSV_PATH MEDIA_MAP PYTHON
+
+export PROJECT_ROOT OUTPUT_ROOT DATA_DIR TRAIN_ENV FFMPEG_ENV MODEL_DIR
+export DATASET_ROOT CSV_PATH MEDIA_MAP FORMAL_SPLIT PYTHON
+
 mkdir -p "${PROJECT_ROOT}/logs" "${OUTPUT_ROOT}" "${DATA_DIR}"
 cd "${PROJECT_ROOT}"
 ```
 
-供直接粘贴的 SSH 命令不启用全局 strict mode，也不执行 `exit`。失败后保留会话收集证据。
+## 3. 只上传新 CSV
 
-## 3. Windows → Torch 窄 SFTP
-
-SSH 登录节点先建目录：
-
-```bash
-mkdir -p /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/training/grpo_v3/experiments/human_preference_reviewer/v1
-mkdir -p /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/tests/training/grpo_v3/experiments/human_preference_reviewer/v1
-mkdir -p /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/hpc/grpo_v3/human_preference_reviewer/v1
-mkdir -p /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/data_RLHF/reviewer_v1
-```
-
-Windows PowerShell：
+在 Windows PowerShell 中执行：
 
 ```text
 sftp xl6775@greene.hpc.nyu.edu
-lcd C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user-reviewer-v1
-cd /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1
-put training/grpo_v3/experiments/human_preference_reviewer/__init__.py training/grpo_v3/experiments/human_preference_reviewer/__init__.py
-put training/grpo_v3/experiments/human_preference_reviewer/v1/*.py training/grpo_v3/experiments/human_preference_reviewer/v1/
-put tests/training/grpo_v3/experiments/human_preference_reviewer/v1/*.py tests/training/grpo_v3/experiments/human_preference_reviewer/v1/
-put hpc/grpo_v3/human_preference_reviewer/v1/common.sh hpc/grpo_v3/human_preference_reviewer/v1/common.sh
-put hpc/grpo_v3/human_preference_reviewer/v1/*.sbatch hpc/grpo_v3/human_preference_reviewer/v1/
-put training/grpo_v3/experiments/human_preference_reviewer/TORCH_RUNBOOK_V1_CN.md training/grpo_v3/experiments/human_preference_reviewer/TORCH_RUNBOOK_V1_CN.md
 lcd C:/Users/20661/Documents/xwechat_files/wxid_i096w25uhusk22_e748/msg/file/2026-08
-put "rlhf_candidate_scores_day5_7_full_100_HM (1)(1).csv" /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/data_RLHF/reviewer_v1/rlhf_candidate_scores_day5_7_full_100_HM.csv
+cd /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/data_RLHF/reviewer_v1
+put "rlhf_candidate_scores_merged_70_packets.csv" rlhf_candidate_scores_merged_70_packets.csv
 ```
 
-这里只上传窄代码集合和单个 CSV；不要上传模型、视频、cache、outputs 或整个 `data_RLHF`。
+代码应通过 Git 分支或本地生成的 bundle 同步，不要把整个项目目录、模型、视频、cache 或 outputs 递归上传。
 
-## 4. Gate 0：零 GPU 预检
-
-### 4.1 接收、语法、依赖
+## 4. Gate 0：零 GPU 数据与代码预检
 
 ```bash
 cd "${PROJECT_ROOT}"
-git status --short -- training/grpo_v3/experiments/human_preference_reviewer hpc/grpo_v3/human_preference_reviewer
+
+echo "branch=$(git branch --show-current)"
+echo "head=$(git rev-parse HEAD)"
+git status --short --branch
+
+sha256sum "${CSV_PATH}"
+
+"${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit annotation-csv \
+  --csv "${CSV_PATH}" \
+  --output "${DATA_DIR}/annotation_audit_60_10.json" \
+  --split-output "${FORMAL_SPLIT}" \
+  --train-evidence-count 60 \
+  --validation-evidence-count 10 \
+  --locked-test-evidence-count 0 \
+  --seed 42 \
+  --require-formal-split
+
+"${PYTHON}" - "${DATA_DIR}/annotation_audit_60_10.json" "${FORMAL_SPLIT}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+audit = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+split = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+assert audit["status"] == "passed", audit["status"]
+assert audit["csv_sha256"].upper() == "32679019FD7C665A0632E9885405BDF13C77B51386EFC56E7B29B24192210CD7"
+assert audit["row_count"] == 420
+assert audit["evidence_count"] == 70
+assert len(split["train_evidence_ids"]) == 60
+assert len(split["validation_evidence_ids"]) == 10
+assert split["locked_test_evidence_ids"] == []
+assert split["reserve_evidence_ids"] == []
+assert not set(split["train_evidence_ids"]) & set(split["validation_evidence_ids"])
+print("ANNOTATION_GATE_PASSED rows=420 evidence=70 split=60/10/0")
+print(json.dumps(split["label_support"], ensure_ascii=False, indent=2))
+PY
+
+"${PYTHON}" -m unittest discover \
+  -s tests/training/grpo_v3/experiments/human_preference_reviewer/v1 \
+  -p 'test_*.py' -v
+"${PYTHON}" -m compileall -q training/grpo_v3/experiments/human_preference_reviewer/v1
+
 bash -n hpc/grpo_v3/human_preference_reviewer/v1/common.sh
+bash -n hpc/grpo_v3/human_preference_reviewer/v1/prepare_media.sbatch
 bash -n hpc/grpo_v3/human_preference_reviewer/v1/structure_probe.sbatch
 bash -n hpc/grpo_v3/human_preference_reviewer/v1/smoke1.sbatch
 bash -n hpc/grpo_v3/human_preference_reviewer/v1/overfit_probe.sbatch
 bash -n hpc/grpo_v3/human_preference_reviewer/v1/train.sbatch
 bash -n hpc/grpo_v3/human_preference_reviewer/v1/evaluate.sbatch
-
-export PATH="${FFMPEG_ENV}/bin:${PATH}"
-export LD_LIBRARY_PATH="${FFMPEG_ENV}/lib:${LD_LIBRARY_PATH:-}"
-"${PYTHON}" -c 'import torch,transformers,peft,accelerate; print(torch.__version__,transformers.__version__,peft.__version__,accelerate.__version__)'
-"${PYTHON}" -c 'from torchcodec.decoders import VideoDecoder; print(VideoDecoder.__module__)'
-"${FFMPEG_ENV}/bin/ffmpeg" -version | head -n 2
-test -s "${MODEL_DIR}/config.json" && echo MODEL_CONFIG_OK
-command -v hf
 ```
 
-模型缺失时只在 CPU 作业下载：
+验收：SHA、420/70、`60/10/0`、三个字段的 1/2/3 support、单元测试和语法检查全部通过。不要额外给 `unittest discover` 传 `-t`；本仓库的 `tests/` 不是可导入 package。
+
+## 5. Gate 0.5：准备 140 个视频
+
+该作业只负责按 CSV 精确下载 140 个视频并生成新的 `media_map.json`。即使旧目录已有 200 个视频，也必须重新生成 map，不能假设旧 map 覆盖新 CSV。
 
 ```bash
-hf download Qwen/Qwen3-VL-8B-Instruct --local-dir "${MODEL_DIR}"
-test -s "${MODEL_DIR}/config.json"
-```
-
-### 4.2 Targeted tests
-
-```bash
-"${PYTHON}" -m unittest discover -s tests/training/grpo_v3/experiments/human_preference_reviewer/v1 -p 'test_*.py' -v
-"${PYTHON}" -m compileall -q training/grpo_v3/experiments/human_preference_reviewer/v1
-```
-
-从 `${PROJECT_ROOT}` 运行上面的相对 `-s` 路径，不要额外指定 top-level directory。当前 `tests/` 目录不是 Python package，否则会导致 `Start directory is not importable`。
-
-Torch 环境不得跳过 PyTorch-specific tests。
-
-### 4.3 CSV audit 与 split
-
-```bash
-sha256sum "${CSV_PATH}"
-"${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit annotation-csv \
-  --csv "${CSV_PATH}" --output "${DATA_DIR}/annotation_audit.json"
-"${PYTHON}" -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["row_count"]==600; assert r["evidence_count"]==100; assert r["csv_sha256"]=="F3E006B3A488A3ACA86C8F3B1862392EF3576A73BA78EA202E40F7754DB730AC"; print(json.dumps(r,indent=2))' "${DATA_DIR}/annotation_audit.json"
-```
-
-当前 formal split Gate 预期失败，这是数据完成度结论，不是代码失败。Overfit 使用独立 2/1/1 manifest：
-
-```bash
-"${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit annotation-csv \
-  --csv "${CSV_PATH}" --train-evidence-count 2 --validation-evidence-count 1 \
-  --locked-test-evidence-count 1 --split-output "${DATA_DIR}/split_2_1_1.json" \
-  --output "${DATA_DIR}/annotation_audit_2_1_1.json"
-```
-
-### 4.4 视频映射
-
-```bash
-"${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit media-map \
-  --csv "${CSV_PATH}" --dataset-root "${EGO_LIFE_ROOT}" --output "${MEDIA_MAP}"
-"${PYTHON}" -c 'import json,sys,os; m=json.load(open(sys.argv[1])); assert len(m)==88; assert all(os.path.isfile(p) and os.path.getsize(p)>0 for p in m.values()); print("MEDIA_MAP_OK",len(m))' "${MEDIA_MAP}"
-```
-
-若缺文件，按 audit 报出的相对路径用 `hf download lmms-lab/EgoLife --repo-type dataset <relative-path> --local-dir "${EGO_LIFE_ROOT}"` 在 CPU 作业补齐，不占用 H100 下载。
-
-## 5. Gate 1：Structure Probe
-
-```bash
-STRUCTURE_JOB_RAW=$(sbatch \
+MEDIA_JOB_RAW=$(sbatch \
   --parsable \
   --export=ALL \
   --chdir="${PROJECT_ROOT}" \
+  --output="${PROJECT_ROOT}/logs/reviewer-media-%j.out" \
+  --error="${PROJECT_ROOT}/logs/reviewer-media-%j.err" \
+  hpc/grpo_v3/human_preference_reviewer/v1/prepare_media.sbatch)
+MEDIA_JOB=${MEDIA_JOB_RAW%%;*}
+echo "MEDIA_JOB=${MEDIA_JOB}"
+```
+
+作业结束后检查：
+
+```bash
+sacct -j "${MEDIA_JOB}" --format=JobID,JobName%24,State,ExitCode,Elapsed,MaxRSS
+tail -n 80 "${PROJECT_ROOT}/logs/reviewer-media-${MEDIA_JOB}.out"
+tail -n 80 "${PROJECT_ROOT}/logs/reviewer-media-${MEDIA_JOB}.err"
+
+"${PYTHON}" - "${MEDIA_MAP}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+mapping = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert len(mapping) == 140, len(mapping)
+assert all(Path(path).is_file() and Path(path).stat().st_size > 0 for path in mapping.values())
+print("MEDIA_MAP_PASSED count=140")
+PY
+```
+
+## 6. Gate 1：Structure Probe
+
+```bash
+STRUCTURE_JOB_RAW=$(sbatch \
+  --parsable --export=ALL --chdir="${PROJECT_ROOT}" \
   --output="${PROJECT_ROOT}/logs/reviewer-v1-structure-%j.out" \
   --error="${PROJECT_ROOT}/logs/reviewer-v1-structure-%j.err" \
   hpc/grpo_v3/human_preference_reviewer/v1/structure_probe.sbatch)
 STRUCTURE_JOB=${STRUCTURE_JOB_RAW%%;*}
 STRUCTURE_DIR=${OUTPUT_ROOT}/structure_${STRUCTURE_JOB}
-printf 'STRUCTURE_JOB=%s\nSTRUCTURE_DIR=%s\n' "${STRUCTURE_JOB}" "${STRUCTURE_DIR}" > "${OUTPUT_ROOT}/structure_submission_${STRUCTURE_JOB}.env"
 echo "STRUCTURE_JOB=${STRUCTURE_JOB}"
 ```
 
 ```bash
-squeue -j "${STRUCTURE_JOB}" -o '%.18i %.24j %.10T %.10M %.10l %R' 2>/dev/null || true
-sacct -j "${STRUCTURE_JOB}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
-tail -n 100 "${PROJECT_ROOT}/logs/reviewer-v1-structure-${STRUCTURE_JOB}.out"
-tail -n 100 "${PROJECT_ROOT}/logs/reviewer-v1-structure-${STRUCTURE_JOB}.err"
-"${PYTHON}" -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["status"]=="passed"; assert r["shared_stack_path"]=="model.language_model.layers"; assert r["shared_layer_count"]==36; assert r["target_layer_indices"]==[34,35]; assert len(r["lora_targets"])==4; print(json.dumps(r,indent=2))' "${STRUCTURE_DIR}/structure_probe.json"
+sacct -j "${STRUCTURE_JOB}" --format=JobID,JobName%24,State,ExitCode,Elapsed,MaxRSS
+"${PYTHON}" - "${STRUCTURE_DIR}/structure_probe.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert result["status"] == "passed"
+assert result["shared_stack_path"] == "model.language_model.layers"
+assert result["shared_layer_count"] == 36
+assert result["target_layer_indices"] == [34, 35]
+assert len(result["lora_targets"]) == 4
+print(json.dumps(result, ensure_ascii=False, indent=2))
+PY
 ```
 
-## 6. Gate 2：真实双视频 1-step Smoke
+## 7. Gate 2：真实双视频 Smoke
 
 ```bash
 SMOKE_JOB_RAW=$(sbatch \
-  --parsable \
-  --export=ALL \
-  --chdir="${PROJECT_ROOT}" \
+  --parsable --export=ALL --chdir="${PROJECT_ROOT}" \
   --output="${PROJECT_ROOT}/logs/reviewer-v1-smoke-%j.out" \
   --error="${PROJECT_ROOT}/logs/reviewer-v1-smoke-%j.err" \
   hpc/grpo_v3/human_preference_reviewer/v1/smoke1.sbatch)
 SMOKE_JOB=${SMOKE_JOB_RAW%%;*}
 SMOKE_DIR=${OUTPUT_ROOT}/smoke_${SMOKE_JOB}
-printf 'SMOKE_JOB=%s\nSMOKE_DIR=%s\n' "${SMOKE_JOB}" "${SMOKE_DIR}" > "${OUTPUT_ROOT}/smoke_submission_${SMOKE_JOB}.env"
+echo "SMOKE_JOB=${SMOKE_JOB}"
 ```
 
 ```bash
-sacct -j "${SMOKE_JOB}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
-"${PYTHON}" -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["status"]=="passed"; assert r["global_step"]==1; assert r["head_parameter_delta_nonzero"]; assert r["lora_parameter_delta_nonzero"]; assert all(v["status"]=="passed" for v in r["gradient_routes"].values()); assert not r["parameter_audit"]["unexpected_trainable_names"]; print(json.dumps(r,indent=2))' "${SMOKE_DIR}/training_result.json"
-test -s "${SMOKE_DIR}/checkpoint/classification_heads.pt"
-test -s "${SMOKE_DIR}/checkpoint/lora_adapter.pt"
+sacct -j "${SMOKE_JOB}" --format=JobID,JobName%24,State,ExitCode,Elapsed,MaxRSS
+"${PYTHON}" - "${SMOKE_DIR}/training_result.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert result["status"] == "passed"
+assert result["global_step"] == 1
+assert result["head_parameter_delta_nonzero"]
+assert result["lora_parameter_delta_nonzero"]
+assert all(route["status"] == "passed" for route in result["gradient_routes"].values())
+assert not result["parameter_audit"]["unexpected_trainable_names"]
+print(result["parameter_audit"])
+PY
+
+test -s "${SMOKE_DIR}/storage_preflight.json"
 test -s "${SMOKE_DIR}/checkpoint/parameter_audit.json"
 ```
 
-Smoke 只证明真实视频 forward/backward、三个 heads、共享 LoRA、冻结审计和保存成立，不证明泛化。
+## 8. Gate 3：Overfit Probe
 
-## 7. Gate 3：24-step Overfit Probe
+先生成独立的小样本 manifest；它只用于可学习性诊断，不用于正式结果。
 
 ```bash
+"${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit annotation-csv \
+  --csv "${CSV_PATH}" \
+  --output "${DATA_DIR}/annotation_audit_2_1_1.json" \
+  --split-output "${DATA_DIR}/split_2_1_1.json" \
+  --train-evidence-count 2 --validation-evidence-count 1 --locked-test-evidence-count 1
+
 OVERFIT_JOB_RAW=$(sbatch \
-  --parsable \
-  --export=ALL \
-  --chdir="${PROJECT_ROOT}" \
+  --parsable --export=ALL --chdir="${PROJECT_ROOT}" \
   --output="${PROJECT_ROOT}/logs/reviewer-v1-overfit-%j.out" \
   --error="${PROJECT_ROOT}/logs/reviewer-v1-overfit-%j.err" \
   hpc/grpo_v3/human_preference_reviewer/v1/overfit_probe.sbatch)
 OVERFIT_JOB=${OVERFIT_JOB_RAW%%;*}
 OVERFIT_DIR=${OUTPUT_ROOT}/overfit_${OVERFIT_JOB}
+echo "OVERFIT_JOB=${OVERFIT_JOB}"
 ```
 
 ```bash
-sacct -j "${OVERFIT_JOB}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
-"${PYTHON}" -c 'import json,sys; r=json.load(open(sys.argv[1])); d=r["repeated_candidate_loss"]; improved=sum(x["improved"] for x in d.values()); print({"repeated":len(d),"improved":improved,"throughput":r["throughput"]}); assert r["status"]=="passed" and len(d)>=6 and improved/len(d)>=0.75' "${OVERFIT_DIR}/training_result.json"
+sacct -j "${OVERFIT_JOB}" --format=JobID,JobName%24,State,ExitCode,Elapsed,MaxRSS
+"${PYTHON}" - "${OVERFIT_DIR}/training_result.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert result["status"] == "passed"
+assert result["head_parameter_delta_nonzero"]
+assert result["lora_parameter_delta_nonzero"]
+print("throughput=", result["throughput"])
+print("validation_macro_f1_mean=", result["validation_macro_f1_mean"])
+PY
 ```
 
-该 Gate 比较同一 candidate 第一次和最后一次出现时的 loss，避免把随机样本难度误当成学习趋势。失败时先检查 loss、grad norm、parameter delta 与视频输入，不直接扩大规模。
+Overfit Probe 只证明三 heads 与共享 LoRA 能收到梯度并降低受控样本的损失，不证明 unseen evidence 泛化。
 
-同时用 `candidate_steps_per_hour` 做 40 evidence × 6 candidate × 3 epoch（共 720 candidate-step）的耗时外推；若预计训练时间超过作业时限的 70%，先增加时限或单独设计可验证的视频复用优化，再提交正式训练。
+## 9. Gate 4：正式 60/10 训练
 
-## 8. Gate 4：正式 40/10/10
-
-至少 60 个 completed evidence 后才执行：
-
-```bash
-"${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit annotation-csv \
-  --csv "${CSV_PATH}" --output "${DATA_DIR}/annotation_audit_formal.json" \
-  --split-output "${DATA_DIR}/split_40_10_10.json" --require-formal-split
-```
-
-返回非零就停止，不把 pending 或空标签补入 split。通过后：
+只有前述 Gate 全部通过，才提交正式训练：
 
 ```bash
 TRAIN_JOB_RAW=$(sbatch \
-  --parsable \
-  --export=ALL \
-  --chdir="${PROJECT_ROOT}" \
+  --parsable --export=ALL --chdir="${PROJECT_ROOT}" \
   --output="${PROJECT_ROOT}/logs/reviewer-v1-train-%j.out" \
   --error="${PROJECT_ROOT}/logs/reviewer-v1-train-%j.err" \
   hpc/grpo_v3/human_preference_reviewer/v1/train.sbatch)
 TRAIN_JOB=${TRAIN_JOB_RAW%%;*}
 TRAIN_DIR=${OUTPUT_ROOT}/train_${TRAIN_JOB}
-printf 'TRAIN_JOB=%s\nTRAIN_DIR=%s\n' "${TRAIN_JOB}" "${TRAIN_DIR}" > "${OUTPUT_ROOT}/train_submission_${TRAIN_JOB}.env"
+echo "TRAIN_JOB=${TRAIN_JOB}"
 ```
 
 ```bash
-sacct -j "${TRAIN_JOB}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
+sacct -j "${TRAIN_JOB}" --format=JobID,JobName%24,State,ExitCode,Elapsed,MaxRSS
 test -s "${TRAIN_DIR}/training_result.json"
 test -s "${TRAIN_DIR}/checkpoint/reviewer_v1_config.json"
+test -s "${TRAIN_DIR}/checkpoint/parameter_audit.json"
 CHECKPOINT_DIR=${TRAIN_DIR}/checkpoint
+echo "CHECKPOINT_DIR=${CHECKPOINT_DIR}"
 ```
 
-## 9. Validation 与 Locked Test
+`parameter_audit.json` 必须证明 trainable 参数只有三个 classification heads 与 blocks 34/35 的四个 LoRA projection；任何 unexpected trainable parameter 都是失败。
+
+## 10. Gate 5：Validation
 
 ```bash
 VALID_JOB_RAW=$(sbatch \
   --parsable \
-  --export=ALL,CHECKPOINT_DIR="${CHECKPOINT_DIR}",EVAL_SPLIT=validation \
+  --export=ALL,CHECKPOINT_DIR="${CHECKPOINT_DIR}" \
   --chdir="${PROJECT_ROOT}" \
   --output="${PROJECT_ROOT}/logs/reviewer-v1-eval-%j.out" \
   --error="${PROJECT_ROOT}/logs/reviewer-v1-eval-%j.err" \
   hpc/grpo_v3/human_preference_reviewer/v1/evaluate.sbatch)
 VALID_JOB=${VALID_JOB_RAW%%;*}
 VALID_DIR=${OUTPUT_ROOT}/evaluate_${VALID_JOB}
-sacct -j "${VALID_JOB}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
-"${PYTHON}" -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["status"]=="passed"; print(json.dumps(r["metrics"],indent=2))' "${VALID_DIR}/evaluation_result.json"
+echo "VALID_JOB=${VALID_JOB}"
 ```
-
-checkpoint 选择完成后，Locked Test 只运行一次：
 
 ```bash
-TEST_JOB_RAW=$(sbatch \
-  --parsable \
-  --export=ALL,CHECKPOINT_DIR="${CHECKPOINT_DIR}",EVAL_SPLIT=locked_test \
-  --chdir="${PROJECT_ROOT}" \
-  --output="${PROJECT_ROOT}/logs/reviewer-v1-eval-%j.out" \
-  --error="${PROJECT_ROOT}/logs/reviewer-v1-eval-%j.err" \
-  hpc/grpo_v3/human_preference_reviewer/v1/evaluate.sbatch)
-TEST_JOB=${TEST_JOB_RAW%%;*}
-TEST_DIR=${OUTPUT_ROOT}/evaluate_${TEST_JOB}
+sacct -j "${VALID_JOB}" --format=JobID,JobName%24,State,ExitCode,Elapsed,MaxRSS
+"${PYTHON}" - "${VALID_DIR}/evaluation_result.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert result["status"] == "passed"
+assert result["split"] == "validation"
+print(json.dumps(result["metrics"], ensure_ascii=False, indent=2))
+PY
 ```
 
-报告每个字段的 loss、accuracy、macro-F1、3×3 confusion matrix、每级 precision/recall/F1/support、expected-score MAE 与 Spearman。任一级 support 为 0 时，`insufficient_class_support=true`，不得写成完整三分类结论。
+分别报告 Evidence、Answerability、Formality 的 validation loss、accuracy、macro-F1、3×3 confusion matrix、每级 precision/recall、expected-score MAE 与 Spearman。Answerability 的等级 3 样本较少，必须同时报告 support，不只看 accuracy。
 
-## 10. 失败证据收集
+## 11. 简洁查错命令
 
-替换真实 JobID 和 mode：
+把 JobID 与 mode 改成真实值：
 
 ```bash
 JOB_ID=12345678
-MODE=smoke
-JOB_DIR=${OUTPUT_ROOT}/${MODE}_${JOB_ID}
-DIAG_DIR=${OUTPUT_ROOT}/diagnostics/${MODE}_${JOB_ID}
-mkdir -p "${DIAG_DIR}"
-sacct -j "${JOB_ID}" -o JobID,JobName%30,State,ExitCode,Elapsed,Start,End,MaxRSS > "${DIAG_DIR}/sacct.txt" 2>&1 || true
-scontrol show job -dd "${JOB_ID}" > "${DIAG_DIR}/scontrol.txt" 2>&1 || true
-cp -f "${PROJECT_ROOT}/logs/"*"${JOB_ID}"*.out "${DIAG_DIR}/" 2>/dev/null || true
-cp -f "${PROJECT_ROOT}/logs/"*"${JOB_ID}"*.err "${DIAG_DIR}/" 2>/dev/null || true
-cp -f "${JOB_DIR}/storage_preflight.json" "${DIAG_DIR}/" 2>/dev/null || true
-cp -f "${JOB_DIR}/training_result.json" "${DIAG_DIR}/" 2>/dev/null || true
-cp -f "${JOB_DIR}/evaluation_result.json" "${DIAG_DIR}/" 2>/dev/null || true
-cp -f "${JOB_DIR}/checkpoint/parameter_audit.json" "${DIAG_DIR}/" 2>/dev/null || true
-tar -czf "${DIAG_DIR}.tar.gz" -C "$(dirname "${DIAG_DIR}")" "$(basename "${DIAG_DIR}")"
-echo "DIAGNOSTIC_BUNDLE=${DIAG_DIR}.tar.gz"
+MODE=train
+
+sacct -j "${JOB_ID}" \
+  --format=JobID,JobName%24,State,ExitCode,Elapsed,MaxRSS
+
+echo "===== stdout ====="
+tail -n 120 "${PROJECT_ROOT}/logs/reviewer-v1-${MODE}-${JOB_ID}.out"
+
+echo "===== stderr ====="
+tail -n 160 "${PROJECT_ROOT}/logs/reviewer-v1-${MODE}-${JOB_ID}.err"
 ```
 
-`squeue` 只看活动作业，历史最终状态看 `sacct` 顶层和 `.batch`。所有输出由真实 JobID 推导，不从固定或 latest 目录归因。
+若路径不确定，再运行 `scontrol show job -dd "${JOB_ID}"` 查看 `WorkDir`、`Command`、`StdOut`、`StdErr`。不要先输出大量环境信息。
 
-## 11. 资源与汇报
+## 12. 结论边界
 
-首轮统一 1×H100。Smoke 后用：
+本轮能证明：
 
-```bash
-sacct -j "${SMOKE_JOB}" --units=G -o JobID,State,ExitCode,Elapsed,AllocTRES%40,MaxRSS
-```
+- 70 个 evidence 的 `60/10/0` 划分无重叠；
+- 三个绝对评分 heads 与最后两层共享 LoRA 能联合训练；
+- Reviewer 在 10 个 unseen validation evidence 上与人工标签的对齐程度。
 
-下一同形状作业内存取 `MaxRSS × 1.25` 后向常用档位取整；时限按实测启动成本与每 step 耗时外推。
+本轮不能证明：
 
-```text
-阶段：
-branch / commit：
-CSV SHA-256：
-Job ID / 输出目录：
-Slurm State / ExitCode：
-第一个失败 Gate：
-数据 evidence / candidate / 各级 support：
-实际 LoRA blocks / modules：
-total / trainable / heads / LoRA 参数量：
-三个字段 validation/test 指标：
-本次能证明：
-本次不能证明：
-Elapsed / MaxRSS / GPU peak：
-下一步唯一动作：
-```
+- 独立 locked-test 泛化；
+- Overall ranking、pairwise preference 或 GRPO reward 有效；
+- 当前超参数已经最优。
 
-本地测试通过不能证明真实 H100 runtime；Slurm `COMPLETED` 也不能替代 `storage_preflight.json`、`structure_probe.json`、`training_result.json`、`parameter_audit.json` 和 `evaluation_result.json`。
+本地单元测试通过不能替代 H100 Gate；Slurm 状态 `COMPLETED` 也不能替代 `storage_preflight.json`、`structure_probe.json`、`training_result.json`、`parameter_audit.json` 和 `evaluation_result.json`。

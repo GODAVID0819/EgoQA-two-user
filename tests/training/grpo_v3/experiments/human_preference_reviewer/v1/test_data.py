@@ -95,6 +95,16 @@ class AnnotationDataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fea_total_score"):
             load_annotation_csv(self._write(rows))
 
+    def test_completed_scores_do_not_require_redundant_total_column(self) -> None:
+        rows = rows_for("without-total")
+        for row in rows:
+            row["fea_total_score"] = ""
+
+        audit = load_annotation_csv(self._write(rows))
+
+        self.assertEqual(len(audit.eligible_evidence), 1)
+        self.assertEqual(audit.label_distribution["evidence_quality"], {1: 2, 2: 2, 3: 2})
+
     def test_training_features_exclude_annotation_metadata(self) -> None:
         candidate = load_annotation_csv(self._write(rows_for("e1"))).eligible_evidence[0].candidates[0]
 
@@ -130,6 +140,33 @@ class AnnotationDataTests(unittest.TestCase):
         self.assertEqual(len(selected), 6)
         self.assertEqual(len(manifest["reserve_evidence_ids"]), 1)
         self.assertFalse(set(selected) & set(manifest["reserve_evidence_ids"]))
+
+    def test_split_supports_sixty_ten_without_locked_test(self) -> None:
+        records = [
+            load_annotation_csv(self._write(rows_for(f"e-{index:02d}"))).eligible_evidence[0]
+            for index in range(70)
+        ]
+
+        manifest = build_split_manifest(
+            records,
+            train_count=60,
+            validation_count=10,
+            locked_test_count=0,
+            seed=42,
+        )
+
+        self.assertEqual(len(manifest["train_evidence_ids"]), 60)
+        self.assertEqual(len(manifest["validation_evidence_ids"]), 10)
+        self.assertEqual(manifest["locked_test_evidence_ids"], [])
+        self.assertEqual(manifest["reserve_evidence_ids"], [])
+        self.assertNotIn("locked_test", manifest["label_support"])
+        validate_split_manifest(manifest, expected_counts=(60, 10, 0))
+
+    def test_split_rejects_negative_locked_test_count(self) -> None:
+        records = [load_annotation_csv(self._write(rows_for(f"e-{index}"))).eligible_evidence[0] for index in range(2)]
+
+        with self.assertRaisesRegex(ValueError, "locked_test_count"):
+            build_split_manifest(records, train_count=1, validation_count=1, locked_test_count=-1)
 
     def test_manifest_validation_rejects_cross_split_overlap(self) -> None:
         manifest = {

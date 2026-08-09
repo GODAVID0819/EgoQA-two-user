@@ -17,8 +17,19 @@ class ReviewerV1ConfigTests(unittest.TestCase):
         self.assertEqual(config.lora_dropout, 0.05)
         self.assertEqual(
             (config.train_evidence_count, config.validation_evidence_count, config.locked_test_evidence_count),
-            (40, 10, 10),
+            (60, 10, 0),
         )
+
+    def test_zero_locked_test_is_valid_but_negative_is_rejected(self) -> None:
+        config = ReviewerV1Config(
+            train_evidence_count=60,
+            validation_evidence_count=10,
+            locked_test_evidence_count=0,
+        )
+        self.assertEqual(config.locked_test_evidence_count, 0)
+
+        with self.assertRaisesRegex(ValueError, "locked test count"):
+            ReviewerV1Config(locked_test_evidence_count=-1)
 
     def test_rejects_contract_drift(self) -> None:
         invalid = (
