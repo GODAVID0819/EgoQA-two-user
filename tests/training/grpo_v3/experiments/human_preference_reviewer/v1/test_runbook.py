@@ -28,6 +28,13 @@ class ReviewerV1RunbookTests(unittest.TestCase):
         self.assertNotIn("exit ", text)
         self.assertNotIn("logout", text)
         self.assertNotIn("set -euo pipefail", text)
+        self.assertIn('cd "${PROJECT_ROOT}"', text)
+        self.assertIn("-s tests/training/grpo_v3/experiments/human_preference_reviewer/v1", text)
+        self.assertNotIn('-t "${ROOT}"', text)
+        self.assertNotIn('-t "${PROJECT_ROOT}"', text)
+        self.assertGreaterEqual(text.count("--export=ALL"), 3)
+        self.assertGreaterEqual(text.count('--chdir="${PROJECT_ROOT}"'), 3)
+        self.assertGreaterEqual(text.count('--output="${PROJECT_ROOT}/logs/'), 3)
 
     def test_collaborator_readme_explains_complete_framework_and_stages(self) -> None:
         text = README.read_text(encoding="utf-8")
@@ -46,6 +53,22 @@ class ReviewerV1RunbookTests(unittest.TestCase):
         self.assertNotIn("huggingface-cli", text)
         self.assertNotIn("latest_*", text)
         self.assertNotIn("set -euo pipefail\n", text)
+
+    def test_v1_runbook_routes_everything_to_reviewer_repository(self) -> None:
+        text = RUNBOOK.read_text(encoding="utf-8")
+        reviewer_root = "/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1"
+        self.assertIn(f"PROJECT_ROOT={reviewer_root}", text)
+        self.assertIn('cd "${PROJECT_ROOT}"', text)
+        self.assertIn("-s tests/training/grpo_v3/experiments/human_preference_reviewer/v1", text)
+        self.assertNotIn("/scratch/xl6775/projects/EgoQA-two-user-grpo-clean", text)
+        self.assertNotIn('-t "${ROOT}"', text)
+        self.assertNotIn('-t "${PROJECT_ROOT}"', text)
+        self.assertNotIn("bye", text)
+        self.assertNotIn("logout", text)
+        self.assertIn("export PROJECT_ROOT OUTPUT_ROOT DATA_DIR", text)
+        self.assertGreaterEqual(text.count("--export=ALL"), 6)
+        self.assertGreaterEqual(text.count('--chdir="${PROJECT_ROOT}"'), 6)
+        self.assertGreaterEqual(text.count('--output="${PROJECT_ROOT}/logs/'), 6)
 
 
 if __name__ == "__main__":

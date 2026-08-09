@@ -23,9 +23,9 @@ F3E006B3A488A3ACA86C8F3B1862392EF3576A73BA78EA202E40F7754DB730AC
 ```bash
 NETID=xl6775
 TORCH_ACCOUNT=torch_pr_674_tandon_advanced
-CLEAN_ROOT=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean
-OUTPUT_ROOT=${CLEAN_ROOT}/outputs/human_preference_reviewer/v1
-DATA_DIR=${CLEAN_ROOT}/data_RLHF/reviewer_v1
+PROJECT_ROOT=/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1
+OUTPUT_ROOT=${PROJECT_ROOT}/outputs/human_preference_reviewer/v1
+DATA_DIR=${PROJECT_ROOT}/data_RLHF/reviewer_v1
 TRAIN_ENV=/scratch/xl6775/envs/egoqa-ms-swift-v4.2.2-vllm024
 FFMPEG_ENV=/scratch/xl6775/envs/egoqa-ffmpeg-runtime
 MODEL_DIR=/scratch/xl6775/models/Qwen3-VL-8B-Instruct
@@ -33,8 +33,9 @@ EGO_LIFE_ROOT=/scratch/xl6775/datasets/EgoLife
 CSV_PATH=${DATA_DIR}/rlhf_candidate_scores_day5_7_full_100_HM.csv
 MEDIA_MAP=${DATA_DIR}/media_map.json
 PYTHON=${TRAIN_ENV}/bin/python
-mkdir -p "${CLEAN_ROOT}/logs" "${OUTPUT_ROOT}" "${DATA_DIR}"
-cd "${CLEAN_ROOT}"
+export PROJECT_ROOT OUTPUT_ROOT DATA_DIR TRAIN_ENV FFMPEG_ENV MODEL_DIR EGO_LIFE_ROOT CSV_PATH MEDIA_MAP PYTHON
+mkdir -p "${PROJECT_ROOT}/logs" "${OUTPUT_ROOT}" "${DATA_DIR}"
+cd "${PROJECT_ROOT}"
 ```
 
 供直接粘贴的 SSH 命令不启用全局 strict mode，也不执行 `exit`。失败后保留会话收集证据。
@@ -44,18 +45,18 @@ cd "${CLEAN_ROOT}"
 SSH 登录节点先建目录：
 
 ```bash
-mkdir -p /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/training/grpo_v3/experiments/human_preference_reviewer/v1
-mkdir -p /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/tests/training/grpo_v3/experiments/human_preference_reviewer/v1
-mkdir -p /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/hpc/grpo_v3/human_preference_reviewer/v1
-mkdir -p /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/data_RLHF/reviewer_v1
+mkdir -p /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/training/grpo_v3/experiments/human_preference_reviewer/v1
+mkdir -p /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/tests/training/grpo_v3/experiments/human_preference_reviewer/v1
+mkdir -p /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/hpc/grpo_v3/human_preference_reviewer/v1
+mkdir -p /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/data_RLHF/reviewer_v1
 ```
 
 Windows PowerShell：
 
 ```text
-sftp xl6775@login.torch.hpc.nyu.edu
+sftp xl6775@greene.hpc.nyu.edu
 lcd C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user-reviewer-v1
-cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean
+cd /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1
 put training/grpo_v3/experiments/human_preference_reviewer/__init__.py training/grpo_v3/experiments/human_preference_reviewer/__init__.py
 put training/grpo_v3/experiments/human_preference_reviewer/v1/*.py training/grpo_v3/experiments/human_preference_reviewer/v1/
 put tests/training/grpo_v3/experiments/human_preference_reviewer/v1/*.py tests/training/grpo_v3/experiments/human_preference_reviewer/v1/
@@ -63,8 +64,7 @@ put hpc/grpo_v3/human_preference_reviewer/v1/common.sh hpc/grpo_v3/human_prefere
 put hpc/grpo_v3/human_preference_reviewer/v1/*.sbatch hpc/grpo_v3/human_preference_reviewer/v1/
 put training/grpo_v3/experiments/human_preference_reviewer/TORCH_RUNBOOK_V1_CN.md training/grpo_v3/experiments/human_preference_reviewer/TORCH_RUNBOOK_V1_CN.md
 lcd C:/Users/20661/Documents/xwechat_files/wxid_i096w25uhusk22_e748/msg/file/2026-08
-put "rlhf_candidate_scores_day5_7_full_100_HM (1)(1).csv" /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/data_RLHF/reviewer_v1/rlhf_candidate_scores_day5_7_full_100_HM.csv
-bye
+put "rlhf_candidate_scores_day5_7_full_100_HM (1)(1).csv" /scratch/xl6775/projects/EgoQA-two-user-reviewer-v1/data_RLHF/reviewer_v1/rlhf_candidate_scores_day5_7_full_100_HM.csv
 ```
 
 这里只上传窄代码集合和单个 CSV；不要上传模型、视频、cache、outputs 或整个 `data_RLHF`。
@@ -74,7 +74,7 @@ bye
 ### 4.1 接收、语法、依赖
 
 ```bash
-cd "${CLEAN_ROOT}"
+cd "${PROJECT_ROOT}"
 git status --short -- training/grpo_v3/experiments/human_preference_reviewer hpc/grpo_v3/human_preference_reviewer
 bash -n hpc/grpo_v3/human_preference_reviewer/v1/common.sh
 bash -n hpc/grpo_v3/human_preference_reviewer/v1/structure_probe.sbatch
@@ -105,6 +105,8 @@ test -s "${MODEL_DIR}/config.json"
 "${PYTHON}" -m unittest discover -s tests/training/grpo_v3/experiments/human_preference_reviewer/v1 -p 'test_*.py' -v
 "${PYTHON}" -m compileall -q training/grpo_v3/experiments/human_preference_reviewer/v1
 ```
+
+从 `${PROJECT_ROOT}` 运行上面的相对 `-s` 路径，不要额外指定 top-level directory。当前 `tests/` 目录不是 Python package，否则会导致 `Start directory is not importable`。
 
 Torch 环境不得跳过 PyTorch-specific tests。
 
@@ -139,7 +141,13 @@ sha256sum "${CSV_PATH}"
 ## 5. Gate 1：Structure Probe
 
 ```bash
-STRUCTURE_JOB_RAW=$(sbatch --parsable hpc/grpo_v3/human_preference_reviewer/v1/structure_probe.sbatch)
+STRUCTURE_JOB_RAW=$(sbatch \
+  --parsable \
+  --export=ALL \
+  --chdir="${PROJECT_ROOT}" \
+  --output="${PROJECT_ROOT}/logs/reviewer-v1-structure-%j.out" \
+  --error="${PROJECT_ROOT}/logs/reviewer-v1-structure-%j.err" \
+  hpc/grpo_v3/human_preference_reviewer/v1/structure_probe.sbatch)
 STRUCTURE_JOB=${STRUCTURE_JOB_RAW%%;*}
 STRUCTURE_DIR=${OUTPUT_ROOT}/structure_${STRUCTURE_JOB}
 printf 'STRUCTURE_JOB=%s\nSTRUCTURE_DIR=%s\n' "${STRUCTURE_JOB}" "${STRUCTURE_DIR}" > "${OUTPUT_ROOT}/structure_submission_${STRUCTURE_JOB}.env"
@@ -149,15 +157,21 @@ echo "STRUCTURE_JOB=${STRUCTURE_JOB}"
 ```bash
 squeue -j "${STRUCTURE_JOB}" -o '%.18i %.24j %.10T %.10M %.10l %R' 2>/dev/null || true
 sacct -j "${STRUCTURE_JOB}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
-tail -n 100 "${CLEAN_ROOT}/logs/reviewer-v1-structure-${STRUCTURE_JOB}.out"
-tail -n 100 "${CLEAN_ROOT}/logs/reviewer-v1-structure-${STRUCTURE_JOB}.err"
+tail -n 100 "${PROJECT_ROOT}/logs/reviewer-v1-structure-${STRUCTURE_JOB}.out"
+tail -n 100 "${PROJECT_ROOT}/logs/reviewer-v1-structure-${STRUCTURE_JOB}.err"
 "${PYTHON}" -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["status"]=="passed"; assert r["shared_stack_path"]=="model.language_model.layers"; assert r["shared_layer_count"]==36; assert r["target_layer_indices"]==[34,35]; assert len(r["lora_targets"])==4; print(json.dumps(r,indent=2))' "${STRUCTURE_DIR}/structure_probe.json"
 ```
 
 ## 6. Gate 2：真实双视频 1-step Smoke
 
 ```bash
-SMOKE_JOB_RAW=$(sbatch --parsable hpc/grpo_v3/human_preference_reviewer/v1/smoke1.sbatch)
+SMOKE_JOB_RAW=$(sbatch \
+  --parsable \
+  --export=ALL \
+  --chdir="${PROJECT_ROOT}" \
+  --output="${PROJECT_ROOT}/logs/reviewer-v1-smoke-%j.out" \
+  --error="${PROJECT_ROOT}/logs/reviewer-v1-smoke-%j.err" \
+  hpc/grpo_v3/human_preference_reviewer/v1/smoke1.sbatch)
 SMOKE_JOB=${SMOKE_JOB_RAW%%;*}
 SMOKE_DIR=${OUTPUT_ROOT}/smoke_${SMOKE_JOB}
 printf 'SMOKE_JOB=%s\nSMOKE_DIR=%s\n' "${SMOKE_JOB}" "${SMOKE_DIR}" > "${OUTPUT_ROOT}/smoke_submission_${SMOKE_JOB}.env"
@@ -176,7 +190,13 @@ Smoke 只证明真实视频 forward/backward、三个 heads、共享 LoRA、冻�
 ## 7. Gate 3：24-step Overfit Probe
 
 ```bash
-OVERFIT_JOB_RAW=$(sbatch --parsable hpc/grpo_v3/human_preference_reviewer/v1/overfit_probe.sbatch)
+OVERFIT_JOB_RAW=$(sbatch \
+  --parsable \
+  --export=ALL \
+  --chdir="${PROJECT_ROOT}" \
+  --output="${PROJECT_ROOT}/logs/reviewer-v1-overfit-%j.out" \
+  --error="${PROJECT_ROOT}/logs/reviewer-v1-overfit-%j.err" \
+  hpc/grpo_v3/human_preference_reviewer/v1/overfit_probe.sbatch)
 OVERFIT_JOB=${OVERFIT_JOB_RAW%%;*}
 OVERFIT_DIR=${OUTPUT_ROOT}/overfit_${OVERFIT_JOB}
 ```
@@ -203,7 +223,13 @@ sacct -j "${OVERFIT_JOB}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
 返回非零就停止，不把 pending 或空标签补入 split。通过后：
 
 ```bash
-TRAIN_JOB_RAW=$(sbatch --parsable hpc/grpo_v3/human_preference_reviewer/v1/train.sbatch)
+TRAIN_JOB_RAW=$(sbatch \
+  --parsable \
+  --export=ALL \
+  --chdir="${PROJECT_ROOT}" \
+  --output="${PROJECT_ROOT}/logs/reviewer-v1-train-%j.out" \
+  --error="${PROJECT_ROOT}/logs/reviewer-v1-train-%j.err" \
+  hpc/grpo_v3/human_preference_reviewer/v1/train.sbatch)
 TRAIN_JOB=${TRAIN_JOB_RAW%%;*}
 TRAIN_DIR=${OUTPUT_ROOT}/train_${TRAIN_JOB}
 printf 'TRAIN_JOB=%s\nTRAIN_DIR=%s\n' "${TRAIN_JOB}" "${TRAIN_DIR}" > "${OUTPUT_ROOT}/train_submission_${TRAIN_JOB}.env"
@@ -219,7 +245,13 @@ CHECKPOINT_DIR=${TRAIN_DIR}/checkpoint
 ## 9. Validation 与 Locked Test
 
 ```bash
-VALID_JOB_RAW=$(sbatch --parsable --export=ALL,CHECKPOINT_DIR="${CHECKPOINT_DIR}",EVAL_SPLIT=validation hpc/grpo_v3/human_preference_reviewer/v1/evaluate.sbatch)
+VALID_JOB_RAW=$(sbatch \
+  --parsable \
+  --export=ALL,CHECKPOINT_DIR="${CHECKPOINT_DIR}",EVAL_SPLIT=validation \
+  --chdir="${PROJECT_ROOT}" \
+  --output="${PROJECT_ROOT}/logs/reviewer-v1-eval-%j.out" \
+  --error="${PROJECT_ROOT}/logs/reviewer-v1-eval-%j.err" \
+  hpc/grpo_v3/human_preference_reviewer/v1/evaluate.sbatch)
 VALID_JOB=${VALID_JOB_RAW%%;*}
 VALID_DIR=${OUTPUT_ROOT}/evaluate_${VALID_JOB}
 sacct -j "${VALID_JOB}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
@@ -229,7 +261,13 @@ sacct -j "${VALID_JOB}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
 checkpoint 选择完成后，Locked Test 只运行一次：
 
 ```bash
-TEST_JOB_RAW=$(sbatch --parsable --export=ALL,CHECKPOINT_DIR="${CHECKPOINT_DIR}",EVAL_SPLIT=locked_test hpc/grpo_v3/human_preference_reviewer/v1/evaluate.sbatch)
+TEST_JOB_RAW=$(sbatch \
+  --parsable \
+  --export=ALL,CHECKPOINT_DIR="${CHECKPOINT_DIR}",EVAL_SPLIT=locked_test \
+  --chdir="${PROJECT_ROOT}" \
+  --output="${PROJECT_ROOT}/logs/reviewer-v1-eval-%j.out" \
+  --error="${PROJECT_ROOT}/logs/reviewer-v1-eval-%j.err" \
+  hpc/grpo_v3/human_preference_reviewer/v1/evaluate.sbatch)
 TEST_JOB=${TEST_JOB_RAW%%;*}
 TEST_DIR=${OUTPUT_ROOT}/evaluate_${TEST_JOB}
 ```
@@ -248,8 +286,8 @@ DIAG_DIR=${OUTPUT_ROOT}/diagnostics/${MODE}_${JOB_ID}
 mkdir -p "${DIAG_DIR}"
 sacct -j "${JOB_ID}" -o JobID,JobName%30,State,ExitCode,Elapsed,Start,End,MaxRSS > "${DIAG_DIR}/sacct.txt" 2>&1 || true
 scontrol show job -dd "${JOB_ID}" > "${DIAG_DIR}/scontrol.txt" 2>&1 || true
-cp -f "${CLEAN_ROOT}/logs/"*"${JOB_ID}"*.out "${DIAG_DIR}/" 2>/dev/null || true
-cp -f "${CLEAN_ROOT}/logs/"*"${JOB_ID}"*.err "${DIAG_DIR}/" 2>/dev/null || true
+cp -f "${PROJECT_ROOT}/logs/"*"${JOB_ID}"*.out "${DIAG_DIR}/" 2>/dev/null || true
+cp -f "${PROJECT_ROOT}/logs/"*"${JOB_ID}"*.err "${DIAG_DIR}/" 2>/dev/null || true
 cp -f "${JOB_DIR}/storage_preflight.json" "${DIAG_DIR}/" 2>/dev/null || true
 cp -f "${JOB_DIR}/training_result.json" "${DIAG_DIR}/" 2>/dev/null || true
 cp -f "${JOB_DIR}/evaluation_result.json" "${DIAG_DIR}/" 2>/dev/null || true

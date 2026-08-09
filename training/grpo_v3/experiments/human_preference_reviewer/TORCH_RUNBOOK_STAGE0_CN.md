@@ -109,6 +109,8 @@ put "rlhf_candidate_scores_day5_7_full_100_HM (1)(1).csv" rlhf_candidate_scores_
 ## 3. 零 GPU Gate
 
 ```bash
+cd "${PROJECT_ROOT}"
+
 "${PYTHON}" -m training.grpo_v3.experiments.human_preference_reviewer.v1.audit annotation-csv \
   --csv "${CSV_PATH}" --output "${DATA_DIR}/annotation_audit_stage0.json" \
   --split-output "${DATA_DIR}/split_4_1_1.json" \
@@ -124,12 +126,20 @@ bash -n hpc/grpo_v3/human_preference_reviewer/stage0/smoke1.sbatch
 bash -n hpc/grpo_v3/human_preference_reviewer/stage0/overfit_probe.sbatch
 ```
 
+`unittest discover` 必须从 `${PROJECT_ROOT}` 使用上面的相对 `-s` 路径运行。不要额外指定 top-level directory：当前 `tests/` 目录不是 Python package，否则会触发 `Start directory is not importable`。
+
 必须确认 `annotation_audit_stage0.json`、`split_4_1_1.json`、`media_map.json` 存在且非空。`split_4_1_1.json` 的 train label support 必须覆盖 Evidence Quality 的 1、2、3 三个等级。
 
 ## 4. Structure Gate
 
 ```bash
-JOB_RAW=$(sbatch --parsable hpc/grpo_v3/human_preference_reviewer/stage0/structure_probe.sbatch)
+JOB_RAW=$(sbatch \
+  --parsable \
+  --export=ALL \
+  --chdir="${PROJECT_ROOT}" \
+  --output="${PROJECT_ROOT}/logs/reviewer-s0-structure-%j.out" \
+  --error="${PROJECT_ROOT}/logs/reviewer-s0-structure-%j.err" \
+  hpc/grpo_v3/human_preference_reviewer/stage0/structure_probe.sbatch)
 JOB_ID=${JOB_RAW%%;*}
 sacct -j "${JOB_ID}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
 STRUCTURE_DIR=${OUTPUT_ROOT}/stage0_structure_${JOB_ID}
@@ -141,7 +151,13 @@ test -s "${STRUCTURE_DIR}/structure_probe.json"
 ## 5. 单步 Smoke Gate
 
 ```bash
-JOB_RAW=$(sbatch --parsable hpc/grpo_v3/human_preference_reviewer/stage0/smoke1.sbatch)
+JOB_RAW=$(sbatch \
+  --parsable \
+  --export=ALL \
+  --chdir="${PROJECT_ROOT}" \
+  --output="${PROJECT_ROOT}/logs/reviewer-s0-smoke-%j.out" \
+  --error="${PROJECT_ROOT}/logs/reviewer-s0-smoke-%j.err" \
+  hpc/grpo_v3/human_preference_reviewer/stage0/smoke1.sbatch)
 JOB_ID=${JOB_RAW%%;*}
 sacct -j "${JOB_ID}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
 SMOKE_DIR=${OUTPUT_ROOT}/stage0_smoke_${JOB_ID}
@@ -156,7 +172,13 @@ test -s "${SMOKE_DIR}/storage_preflight.json"
 这个 Gate 在同一固定 probe set 上比较训练前和训练后结果，只证明单 head 可被训练，不代表 validation、locked test 或 unseen evidence 泛化能力。
 
 ```bash
-JOB_RAW=$(sbatch --parsable hpc/grpo_v3/human_preference_reviewer/stage0/overfit_probe.sbatch)
+JOB_RAW=$(sbatch \
+  --parsable \
+  --export=ALL \
+  --chdir="${PROJECT_ROOT}" \
+  --output="${PROJECT_ROOT}/logs/reviewer-s0-overfit-%j.out" \
+  --error="${PROJECT_ROOT}/logs/reviewer-s0-overfit-%j.err" \
+  hpc/grpo_v3/human_preference_reviewer/stage0/overfit_probe.sbatch)
 JOB_ID=${JOB_RAW%%;*}
 sacct -j "${JOB_ID}" -o JobID,JobName%30,State,ExitCode,Elapsed,MaxRSS
 OVERFIT_DIR=${OUTPUT_ROOT}/stage0_overfit_${JOB_ID}
