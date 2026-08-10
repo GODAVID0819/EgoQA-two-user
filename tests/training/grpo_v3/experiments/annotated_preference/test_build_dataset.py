@@ -327,6 +327,49 @@ class BuildDatasetTests(unittest.TestCase):
             self.assertEqual(expected, {name: (output_dir / name).read_bytes() for name in OUTPUT_FILENAMES})
             self.assertFalse(any(path.name.startswith(".annotated_preference-") for path in output_dir.iterdir()))
 
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "output"
+            output_dir.mkdir()
+            failed_name = OUTPUT_FILENAMES[2]
+            for number, name in enumerate(OUTPUT_FILENAMES):
+                (output_dir / name).write_bytes(f"sentinel-{number}".encode())
+            original_replace = Path.replace
+            publish_failed = False
+            restore_failed = False
+
+            def fail_publish_and_restore(source: Path, target: str | Path) -> Path:
+                nonlocal publish_failed, restore_failed
+                destination = Path(target)
+                if (
+                    source.parent.name.startswith(".annotated_preference-staging-")
+                    and destination.parent == output_dir
+                    and destination.name == failed_name
+                    and not publish_failed
+                ):
+                    publish_failed = True
+                    raise OSError("injected publish failure")
+                if (
+                    source.parent.name.startswith(".annotated_preference-backup-")
+                    and destination.parent == output_dir
+                    and destination.name == failed_name
+                    and not restore_failed
+                ):
+                    restore_failed = True
+                    raise OSError("injected restore failure")
+                return original_replace(source, target)
+
+            with patch.object(Path, "replace", fail_publish_and_restore):
+                with self.assertRaisesRegex(RuntimeError, "rollback was incomplete") as raised:
+                    publish_dataset(self.csv_path, self.split_path, self.media_map_path, output_dir)
+
+            self.assertTrue(publish_failed)
+            self.assertTrue(restore_failed)
+            backups = list(output_dir.glob(".annotated_preference-backup-*"))
+            self.assertEqual(1, len(backups))
+            backup = backups[0]
+            self.assertIn(str(backup.resolve()), str(raised.exception))
+            self.assertEqual(b"sentinel-2", (backup / failed_name).read_bytes())
+
 
 if __name__ == "__main__":
     unittest.main()

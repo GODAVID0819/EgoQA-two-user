@@ -378,6 +378,7 @@ def _publish_staging(staging: Path, output_dir: Path) -> None:
     backup = Path(tempfile.mkdtemp(prefix=".annotated_preference-backup-", dir=output_dir))
     backed_up: list[str] = []
     published: list[str] = []
+    cleanup_backup = False
     try:
         for name in OUTPUT_FILENAMES:
             target = output_dir / name
@@ -387,7 +388,8 @@ def _publish_staging(staging: Path, output_dir: Path) -> None:
         for name in OUTPUT_FILENAMES:
             (staging / name).replace(output_dir / name)
             published.append(name)
-    except BaseException:
+        cleanup_backup = True
+    except BaseException as publish_error:
         rollback_errors: list[Exception] = []
         for name in reversed(published):
             target = output_dir / name
@@ -407,10 +409,15 @@ def _publish_staging(staging: Path, output_dir: Path) -> None:
             except Exception as error:  # pragma: no cover - exceptional filesystem damage
                 rollback_errors.append(error)
         if rollback_errors:
-            raise RuntimeError(f"dataset publish failed and rollback was incomplete: {rollback_errors}")
+            raise RuntimeError(
+                "dataset publish failed and rollback was incomplete; "
+                f"backup preserved at {backup.resolve()}: {rollback_errors}"
+            ) from publish_error
+        cleanup_backup = True
         raise
     finally:
-        shutil.rmtree(backup, ignore_errors=True)
+        if cleanup_backup:
+            shutil.rmtree(backup, ignore_errors=True)
 
 
 def publish_dataset(
