@@ -60,12 +60,10 @@ def dominates(left: ScoreVector, right: ScoreVector) -> bool:
 
 def compact_fingerprint(evidence_id: str, candidate: CandidateRecord) -> str:
     """基于证据与模型可见内容生成稳定的 SHA-256 内容指纹。"""
-    payload = {
-        "evidence_id": evidence_id,
-        "model_features": candidate.model_features(),
-    }
+    payload = {"evidence_id": evidence_id, **candidate.model_features()}
     encoded = json.dumps(
         payload,
+        ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,

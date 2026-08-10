@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
+import json
 import unittest
 
 from training.grpo_v3.experiments.human_preference_reviewer.v1.data import CandidateRecord
@@ -65,6 +67,28 @@ class FingerprintTests(unittest.TestCase):
             compact_fingerprint("evidence-1", same_features_different_keyword_order),
         )
         self.assertNotEqual(expected, compact_fingerprint("evidence-2", original))
+
+    def test_fingerprint_matches_flat_utf8_canonical_json(self) -> None:
+        non_ascii = candidate(
+            "candidate-zh",
+            evidence_id="证据-一",
+            question="谁拿起了杯子？",
+            options=("甲", "乙", "丙"),
+            correct="乙",
+            answer="乙正在拿起杯子。",
+        )
+        payload = {"evidence_id": "证据-一", **non_ascii.model_features()}
+        expected = hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+
+        self.assertEqual(expected, compact_fingerprint("证据-一", non_ascii))
 
 
 class BuildParetoPairsTests(unittest.TestCase):
