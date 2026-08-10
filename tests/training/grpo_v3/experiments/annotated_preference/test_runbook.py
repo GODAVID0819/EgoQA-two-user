@@ -53,3 +53,28 @@ class TorchRunbookTest(unittest.TestCase):
             self.assertIn(item, text)
         for forbidden in ("latest_", "exit", "logout", "exec", "|| exit 1", "set -e", "set -euo pipefail"):
             self.assertNotIn(forbidden, text)
+
+    def test_runbook_contains_copyable_git_sftp_and_data_bootstrap(self) -> None:
+        text = RUNBOOK.read_text(encoding="utf-8")
+        required = (
+            "git push -u origin $Branch",
+            "git -C \"${SOURCE_ROOT}\" fetch origin \"${BRANCH}:refs/remotes/origin/${BRANCH}\"",
+            "worktree add -b \"${BRANCH}\" \"${PROJECT_ROOT}\" \"origin/${BRANCH}\"",
+            "sftp xl6775@greene.hpc.nyu.edu",
+            "lcd C:/Users/20661/Documents/xwechat_files/wxid_i096w25uhusk22_e748/msg/file/2026-08",
+            "cd /scratch/xl6775/projects/EgoQA-two-user-annotated-pareto-dpo/data_RLHF/annotated_preference",
+            'put "rlhf_candidate_scores_merged_70_packets.csv" rlhf_candidate_scores_merged_70_packets.csv',
+            "git status --short --branch",
+            "bash -n hpc/grpo_v3/annotated_preference/gate0_data.sbatch",
+            "--split-output \"${SPLIT_PATH}\"",
+            "--train-evidence-count 60",
+            "--validation-evidence-count 10",
+            "--locked-test-evidence-count 0",
+            "prepare_media.sbatch",
+            'assert len(mapping) == 140',
+            "ANNOTATION_GATE_PASSED rows=420 evidence=70 split=60/10/0",
+            "MEDIA_MAP_PASSED count=140",
+            "DPO_DATA_PASSED",
+        )
+        for item in required:
+            self.assertIn(item, text)
