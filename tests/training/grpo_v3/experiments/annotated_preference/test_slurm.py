@@ -88,6 +88,7 @@ class AnnotatedPreferenceSlurmTests(unittest.TestCase):
             "--media-map \"${MEDIA_MAP}\"",
         ):
             self.assertIn(token, gate0)
+        self.assertNotIn('${OUTDIR}/dataset', gate0)
         for output in (
             "train_dpo.jsonl", "validation_dpo.jsonl", "train_pair_index.jsonl",
             "validation_pair_index.jsonl", "overfit_4_dpo.jsonl",

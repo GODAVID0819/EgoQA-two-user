@@ -12,8 +12,6 @@ MODE=gate0
 export MODE
 PROJECT_ROOT=${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-annotated-pareto-dpo}
 source "${PROJECT_ROOT}/hpc/grpo_v3/annotated_preference/common.sh"
-DPO_DATA_DIR=${OUTDIR}/dataset
-export DPO_DATA_DIR
 
 echo "SLURM_JOB_ID=${SLURM_JOB_ID} OUTDIR=${OUTDIR}"
 "${PYTHON}" -m unittest discover \
