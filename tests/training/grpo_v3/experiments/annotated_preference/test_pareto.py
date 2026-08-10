@@ -92,6 +92,33 @@ class FingerprintTests(unittest.TestCase):
 
 
 class BuildParetoPairsTests(unittest.TestCase):
+    def test_rejects_empty_or_whitespace_candidate_id(self) -> None:
+        for invalid_id in ("", "   "):
+            with self.subTest(candidate_id=repr(invalid_id)):
+                invalid = candidate(invalid_id)
+                with self.assertRaisesRegex(ValueError, "evidence-1.*candidate_id"):
+                    build_pareto_pairs(evidence(invalid))
+
+    def test_rejects_duplicate_candidate_id_with_different_content(self) -> None:
+        first = candidate("candidate-a", question="What did the speaker do?")
+        second = candidate("candidate-a", question="What did the provider do?")
+
+        with self.assertRaisesRegex(ValueError, "evidence-1.*candidate-a"):
+            build_pareto_pairs(evidence(first, second))
+
+    def test_rejects_conflicting_duplicate_identity_in_either_input_order(self) -> None:
+        high_score = candidate(
+            "candidate-a", qa_formality=3, evidence_quality=3, answerability=3
+        )
+        low_score = replace(
+            high_score, qa_formality=1, evidence_quality=1, answerability=1
+        )
+
+        for candidates in ((high_score, low_score), (low_score, high_score)):
+            with self.subTest(order=tuple(item.qa_formality for item in candidates)):
+                with self.assertRaisesRegex(ValueError, "evidence-1.*candidate-a"):
+                    build_pareto_pairs(evidence(*candidates))
+
     def test_keeps_smallest_candidate_id_for_duplicate_content(self) -> None:
         duplicate_large = candidate(
             "candidate-z", qa_formality=1, evidence_quality=1, answerability=1

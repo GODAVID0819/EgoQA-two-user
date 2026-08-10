@@ -73,6 +73,19 @@ def compact_fingerprint(evidence_id: str, candidate: CandidateRecord) -> str:
 
 def build_pareto_pairs(evidence: EvidenceRecord) -> tuple[tuple[PreferencePair, ...], PairAudit]:
     """在一个 evidence 内去重后，提取可比较的 Pareto 偏好对。"""
+    seen_candidate_ids: set[str] = set()
+    for candidate in evidence.candidates:
+        candidate_id = candidate.candidate_id
+        if not isinstance(candidate_id, str) or not candidate_id.strip():
+            raise ValueError(
+                f"evidence {evidence.evidence_id} candidate_id must be a non-empty string"
+            )
+        if candidate_id in seen_candidate_ids:
+            raise ValueError(
+                f"evidence {evidence.evidence_id} has duplicate candidate_id: {candidate_id}"
+            )
+        seen_candidate_ids.add(candidate_id)
+
     by_fingerprint: dict[str, CandidateRecord] = {}
     duplicate_candidate_count = 0
 
