@@ -15,10 +15,12 @@ _COMPACT_FIELDS = ("question", "options", "correct", "answer")
 COMPACT_GENERATION_PROMPT = """<video>
 <video>
 The first video is the Speaker and the second video is the Provider. They are synchronized complete dual views of the same interaction.
+Write a natural first-person or shared-memory question from the Speaker/asker perspective.
 Generate one grounded multiple-choice QA based jointly on both videos.
 Return only one JSON object, with no Markdown or explanation, in exactly this field order:
 {"question":"...","options":["...","...","...","...","..."],"correct":"A","answer":"..."}
 The options must contain exactly five non-empty, mutually exclusive choices of the same semantic type.
+The combined visual evidence must make exactly one option semantically correct.
 correct must be exactly one of A, B, C, D, or E.
 answer must exactly equal the text of the option selected by correct.
 The question must not contain names, timestamps, or meta-language such as dataset, video, or frame."""

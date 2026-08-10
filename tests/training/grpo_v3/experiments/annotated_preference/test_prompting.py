@@ -15,6 +15,20 @@ from training.grpo_v3.experiments.annotated_preference.prompting import (
 )
 from tests.training.grpo_v3.experiments.annotated_preference.fixtures import candidate
 
+_EXPECTED_COMPACT_GENERATION_PROMPT = """<video>
+<video>
+The first video is the Speaker and the second video is the Provider. They are synchronized complete dual views of the same interaction.
+Write a natural first-person or shared-memory question from the Speaker/asker perspective.
+Generate one grounded multiple-choice QA based jointly on both videos.
+Return only one JSON object, with no Markdown or explanation, in exactly this field order:
+{"question":"...","options":["...","...","...","...","..."],"correct":"A","answer":"..."}
+The options must contain exactly five non-empty, mutually exclusive choices of the same semantic type.
+The combined visual evidence must make exactly one option semantically correct.
+correct must be exactly one of A, B, C, D, or E.
+answer must exactly equal the text of the option selected by correct.
+The question must not contain names, timestamps, or meta-language such as dataset, video, or frame."""
+_EXPECTED_PROMPT_SHA256 = "918552ca24aed8c7957b72c3fe569c1398da8e3de82b52e9a56c6e881f6a0ade"
+
 
 class CompactCompletionSerializationTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -109,29 +123,29 @@ class CompactCompletionSerializationTests(unittest.TestCase):
 
 class CompactGenerationPromptTests(unittest.TestCase):
     def test_prompt_matches_full_static_golden_contract(self) -> None:
-        expected = """<video>
-<video>
-The first video is the Speaker and the second video is the Provider. They are synchronized complete dual views of the same interaction.
-Generate one grounded multiple-choice QA based jointly on both videos.
-Return only one JSON object, with no Markdown or explanation, in exactly this field order:
-{"question":"...","options":["...","...","...","...","..."],"correct":"A","answer":"..."}
-The options must contain exactly five non-empty, mutually exclusive choices of the same semantic type.
-correct must be exactly one of A, B, C, D, or E.
-answer must exactly equal the text of the option selected by correct.
-The question must not contain names, timestamps, or meta-language such as dataset, video, or frame."""
+        self.assertEqual(_EXPECTED_COMPACT_GENERATION_PROMPT, COMPACT_GENERATION_PROMPT)
+        self.assertNotIn('"evidence"', COMPACT_GENERATION_PROMPT)
 
-        self.assertEqual(expected, COMPACT_GENERATION_PROMPT)
-        self.assertNotIn("evidence", COMPACT_GENERATION_PROMPT.lower())
+    def test_prompt_requires_speaker_perspective_and_unique_semantic_answer(self) -> None:
+        self.assertIn(
+            "Write a natural first-person or shared-memory question from the Speaker/asker perspective.",
+            COMPACT_GENERATION_PROMPT,
+        )
+        self.assertIn(
+            "The combined visual evidence must make exactly one option semantically correct.",
+            COMPACT_GENERATION_PROMPT,
+        )
 
     def test_build_and_hash_are_constant_and_utf8_stable(self) -> None:
-        expected_hash = hashlib.sha256(
-            COMPACT_GENERATION_PROMPT.encode("utf-8")
+        independently_computed_hash = hashlib.sha256(
+            _EXPECTED_COMPACT_GENERATION_PROMPT.encode("utf-8")
         ).hexdigest()
 
         self.assertEqual("compact_qa_v1", COMPACT_QA_CONTRACT)
         self.assertEqual("annotated_pareto_compact_qa_v1", PROMPT_REVISION)
         self.assertIs(COMPACT_GENERATION_PROMPT, build_compact_generation_prompt())
-        self.assertEqual(expected_hash, prompt_sha256())
+        self.assertEqual(_EXPECTED_PROMPT_SHA256, independently_computed_hash)
+        self.assertEqual(_EXPECTED_PROMPT_SHA256, prompt_sha256())
         self.assertEqual(prompt_sha256(), prompt_sha256())
 
 
