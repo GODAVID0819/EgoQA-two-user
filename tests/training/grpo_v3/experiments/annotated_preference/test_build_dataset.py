@@ -5,9 +5,11 @@ import hashlib
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+import training.grpo_v3.experiments.annotated_preference.build_dataset as build_dataset_module
 from training.grpo_v3.experiments.annotated_preference.build_dataset import (
     OUTPUT_FILENAMES,
     build_dpo_row,
@@ -208,7 +210,10 @@ class BuildDatasetTests(unittest.TestCase):
         self.assertEqual(10, outputs.audit["splits"]["validation"]["evidence_count"])
 
     def test_rejects_invalid_contracts(self) -> None:
-        cases = ("csv_sha", "reserve", "missing_media", "relative_path", "same_media", "role")
+        cases = (
+            "csv_sha", "reserve", "missing_media", "relative_path", "same_media", "role",
+            "audit_cancel",
+        )
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -239,8 +244,25 @@ class BuildDatasetTests(unittest.TestCase):
                     manifest["csv_sha256"] = sha256_file(csv_path)
                 split_path.write_text(json.dumps(manifest), encoding="utf-8")
                 media_map_path.write_text(json.dumps(media_map), encoding="utf-8")
-                with self.assertRaises((ValueError, FileNotFoundError)):
-                    build_outputs(csv_path, split_path, media_map_path)
+                if case == "audit_cancel":
+                    original = build_dataset_module.build_pareto_pairs
+
+                    def corrupt_pair_audit(evidence: EvidenceRecord):
+                        pairs, audit = original(evidence)
+                        if evidence.evidence_id == "e059":
+                            audit = replace(audit, total_combinations=audit.total_combinations + 1)
+                        elif evidence.evidence_id == "e058":
+                            audit = replace(audit, total_combinations=audit.total_combinations - 1)
+                        return pairs, audit
+
+                    with patch.object(
+                        build_dataset_module, "build_pareto_pairs", corrupt_pair_audit
+                    ):
+                        with self.assertRaisesRegex(ValueError, "e05[89]"):
+                            build_outputs(csv_path, split_path, media_map_path)
+                else:
+                    with self.assertRaises((ValueError, FileNotFoundError)):
+                        build_outputs(csv_path, split_path, media_map_path)
 
     def test_publish_writes_manifest_and_exact_training_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

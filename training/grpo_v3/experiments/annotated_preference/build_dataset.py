@@ -199,6 +199,14 @@ def _build_split(
     for evidence_id in evidence_ids:
         evidence = evidence_by_id[evidence_id]
         pairs, pair_audit = build_pareto_pairs(evidence)
+        if pair_audit.total_combinations != (
+            pair_audit.dominance_pair_count
+            + pair_audit.equal_vector_pair_count
+            + pair_audit.incomparable_pair_count
+        ):
+            raise ValueError(f"evidence {evidence_id} Pareto audit combinations do not conserve")
+        if len(pairs) != pair_audit.dominance_pair_count:
+            raise ValueError(f"evidence {evidence_id} Pareto pair count does not match audit")
         pair_audits.append(pair_audit)
         for pair in pairs:
             _pair_is_valid(pair, evidence)
