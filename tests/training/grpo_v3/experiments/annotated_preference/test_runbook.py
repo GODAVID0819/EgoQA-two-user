@@ -33,4 +33,3 @@ class TorchRunbookTest(unittest.TestCase):
             self.assertIn(item, text)
         for forbidden in ("latest_", "exit", "logout", "exec", "|| exit 1", "set -e", "set -euo pipefail"):
             self.assertNotIn(forbidden, text)
-
