@@ -47,7 +47,7 @@
 
 ## 3. QA completion 序列化
 
-每个 candidate 必须被序列化成与生产 generator 兼容的确定性 JSON completion。规范字段为：
+每个 candidate 必须被序列化成确定性的紧凑 QA JSON completion。规范字段为：
 
 ```json
 {
@@ -59,6 +59,8 @@
 ```
 
 序列化必须使用 UTF-8、固定字段顺序、禁止 NaN，并保持 candidate 原始语义。内容指纹由 `evidence_id` 与规范化 completion JSON 共同计算；不能只按问题文本去重。
+
+该四字段 completion 是本实验的显式 `compact_qa_v1` 输出合同，不得宣称为当前生产扩展 schema 的直接替换。现有生产 schema 还包含 `question_type`、`required_users`、证据与 rationale 等字段，而合并 70-evidence CSV 不完整保存这些字段。禁止从问题文本猜测或为缺失字段补造监督标签。若后续要把 DPO adapter 接回现有 cross-view GRPO，必须另设兼容 Gate：要么取得全部候选的完整原始生成记录，要么将生产推理与验证入口显式切换到 `compact_qa_v1`。
 
 若同一 evidence 内多个不同 `candidate_id` 具有相同 completion 指纹：
 
@@ -100,14 +102,16 @@ rejected = j
 
 ## 5. DPO 数据记录
 
-每条输出记录至少包含：
+训练 JSONL 遵循 ms-swift DPO 标准格式：chosen completion 是 `messages` 的最后一条 assistant 消息，rejected completion 存入 `rejected_response`。因为两侧使用相同双视频，不提供 `rejected_videos`。每条训练记录至少包含：
 
 ```json
 {
-  "messages": [{"role": "user", "content": "<video><video>\n..."}],
+  "messages": [
+    {"role": "user", "content": "<video><video>\n..."},
+    {"role": "assistant", "content": "{chosen compact_qa_v1 JSON}"}
+  ],
   "videos": ["speaker.mp4", "provider.mp4"],
-  "chosen": "{...}",
-  "rejected": "{...}",
+  "rejected_response": "{rejected compact_qa_v1 JSON}",
   "evidence_id": "...",
   "chosen_candidate_id": "...::candidate_03",
   "rejected_candidate_id": "...::candidate_06",
@@ -120,6 +124,8 @@ rejected = j
 双视频顺序必须保持现有角色合同：第一条为 A/Speaker，第二条为 B/Provider。训练与评估使用完整同步原视频，不用 pruned video、cluster member frames 或 centroid frames。
 
 Generator prompt 必须来自一个显式、版本化的 prompt builder。若 CSV 不含原始 `question_type` 或 `generation_mode`，不得猜测逐行历史 prompt；首版统一使用现有生产双视频五选一 QA 生成合同，并在数据清单中记录 prompt revision 与 SHA-256。
+
+这里的“现有生产双视频五选一 QA 生成合同”仅指角色、视觉 groundedness、五选项、唯一正确答案、第一人称自然问题等行为约束；输出字段必须明确改为 `compact_qa_v1`，不能继续展示扩展 schema 后再用四字段答案训练。
 
 ## 6. 训练合同
 
