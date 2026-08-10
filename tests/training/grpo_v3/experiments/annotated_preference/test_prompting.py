@@ -100,30 +100,28 @@ class CompactCompletionSerializationTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertNotEqual(original, serialize_compact_completion(changed))
 
+    def test_serialization_rejects_nan_content(self) -> None:
+        malformed = replace(self.record, question=float("nan"))
+
+        with self.assertRaises(ValueError):
+            serialize_compact_completion(malformed)
+
 
 class CompactGenerationPromptTests(unittest.TestCase):
-    def test_prompt_has_exact_dual_video_and_compact_qa_contract(self) -> None:
-        prompt = COMPACT_GENERATION_PROMPT
+    def test_prompt_matches_full_static_golden_contract(self) -> None:
+        expected = """<video>
+<video>
+The first video is the Speaker and the second video is the Provider. They are synchronized complete dual views of the same interaction.
+Generate one grounded multiple-choice QA based jointly on both videos.
+Return only one JSON object, with no Markdown or explanation, in exactly this field order:
+{"question":"...","options":["...","...","...","...","..."],"correct":"A","answer":"..."}
+The options must contain exactly five non-empty, mutually exclusive choices of the same semantic type.
+correct must be exactly one of A, B, C, D, or E.
+answer must exactly equal the text of the option selected by correct.
+The question must not contain names, timestamps, or meta-language such as dataset, video, or frame."""
 
-        self.assertEqual(2, prompt.count("<video>"))
-        self.assertTrue(prompt.startswith("<video>\n<video>"))
-        self.assertIn("first video is the Speaker", prompt)
-        self.assertIn("second video is the Provider", prompt)
-        self.assertIn("same interaction", prompt)
-        self.assertIn("synchronized complete dual views", prompt)
-        self.assertIn("grounded multiple-choice QA", prompt)
-        self.assertIn("Return only one JSON object", prompt)
-        self.assertIn(
-            '{"question":"...","options":["...","...","...","...","..."],"correct":"A","answer":"..."}',
-            prompt,
-        )
-        self.assertIn("exactly five non-empty", prompt)
-        self.assertIn("mutually exclusive", prompt)
-        self.assertIn("same semantic type", prompt)
-        self.assertIn("correct must be exactly one of A, B, C, D, or E", prompt)
-        self.assertIn("answer must exactly equal", prompt)
-        self.assertIn("must not contain names, timestamps, or meta-language", prompt)
-        self.assertNotIn("evidence", prompt.lower())
+        self.assertEqual(expected, COMPACT_GENERATION_PROMPT)
+        self.assertNotIn("evidence", COMPACT_GENERATION_PROMPT.lower())
 
     def test_build_and_hash_are_constant_and_utf8_stable(self) -> None:
         expected_hash = hashlib.sha256(
