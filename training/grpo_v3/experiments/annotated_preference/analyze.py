@@ -158,6 +158,24 @@ def analyze_paths(
                 reasons.append("validation requires eval_pair_count")
             elif eval_pair_count != counts["validation_pair_count"]:
                 reasons.append("validation eval_pair_count does not match dataset manifest")
+            provenance = state.get("validation_provenance")
+            if not isinstance(provenance, dict):
+                reasons.append("validation requires Gate 4 evaluation provenance")
+            else:
+                if provenance.get("evaluation_origin") != "gate4_epoch_end":
+                    reasons.append("validation must reuse the Gate 4 epoch-end evaluation")
+                if provenance.get("gate5_optimizer_steps") != 0:
+                    reasons.append("validation Gate 5 must perform zero optimizer steps")
+                source_job_id = provenance.get("source_train_job_id")
+                if not isinstance(source_job_id, str) or not source_job_id.isdigit():
+                    reasons.append("validation requires a numeric source train JobID")
+                source_sha = provenance.get("source_trainer_state_sha256")
+                if (
+                    not isinstance(source_sha, str)
+                    or len(source_sha) != 64
+                    or any(character not in "0123456789abcdef" for character in source_sha)
+                ):
+                    reasons.append("validation requires the source trainer-state SHA256")
     if reasons:
         result["status"] = "failed"
     return result

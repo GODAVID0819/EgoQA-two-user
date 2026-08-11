@@ -17,6 +17,12 @@ def _write_json(path: Path, payload: object) -> Path:
 def _valid_inputs(root: Path) -> tuple[Path, Path, Path]:
     trainer_state = _write_json(root / "trainer_state.json", {
         "global_step": 3,
+        "validation_provenance": {
+            "evaluation_origin": "gate4_epoch_end",
+            "gate5_optimizer_steps": 0,
+            "source_train_job_id": "12345",
+            "source_trainer_state_sha256": "a" * 64,
+        },
         "log_history": [
             {"loss": 1.2, "grad_norm": 0.7, "rewards/margins": 0.1,
              "rewards/accuracies": 0.6, "rewards/logps/chosen": -2.0,
@@ -93,6 +99,18 @@ class AnalyzeTests(unittest.TestCase):
             ])
             self.assertEqual(0, code)
             self.assertEqual("passed", json.loads(output.read_text(encoding="utf-8"))["status"])
+
+    def test_validation_rejects_missing_gate4_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            trainer_state, audit, manifest = _valid_inputs(Path(directory))
+            state = json.loads(trainer_state.read_text(encoding="utf-8"))
+            state.pop("validation_provenance")
+            _write_json(trainer_state, state)
+
+            result = analyze_paths(trainer_state, audit, manifest, mode="validation")
+
+            self.assertEqual("failed", result["status"])
+            self.assertIn("validation requires Gate 4 evaluation provenance", result["reasons"])
 
 
 if __name__ == "__main__":

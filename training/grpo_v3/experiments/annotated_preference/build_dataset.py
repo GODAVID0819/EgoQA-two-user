@@ -42,6 +42,8 @@ OUTPUT_FILENAMES = (
     "pareto_audit.json",
     "dataset_manifest.json",
 )
+_LEGACY_ROLE_PAIR = ("a / speaker", "b / provider")
+_ROLE_PLACEHOLDERS = frozenset((*_LEGACY_ROLE_PAIR, "speaker", "provider"))
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,28 @@ def _validated_local_media_path(value: object, *, source: str) -> str:
     return str(path.resolve())
 
 
+def _validate_ordered_participants(evidence: EvidenceRecord) -> None:
+    """Validate the two named users; CSV column order carries their roles."""
+    speaker = evidence.video_a_user.strip() if isinstance(evidence.video_a_user, str) else ""
+    provider = evidence.video_b_user.strip() if isinstance(evidence.video_b_user, str) else ""
+    if not speaker or not provider:
+        raise ValueError(
+            f"evidence {evidence.evidence_id} speaker/provider user names must be non-empty"
+        )
+    if speaker == provider:
+        raise ValueError(
+            f"evidence {evidence.evidence_id} speaker/provider users must differ"
+        )
+    normalized = (speaker.casefold(), provider.casefold())
+    if normalized != _LEGACY_ROLE_PAIR and any(
+        value in _ROLE_PLACEHOLDERS for value in normalized
+    ):
+        raise ValueError(
+            f"evidence {evidence.evidence_id} video_1_user/video_2_user must be participant names "
+            "or the complete legacy A / Speaker then B / Provider pair"
+        )
+
+
 def _pair_is_valid(pair: PreferencePair, evidence: EvidenceRecord) -> None:
     if pair.evidence_id != evidence.evidence_id:
         raise ValueError("Pareto pair evidence_id does not match its evidence")
@@ -99,10 +123,7 @@ def build_dpo_row(
 ) -> dict[str, Any]:
     """生成一个只含 ms-swift 官方 DPO 字段的训练行。"""
     _pair_is_valid(pair, evidence)
-    if evidence.video_a_user != "A / Speaker" or evidence.video_b_user != "B / Provider":
-        raise ValueError(
-            f"evidence {evidence.evidence_id} roles must be A / Speaker then B / Provider"
-        )
+    _validate_ordered_participants(evidence)
     try:
         speaker_value = media_map[evidence.video_a_source]
         provider_value = media_map[evidence.video_b_source]
@@ -168,10 +189,7 @@ def _validate_and_resolve_media_map(
         for source in sorted(sources)
     }
     for item in evidence:
-        if item.video_a_user != "A / Speaker" or item.video_b_user != "B / Provider":
-            raise ValueError(
-                f"evidence {item.evidence_id} roles must be A / Speaker then B / Provider"
-            )
+        _validate_ordered_participants(item)
         if Path(resolved[item.video_a_source]) == Path(resolved[item.video_b_source]):
             raise ValueError(f"evidence {item.evidence_id} speaker/provider media paths must differ")
     return resolved

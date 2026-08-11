@@ -151,14 +151,18 @@ class AnnotatedPreferenceSlurmTests(unittest.TestCase):
         for token in (
             'ADAPTER_DIR="${ADAPTER_DIR:?', 'TRAIN_JOB_ID="${TRAIN_JOB_ID:?',
             'OUTDIR="${OUTPUT_ROOT}/validation_${SLURM_JOB_ID}"',
-            "validation_dpo.jsonl", "fixed_pair_accuracy", "chosen_rejected_margin",
+            'SOURCE_STATE="${TRAIN_DIR}/trainer_state.json"',
+            "gate4_epoch_end", "gate5_optimizer_steps", "validation_dpo.jsonl",
+            "fixed_pair_accuracy", "chosen_rejected_margin",
             "eval_loss", "annotated_preference.analyze", "--mode validation",
         ):
             self.assertIn(token, evaluate)
+        self.assertIn("swift rlhf", train.lower())
+        self.assertIn("--rlhf_type dpo", train.lower())
+        self.assertNotIn("swift rlhf", evaluate.lower())
+        self.assertNotIn('--dataset "${DPO_DATA_DIR}/validation_dpo.jsonl"', evaluate)
         for text in (train, evaluate):
             lowered = text.lower()
-            self.assertIn("swift rlhf", lowered)
-            self.assertIn("--rlhf_type dpo", lowered)
             for forbidden in (
                 "--rlhf_type grpo", "reward_plugin", "reward_function", "reward_funcs",
                 "snapshot_download", "latest_",

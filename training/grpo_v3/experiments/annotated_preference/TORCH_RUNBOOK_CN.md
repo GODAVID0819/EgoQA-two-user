@@ -13,6 +13,7 @@
 - CSV SHA-256：`32679019FD7C665A0632E9885405BDF13C77B51386EFC56E7B29B24192210CD7`。
 - 数据：420 行、70 个 evidence、每个 evidence 6 个候选；划分固定为 `60/10/0`。
 - 媒体：140 个唯一视频；`media_map.json` 必须精确覆盖 CSV 中的 URL。
+- 有序角色：`video_1_*` 是 Speaker/asker，`video_2_*` 是 Provider；`video_1_user`、`video_2_user` 保存 Jake、Tasha 等真实参与者姓名，不是字面标签 `A / Speaker`、`B / Provider`。
 - `compact_qa_v1` 是当前标注数据的紧凑提示词合同，不是生产 `expanded schema` 的替换。
 - 登录 shell 中失败只打印 `STOP` 或 `MISSING`，并跳过依赖步骤，保持 SSH 会话可继续使用。
 - 代码走 Git；SFTP 只传明确列出的单个小文件。不要递归上传项目、模型、视频、cache、`data_RLHF` 或 outputs。
@@ -217,22 +218,41 @@ else
 fi
 
 if [ -s "${DATA_DIR}/annotation_audit_60_10.json" ] && [ -s "${SPLIT_PATH}" ]; then
-  "${PYTHON}" - "${DATA_DIR}/annotation_audit_60_10.json" "${SPLIT_PATH}" <<'PY'
+  "${PYTHON}" - "${DATA_DIR}/annotation_audit_60_10.json" "${SPLIT_PATH}" "${CSV_PATH}" <<'PY'
+import csv
 import json
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 audit = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 split = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+with Path(sys.argv[3]).open("r", encoding="utf-8-sig", newline="") as handle:
+    rows = list(csv.DictReader(handle))
+media_by_evidence = defaultdict(set)
+for row in rows:
+    media_by_evidence[row["evidence_id"]].add(tuple(
+        row[column].strip() for column in (
+            "video_1_user", "video_1_source", "video_2_user", "video_2_source",
+        )
+    ))
+ordered_media = [next(iter(values)) for values in media_by_evidence.values()]
 assert audit["status"] == "passed", audit
 assert audit["csv_sha256"].upper() == "32679019FD7C665A0632E9885405BDF13C77B51386EFC56E7B29B24192210CD7"
 assert audit["row_count"] == 420
 assert audit["evidence_count"] == 70
+assert len(media_by_evidence) == 70
+assert all(len(values) == 1 for values in media_by_evidence.values())
+assert all(all(value for value in media) for media in ordered_media)
+assert all(media[0] != media[2] for media in ordered_media)
+assert all(media[1] != media[3] for media in ordered_media)
+assert len({source for media in ordered_media for source in (media[1], media[3])}) == 140
 assert len(split["train_evidence_ids"]) == 60
 assert len(split["validation_evidence_ids"]) == 10
 assert split["locked_test_evidence_ids"] == []
 assert split["reserve_evidence_ids"] == []
 assert not set(split["train_evidence_ids"]) & set(split["validation_evidence_ids"])
+print("ORDERED_MEDIA_PASSED video_1=speaker video_2=provider names=participants sources=140")
 print("ANNOTATION_GATE_PASSED rows=420 evidence=70 split=60/10/0")
 PY
 else
@@ -240,7 +260,7 @@ else
 fi
 ```
 
-只有看到 `ANNOTATION_GATE_PASSED rows=420 evidence=70 split=60/10/0` 才准备媒体。
+只有同时看到 `ORDERED_MEDIA_PASSED video_1=speaker video_2=provider names=participants sources=140` 和 `ANNOTATION_GATE_PASSED rows=420 evidence=70 split=60/10/0` 才准备媒体。
 
 ## 6. Torch：准备 140 个视频并生成 `media_map.json`
 
@@ -492,37 +512,139 @@ fi
 提交后执行：
 
 ```bash
-inspect_job "${TRAIN_JOBID}" train pareto-dpo-train
+inspect_job "${TRAIN_JOBID=}" train pareto-dpo-train
 ```
 
 确认 `sacct` 为 `COMPLETED`、`${OUTPUT_ROOT}/train_${TRAIN_JOBID}/dpo_gate_result.json` 出现 `MODEL_GATE_PASSED`。验收曲线无 NaN/Inf、global step 非零、validation 指标存在、参数审计通过、adapter 可重载，并保留 Git 提交与输入 SHA。
 
-## 12. Gate 5：10-evidence 验证
+## 12. Gate 5：冻结 Gate 4 验证产物审计
+
+Gate 4 已使用 `train_dpo.jsonl` 更新参数，并在每个 epoch 结束时对 `validation_dpo.jsonl` 计算 DPO 指标。Gate 5 只验证并封装 Gate 4 的最终 validation 指标、adapter 和来源 SHA；它不再调用 `swift rlhf`，不执行 optimizer step，也不生成新 checkpoint。因此本 Gate 只申请 CPU，通常应在几分钟内结束。
+
+先在 Torch 登录节点执行只读预检。这里继续使用已完成的 Gate 4 JobID `15595900`；若以后更换训练任务，只改这一行：
 
 ```bash
-if ! [[ "${TRAIN_JOBID:-}" =~ ^[0-9]+$ ]]; then
-  read -r -p "输入已通过 Gate 4 的数字 JobID: " TRAIN_JOBID
-fi
+TRAIN_JOBID=15595900
 ADAPTER_DIR=${OUTPUT_ROOT}/train_${TRAIN_JOBID}/adapter
+TRAIN_DIR=$(dirname "${ADAPTER_DIR}")
 SCRIPT=${PROJECT_ROOT}/hpc/grpo_v3/annotated_preference/evaluate.sbatch
-if [[ "${TRAIN_JOBID:-}" =~ ^[0-9]+$ ]] && [ -s "${ADAPTER_DIR}/adapter_config.json" ] && [ -f "${SCRIPT}" ]; then
+
+if [[ "${TRAIN_JOBID}" =~ ^[0-9]+$ ]] \
+  && [ -s "${ADAPTER_DIR}/adapter_config.json" ] \
+  && [ -s "${TRAIN_DIR}/trainer_state.json" ] \
+  && [ -s "${TRAIN_DIR}/dpo_gate_result.json" ] \
+  && [ -s "${TRAIN_DIR}/resolved_command.txt" ] \
+  && [ -f "${SCRIPT}" ]; then
+  echo "GATE5_INPUTS_PASSED train_job=${TRAIN_JOBID}"
+else
+  echo "STOP: missing Gate 4 adapter, trainer state, result, command, or Gate 5 script"
+fi
+
+if bash -n "${SCRIPT}"; then
+  echo "GATE5_BASH_SYNTAX_PASSED"
+else
+  echo "STOP: Gate 5 script has invalid bash syntax"
+fi
+
+if grep -n 'swift rlhf' "${SCRIPT}"; then
+  echo "STOP: Gate 5 must not invoke swift rlhf"
+else
+  echo "GATE5_ZERO_TRAINING_CONTRACT_PASSED"
+fi
+
+"${PYTHON}" - "${TRAIN_DIR}/dpo_gate_result.json" "${TRAIN_DIR}/trainer_state.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+gate = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+state = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+history = state.get("log_history", [])
+eval_rows = [row for row in history if isinstance(row, dict) and "eval_loss" in row]
+if gate.get("status") == "passed" and gate.get("mode") == "train" and eval_rows:
+    row = eval_rows[-1]
+    print("GATE4_VALIDATION_SOURCE_PASSED")
+    print(json.dumps({
+        "global_step": state.get("global_step"),
+        "eval_loss": row.get("eval_loss"),
+        "eval_pair_accuracy": row.get("eval_rewards/accuracies"),
+        "eval_reward_margin": row.get("eval_rewards/margins"),
+    }, indent=2, allow_nan=False))
+else:
+    print("STOP: Gate 4 did not preserve a passed epoch-end validation result")
+PY
+```
+
+只有上述输出包含 `GATE5_INPUTS_PASSED`、`GATE5_BASH_SYNTAX_PASSED`、`GATE5_ZERO_TRAINING_CONTRACT_PASSED` 和 `GATE4_VALIDATION_SOURCE_PASSED` 时才提交：
+
+```bash
+if [[ "${TRAIN_JOBID}" =~ ^[0-9]+$ ]] \
+  && [ -s "${ADAPTER_DIR}/adapter_config.json" ] \
+  && [ -s "${TRAIN_DIR}/trainer_state.json" ] \
+  && [ -s "${TRAIN_DIR}/dpo_gate_result.json" ] \
+  && [ -s "${TRAIN_DIR}/resolved_command.txt" ] \
+  && [ -f "${SCRIPT}" ] \
+  && ! grep -q 'swift rlhf' "${SCRIPT}"; then
   VALIDATION_JOB_RAW=$(sbatch --parsable \
     --export=ALL,TRAIN_JOB_ID=${TRAIN_JOBID},ADAPTER_DIR=${ADAPTER_DIR} \
     --chdir="${PROJECT_ROOT}" "${SCRIPT}")
   VALIDATION_JOB=${VALIDATION_JOB_RAW%%;*}
   echo "VALIDATION_JOB=${VALIDATION_JOB}"
 else
-  echo "STOP: missing numeric TRAIN_JOBID, adapter, or evaluation script"
+  echo "STOP: Gate 5 preflight failed; job was not submitted"
 fi
 ```
 
 提交后执行：
 
 ```bash
-inspect_job "${VALIDATION_JOB}" validation pareto-dpo-validation
+if [[ "${VALIDATION_JOB:-}" =~ ^[0-9]+$ ]]; then
+  inspect_job "${VALIDATION_JOB}" validation pareto-dpo-validation
+  RESULT=${OUTPUT_ROOT}/validation_${VALIDATION_JOB}/dpo_gate_result.json
+  STATE=${OUTPUT_ROOT}/validation_${VALIDATION_JOB}/trainer_state.json
+  if [ -s "${RESULT}" ] && [ -s "${STATE}" ]; then
+    "${PYTHON}" - "${RESULT}" "${STATE}" "${TRAIN_JOBID}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+state = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+provenance = state.get("validation_provenance", {})
+expected_train_job_id = sys.argv[3]
+summary = {
+    "status": result.get("status"),
+    "eval_pair_count": result.get("eval_pair_count"),
+    "manifest_validation_pair_count": result.get("manifest_validation_pair_count"),
+    "eval_loss": result.get("final_eval_loss"),
+    "eval_pair_accuracy": result.get("final_eval_pair_accuracy"),
+    "eval_reward_margin": result.get("final_eval_reward_margin"),
+    "evaluation_origin": provenance.get("evaluation_origin"),
+    "gate5_optimizer_steps": provenance.get("gate5_optimizer_steps"),
+    "source_train_job_id": provenance.get("source_train_job_id"),
+    "source_trainer_state_sha256": provenance.get("source_trainer_state_sha256"),
+}
+print(json.dumps(summary, indent=2, allow_nan=False))
+if (
+    summary["status"] == "passed"
+    and summary["eval_pair_count"] == summary["manifest_validation_pair_count"]
+    and summary["evaluation_origin"] == "gate4_epoch_end"
+    and summary["gate5_optimizer_steps"] == 0
+    and summary["source_train_job_id"] == expected_train_job_id
+):
+    print("GATE5_FROZEN_VALIDATION_PASSED")
+else:
+    print("STOP: Gate 5 frozen-validation contract failed")
+PY
+  else
+    echo "MISSING: Gate 5 result or trainer state"
+  fi
+else
+  echo "STOP: VALIDATION_JOB must be numeric"
+fi
 ```
 
-确认 `sacct` 为 `COMPLETED`、`${OUTPUT_ROOT}/validation_${VALIDATION_JOB}/dpo_gate_result.json` 出现 `MODEL_GATE_PASSED`，且 `eval_pair_count` 等于 manifest 的 validation pair 数。验收 Pareto 指标、失败样例和训练 checkpoint 元数据；不得读取零行 locked test。
+最终验收必须同时满足：Slurm `COMPLETED 0:0`、`status=passed`、`eval_pair_count` 等于 manifest、`evaluation_origin=gate4_epoch_end`、`gate5_optimizer_steps=0`、`source_train_job_id=15595900`。Gate5 不读取零行 locked test，也不把 validation 数据送入任何训练入口。
 
 ## 13. 通用 JobID 监控与失败证据收集
 

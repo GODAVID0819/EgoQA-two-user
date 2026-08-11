@@ -96,9 +96,9 @@ class BuildDatasetTests(unittest.TestCase):
                     "options": json.dumps(options),
                     "correct": "A",
                     "answer": options[0],
-                    "video_1_user": "A / Speaker",
+                    "video_1_user": "Jake",
                     "video_1_source": source_a,
-                    "video_2_user": "B / Provider",
+                    "video_2_user": "Tasha",
                     "video_2_source": source_b,
                 })
 
@@ -140,9 +140,9 @@ class BuildDatasetTests(unittest.TestCase):
             evidence = EvidenceRecord(
                 evidence_id="evidence-1",
                 annotation_status="completed",
-                video_a_user="A / Speaker",
+                video_a_user="Jake",
                 video_a_source="source-a",
-                video_b_user="B / Provider",
+                video_b_user="Tasha",
                 video_b_source="source-b",
                 candidates=(),
             )
@@ -168,6 +168,17 @@ class BuildDatasetTests(unittest.TestCase):
             self.assertEqual(serialize_compact_completion(chosen), row["messages"][1]["content"])
             self.assertEqual(serialize_compact_completion(rejected), row["rejected_response"])
             self.assertEqual([str(speaker), str(provider)], row["videos"])
+            legacy_evidence = replace(
+                evidence,
+                video_a_user="A / Speaker",
+                video_b_user="B / Provider",
+            )
+            legacy_row = build_dpo_row(
+                pair,
+                legacy_evidence,
+                {"source-a": str(speaker), "source-b": str(provider)},
+            )
+            self.assertEqual(row["videos"], legacy_row["videos"])
             self.assertEqual(
                 {
                     "evidence_id", "chosen_candidate_id", "rejected_candidate_id",
@@ -211,8 +222,8 @@ class BuildDatasetTests(unittest.TestCase):
 
     def test_rejects_invalid_contracts(self) -> None:
         cases = (
-            "csv_sha", "reserve", "missing_media", "relative_path", "same_media", "role",
-            "audit_cancel",
+            "csv_sha", "reserve", "missing_media", "relative_path", "same_media",
+            "same_user", "placeholder_user", "audit_cancel",
         )
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
@@ -236,11 +247,14 @@ class BuildDatasetTests(unittest.TestCase):
                     media_map[f"https://media.test/{evidence_id}-provider.mp4"] = media_map[
                         f"https://media.test/{evidence_id}-speaker.mp4"
                     ]
-                elif case == "role":
+                elif case == "same_user":
+                    for row in rows[:6]:
+                        row["video_1_user"] = row["video_2_user"]
+                elif case == "placeholder_user":
                     for row in rows[:6]:
                         row["video_1_user"] = "speaker"
                 self._write_csv(csv_path, rows)
-                if case == "role":
+                if case in {"same_user", "placeholder_user"}:
                     manifest["csv_sha256"] = sha256_file(csv_path)
                 split_path.write_text(json.dumps(manifest), encoding="utf-8")
                 media_map_path.write_text(json.dumps(media_map), encoding="utf-8")

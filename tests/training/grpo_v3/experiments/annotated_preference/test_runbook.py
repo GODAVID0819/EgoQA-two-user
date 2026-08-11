@@ -72,6 +72,7 @@ class TorchRunbookTest(unittest.TestCase):
             "--locked-test-evidence-count 0",
             "prepare_media.sbatch",
             'assert len(mapping) == 140',
+            "ORDERED_MEDIA_PASSED video_1=speaker video_2=provider names=participants sources=140",
             "ANNOTATION_GATE_PASSED rows=420 evidence=70 split=60/10/0",
             "MEDIA_MAP_PASSED count=140",
             "DPO_DATA_PASSED",
