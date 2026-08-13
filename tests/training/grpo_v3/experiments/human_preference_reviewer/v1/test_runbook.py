@@ -35,6 +35,11 @@ class ReviewerV1RunbookTests(unittest.TestCase):
             "rlhf_candidate_scores_day5_7_full_100_HM.csv",
         ):
             self.assertNotIn(forbidden, text)
+        self.assertNotIn("status --porcelain", text)
+        self.assertIn('git -C "${REVIEWER_ROOT}" diff --quiet', text)
+        self.assertIn('git -C "${REVIEWER_ROOT}" diff --cached --quiet', text)
+        self.assertIn('git -C "${REVIEWER_ROOT}" rev-parse --git-path info/exclude', text)
+        self.assertIn('status --short --untracked-files=no', text)
 
     def test_collaborator_docs_explain_current_contract_and_all_stages(self) -> None:
         readme = README.read_text(encoding="utf-8")

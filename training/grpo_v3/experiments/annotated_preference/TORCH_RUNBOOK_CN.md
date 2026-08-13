@@ -87,10 +87,20 @@ if [ ! -e "${PROJECT_ROOT}/.git" ] && [ -e "${SOURCE_ROOT}/.git" ]; then
 fi
 
 if [ -e "${PROJECT_ROOT}/.git" ]; then
-  if [ -z "$(git -C "${PROJECT_ROOT}" status --porcelain)" ]; then
+  LOCAL_EXCLUDE=$(git -C "${PROJECT_ROOT}" rev-parse --git-path info/exclude)
+  mkdir -p "$(dirname "${LOCAL_EXCLUDE}")"
+  for PATTERN in "/data_RLHF/" "/outputs/" "/logs/"; do
+    if ! grep -Fqx "${PATTERN}" "${LOCAL_EXCLUDE}" 2>/dev/null; then
+      printf '%s\n' "${PATTERN}" >> "${LOCAL_EXCLUDE}"
+      echo "ADDED_LOCAL_EXCLUDE: ${PATTERN}"
+    fi
+  done
+  if git -C "${PROJECT_ROOT}" diff --quiet \
+    && git -C "${PROJECT_ROOT}" diff --cached --quiet; then
     git -C "${PROJECT_ROOT}" merge --ff-only "origin/${BRANCH}"
   else
-    echo "STOP: target worktree has local changes; fast-forward skipped"
+    echo "STOP: target worktree has tracked or staged changes; fast-forward skipped"
+    git -C "${PROJECT_ROOT}" status --short --untracked-files=no
   fi
   if [ -n "${BACKUP_ROOT:-}" ]; then
     cp -a -n "${BACKUP_ROOT}/." "${PROJECT_ROOT}/"
@@ -779,10 +789,12 @@ BRANCH=feature/annotated-pareto-dpo
 
 if [ -e "${PROJECT_ROOT}/.git" ]; then
   git -C "${PROJECT_ROOT}" fetch origin "${BRANCH}"
-  if [ -z "$(git -C "${PROJECT_ROOT}" status --porcelain)" ]; then
+  if git -C "${PROJECT_ROOT}" diff --quiet \
+    && git -C "${PROJECT_ROOT}" diff --cached --quiet; then
     git -C "${PROJECT_ROOT}" merge --ff-only "origin/${BRANCH}"
   else
-    echo "STOP: worktree has local changes; Git fast-forward skipped"
+    echo "STOP: worktree has tracked or staged changes; Git fast-forward skipped"
+    git -C "${PROJECT_ROOT}" status --short --untracked-files=no
   fi
 else
   echo "STOP: missing Git worktree at ${PROJECT_ROOT}"
@@ -1105,10 +1117,12 @@ READY=1
 
 if [ -e "${PROJECT_ROOT}/.git" ]; then
   git -C "${PROJECT_ROOT}" fetch origin "${BRANCH}"
-  if [ -z "$(git -C "${PROJECT_ROOT}" status --porcelain)" ]; then
+  if git -C "${PROJECT_ROOT}" diff --quiet \
+    && git -C "${PROJECT_ROOT}" diff --cached --quiet; then
     git -C "${PROJECT_ROOT}" merge --ff-only "origin/${BRANCH}"
   else
-    echo "STOP: Torch worktree has local changes"
+    echo "STOP: Torch worktree has tracked or staged changes"
+    git -C "${PROJECT_ROOT}" status --short --untracked-files=no
     READY=0
   fi
 else

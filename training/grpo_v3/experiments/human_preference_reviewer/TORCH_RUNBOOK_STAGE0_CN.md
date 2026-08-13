@@ -1,5 +1,7 @@
 # Reviewer Stage 0 Torch Runbook
 
+本手册服从 `docs/TORCH_EXPERIMENT_META_RULES_CN.md`。
+
 本 Runbook 只验证 **Evidence Quality 单 head + 完全冻结 backbone**。它不注入 LoRA，也不训练 Answerability、Formality 或 Overall Utility。
 所有训练作业内部都必须显式传入 `--stage stage0`，禁止依赖默认 Stage 2。
 
@@ -53,10 +55,21 @@ if [[ "${REVIEWER_READY}" == 1 ]]; then
   if [[ "${ACTUAL_ROOT}" != "${REVIEWER_ROOT}" || "${ACTUAL_BRANCH}" != "${REVIEWER_BRANCH}" ]]; then
     echo "STOP: Reviewer worktree 路径或分支不符合预期"
     REVIEWER_READY=0
-  elif [[ -n "$(git -C "${REVIEWER_ROOT}" status --porcelain)" ]]; then
-    echo "STOP: Reviewer worktree 存在本地修改，禁止自动同步"
-    git -C "${REVIEWER_ROOT}" status --short
-    REVIEWER_READY=0
+  else
+    LOCAL_EXCLUDE=$(git -C "${REVIEWER_ROOT}" rev-parse --git-path info/exclude)
+    mkdir -p "$(dirname "${LOCAL_EXCLUDE}")"
+    for PATTERN in "/data_RLHF/" "/outputs/" "/logs/"; do
+      if ! grep -Fqx "${PATTERN}" "${LOCAL_EXCLUDE}" 2>/dev/null; then
+        printf '%s\n' "${PATTERN}" >> "${LOCAL_EXCLUDE}"
+        echo "ADDED_LOCAL_EXCLUDE: ${PATTERN}"
+      fi
+    done
+    if ! git -C "${REVIEWER_ROOT}" diff --quiet \
+      || ! git -C "${REVIEWER_ROOT}" diff --cached --quiet; then
+      echo "STOP: Reviewer worktree 存在已跟踪或已暂存修改，禁止自动同步"
+      git -C "${REVIEWER_ROOT}" status --short --untracked-files=no
+      REVIEWER_READY=0
+    fi
   fi
 fi
 
@@ -93,7 +106,7 @@ else
 fi
 ```
 
-验收条件：当前目录为 `/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1`，当前分支为 `feature/multimodal-reviewer-training`，`LOCAL_HEAD` 与 `REMOTE_HEAD` 完全一致，且 `git status --short` 无输出。原 `EgoQA-two-user-grpo-clean` 目录及其本地修改不会被移动、stash 或覆盖。
+验收条件：当前目录为 `/scratch/xl6775/projects/EgoQA-two-user-reviewer-v1`，当前分支为 `feature/multimodal-reviewer-training`，`LOCAL_HEAD` 与 `REMOTE_HEAD` 完全一致，且已跟踪与已暂存代码均无修改。`data_RLHF/`、`outputs/`、`logs/` 由 repository-local exclude 管理，不阻止同步；原 `EgoQA-two-user-grpo-clean` 目录及其本地修改不会被移动、stash 或覆盖。
 
 如果命令报告本地 Reviewer 分支已被其他 worktree 使用，先运行 `git worktree list` 找到并复用已有目录；不要删除目录，也不要使用 `git worktree add --force`。
 

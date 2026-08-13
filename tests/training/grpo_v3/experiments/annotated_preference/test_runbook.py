@@ -4,9 +4,25 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[5]
 RUNBOOK = ROOT / "training/grpo_v3/experiments/annotated_preference/TORCH_RUNBOOK_CN.md"
+META_RULES = ROOT / "docs/TORCH_EXPERIMENT_META_RULES_CN.md"
 
 
 class TorchRunbookTest(unittest.TestCase):
+    def test_meta_rules_define_runtime_excludes_and_tracked_only_sync_gate(self) -> None:
+        self.assertTrue(META_RULES.is_file())
+        text = META_RULES.read_text(encoding="utf-8")
+        for token in (
+            'diff --quiet',
+            'diff --cached --quiet',
+            'rev-parse --git-path info/exclude',
+            '"/data_RLHF/"',
+            '"/outputs/"',
+            '"/logs/"',
+            'status --short --untracked-files=no',
+        ):
+            self.assertIn(token, text)
+        self.assertNotIn("status.showUntrackedFiles", text)
+
     def test_runbook_contains_copyable_staged_sweep_workflow(self) -> None:
         text = RUNBOOK.read_text(encoding="utf-8")
         for token in (
@@ -97,3 +113,11 @@ class TorchRunbookTest(unittest.TestCase):
         )
         for item in required:
             self.assertIn(item, text)
+
+    def test_torch_sync_ignores_runtime_outputs_but_blocks_tracked_changes(self) -> None:
+        text = RUNBOOK.read_text(encoding="utf-8")
+        self.assertEqual(1, text.count("status --porcelain"))
+        self.assertGreaterEqual(text.count('git -C "${PROJECT_ROOT}" diff --quiet'), 3)
+        self.assertGreaterEqual(text.count('git -C "${PROJECT_ROOT}" diff --cached --quiet'), 3)
+        self.assertIn('git -C "${PROJECT_ROOT}" rev-parse --git-path info/exclude', text)
+        self.assertIn('status --short --untracked-files=no', text)
