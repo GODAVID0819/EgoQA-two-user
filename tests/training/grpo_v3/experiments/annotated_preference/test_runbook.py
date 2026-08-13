@@ -17,6 +17,11 @@ class TorchRunbookTest(unittest.TestCase):
             "1e-4",
             "DependencyNeverSatisfied",
             "staged_sweep_results.csv",
+            "submit_staged_recovery.sh",
+            "active_staged_recovery_manifest.txt",
+            "RECOVERY_SUBMISSION_PASSED count=6",
+            "checkpoint.partial",
+            "swift_return_code.txt",
         ):
             self.assertIn(token, text)
 

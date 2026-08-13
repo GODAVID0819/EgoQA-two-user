@@ -1058,3 +1058,112 @@ Get-ChildItem -LiteralPath $LocalDir
 ```
 
 该下载只包含小型 manifest 和指标表，不下载 adapter、optimizer、视频或整个 outputs。
+
+### 16.7 三条 epoch 2 失败后的可观测性恢复
+
+2026-08-13 的三个 epoch 2 Job `15675191`、`15675194`、`15675197` 均在 Swift 日志到达目标 step 后以 `FAILED 1:0` 结束，且原 runner 未持久化 Swift 返回码或临时 checkpoint 清单。修复后的 `staged_train.sbatch` 必须在任何阶段验收前写出：
+
+```text
+${OUTPUT_ROOT}/staged_<JobID>/swift_return_code.txt
+${OUTPUT_ROOT}/staged_<JobID>/checkpoint_inventory.txt
+${OUTPUT_ROOT}/staged_<JobID>/checkpoint.partial
+```
+
+只有 Swift 返回 0、四个恢复文件齐全且 `trainer_state.global_step` 等于目标 step 时，`checkpoint.partial` 才会提升为正式 `checkpoint`。否则 Job 仍失败，但诊断证据留在持久输出目录。
+
+先在 Windows 提交并推送修复：
+
+```powershell
+$Repo = 'C:\Users\20661\Desktop\Research\AR\multiuser\EgoQA-two-user-reviewer-v1'
+$Branch = 'feature/annotated-pareto-dpo'
+Set-Location -LiteralPath $Repo
+
+git add -f -- `
+  hpc/grpo_v3/annotated_preference/staged_train.sbatch `
+  hpc/grpo_v3/annotated_preference/submit_staged_recovery.sh
+git add -- `
+  training/grpo_v3/experiments/annotated_preference/TORCH_RUNBOOK_CN.md `
+  tests/training/grpo_v3/experiments/annotated_preference/test_slurm.py `
+  tests/training/grpo_v3/experiments/annotated_preference/test_runbook.py `
+  docs/superpowers/plans/2026-08-14-staged-sweep-observability-recovery.md
+
+git diff --cached --check
+python -m unittest `
+  tests.training.grpo_v3.experiments.annotated_preference.test_slurm `
+  tests.training.grpo_v3.experiments.annotated_preference.test_runbook
+git commit -m "fix(training): preserve staged checkpoint diagnostics"
+git push origin $Branch
+```
+
+然后在 Torch 登录节点整段执行。该块先快进代码并验证三个 epoch 1 完整 checkpoint；只有全部通过才一次提交六个恢复任务，不需要输入或记录 JobID：
+
+```bash
+export PROJECT_ROOT=/scratch/xl6775/projects/EgoQA-two-user-annotated-pareto-dpo
+export OUTPUT_ROOT=${PROJECT_ROOT}/outputs/annotated_preference
+BRANCH=feature/annotated-pareto-dpo
+READY=1
+
+if [ -e "${PROJECT_ROOT}/.git" ]; then
+  git -C "${PROJECT_ROOT}" fetch origin "${BRANCH}"
+  if [ -z "$(git -C "${PROJECT_ROOT}" status --porcelain)" ]; then
+    git -C "${PROJECT_ROOT}" merge --ff-only "origin/${BRANCH}"
+  else
+    echo "STOP: Torch worktree has local changes"
+    READY=0
+  fi
+else
+  echo "MISSING: ${PROJECT_ROOT}/.git"
+  READY=0
+fi
+
+STAGE_SCRIPT=${PROJECT_ROOT}/hpc/grpo_v3/annotated_preference/staged_train.sbatch
+RECOVERY_SCRIPT=${PROJECT_ROOT}/hpc/grpo_v3/annotated_preference/submit_staged_recovery.sh
+
+if ! bash -n "${STAGE_SCRIPT}"; then
+  echo "STOP: staged_train.sbatch syntax failed"
+  READY=0
+fi
+if ! bash -n "${RECOVERY_SCRIPT}"; then
+  echo "STOP: submit_staged_recovery.sh syntax failed"
+  READY=0
+fi
+
+if [ "${READY}" -eq 1 ]; then
+  bash "${RECOVERY_SCRIPT}"
+else
+  echo "STOP: recovery was not submitted"
+fi
+```
+
+成功提交标记固定为：
+
+```text
+RECOVERY_SUBMISSION_PASSED count=6
+ACTIVE_RECOVERY_MANIFEST=.../active_staged_recovery_manifest.txt
+```
+
+重新登录后无需 JobID 监控：
+
+```bash
+export PROJECT_ROOT=/scratch/xl6775/projects/EgoQA-two-user-annotated-pareto-dpo
+export OUTPUT_ROOT=${PROJECT_ROOT}/outputs/annotated_preference
+ACTIVE_POINTER=${OUTPUT_ROOT}/active_staged_recovery_manifest.txt
+
+if [ -s "${ACTIVE_POINTER}" ]; then
+  JOBS=$(head -n 1 "${ACTIVE_POINTER}")
+else
+  JOBS=
+fi
+
+if [ -n "${JOBS}" ] && [ -s "${JOBS}" ]; then
+  JOB_IDS=$(awk -F '\t' 'NR > 1 {print $5}' "${JOBS}" | paste -sd, -)
+  column -t -s $'\t' "${JOBS}"
+  squeue -j "${JOB_IDS}" -o "%.18i %.32j %.12T %.10M %.10l %.28R"
+  sacct -j "${JOB_IDS}" --units=G \
+    --format=JobIDRaw,JobName%32,State%28,ExitCode,Elapsed,Timelimit,MaxRSS
+else
+  echo "MISSING: active staged recovery manifest"
+fi
+```
+
+若任一恢复任务失败，优先读取其 `swift_return_code.txt`、`checkpoint_inventory.txt` 和 `checkpoint.partial`，不要再次提交完整 9-job sweep。

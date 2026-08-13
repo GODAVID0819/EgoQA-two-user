@@ -18,6 +18,7 @@ SCRIPTS = (
     "evaluate.sbatch",
     "staged_train.sbatch",
     "submit_staged_sweep.sh",
+    "submit_staged_recovery.sh",
 )
 
 
@@ -67,7 +68,13 @@ class AnnotatedPreferenceSlurmTests(unittest.TestCase):
         for token in (
             '--resume_from_checkpoint "${RESUME_CHECKPOINT}"',
             '--max_steps "${TARGET_GLOBAL_STEP}"',
-            'cp -a "${CHECKPOINT_DIR}" "${OUTDIR}/checkpoint"',
+            "swift_return_code.txt",
+            "checkpoint_inventory.txt",
+            'if [ -d "${SWIFT_OUTPUT}" ]; then',
+            "STOP: failed to persist partial checkpoint",
+            'PERSISTED_PARTIAL="${OUTDIR}/checkpoint.partial"',
+            'mv "${PERSISTED_PARTIAL}" "${OUTDIR}/checkpoint"',
+            'echo "MISSING: ${PERSISTED_PARTIAL}/${name}"',
             "EXPECTED_INITIAL_STEP",
             "TARGET_GLOBAL_STEP",
             "optimizer.pt",
@@ -75,6 +82,23 @@ class AnnotatedPreferenceSlurmTests(unittest.TestCase):
         ):
             self.assertIn(token, staged)
         self.assertNotIn("cuda.py", staged)
+
+    def test_staged_recovery_submits_only_failed_epoch2_to_epoch3_chains(self) -> None:
+        recovery = _read("submit_staged_recovery.sh")
+        for token in (
+            "15675190 15675191 15675192",
+            "15675193 15675194 15675195",
+            "15675196 15675197 15675198",
+            "sbatch --parsable",
+            "--dependency=afterok:",
+            "staged_recovery_",
+            "jobs.tsv",
+            "active_staged_recovery_manifest.txt",
+            "replaces_job_id",
+            "RECOVERY_SUBMISSION_PASSED count=6",
+        ):
+            self.assertIn(token, recovery)
+        self.assertNotIn("submit_staged_sweep.sh", recovery)
 
     def test_common_and_gate0_contract(self) -> None:
         common = _read("common.sh")

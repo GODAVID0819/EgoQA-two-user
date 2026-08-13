@@ -86,14 +86,51 @@ fi
 
 save_resolved_command "${OUTDIR}/resolved_command.txt" "${CMD[@]}"
 env | sort > "${OUTDIR}/environment.txt"
+set +e
 "${CMD[@]}"
+SWIFT_EXIT_CODE=$?
+set -e
+printf '%s\n' "${SWIFT_EXIT_CODE}" > "${OUTDIR}/swift_return_code.txt"
 
-CHECKPOINT_DIR=$(find "${SWIFT_OUTPUT}" -type d -name "checkpoint-${TARGET_GLOBAL_STEP}" -print | sort | tail -n 1)
-test -n "${CHECKPOINT_DIR}"
+CHECKPOINT_DIR=
+if [ -d "${SWIFT_OUTPUT}" ]; then
+  CHECKPOINT_DIR=$(find "${SWIFT_OUTPUT}" -type d -name "checkpoint-${TARGET_GLOBAL_STEP}" -print | sort | tail -n 1)
+fi
+INVENTORY=${OUTDIR}/checkpoint_inventory.txt
+printf 'swift_exit_code=%s\ntarget_global_step=%s\ncheckpoint_dir=%s\n' \
+  "${SWIFT_EXIT_CODE}" "${TARGET_GLOBAL_STEP}" "${CHECKPOINT_DIR}" > "${INVENTORY}"
+if [ -n "${CHECKPOINT_DIR}" ] && [ -d "${CHECKPOINT_DIR}" ]; then
+  find "${CHECKPOINT_DIR}" -maxdepth 1 -type f -printf '%s bytes\t%f\n' \
+    | sort >> "${INVENTORY}"
+else
+  echo "MISSING: checkpoint-${TARGET_GLOBAL_STEP}" | tee -a "${INVENTORY}"
+fi
+
+PERSISTED_PARTIAL="${OUTDIR}/checkpoint.partial"
+CHECKPOINT_READY=1
+if [ -n "${CHECKPOINT_DIR}" ] && [ -d "${CHECKPOINT_DIR}" ]; then
+  if [ -e "${PERSISTED_PARTIAL}" ] || [ -e "${OUTDIR}/checkpoint" ]; then
+    echo "STOP: persistent checkpoint destination already exists" | tee -a "${INVENTORY}"
+    CHECKPOINT_READY=0
+  else
+    if ! cp -a "${CHECKPOINT_DIR}" "${PERSISTED_PARTIAL}"; then
+      echo "STOP: failed to persist partial checkpoint" | tee -a "${INVENTORY}"
+      CHECKPOINT_READY=0
+    fi
+  fi
+else
+  CHECKPOINT_READY=0
+fi
+
 for name in adapter_config.json optimizer.pt scheduler.pt trainer_state.json; do
-  test -s "${CHECKPOINT_DIR}/${name}"
+  if [ ! -s "${PERSISTED_PARTIAL}/${name}" ]; then
+    echo "MISSING: ${PERSISTED_PARTIAL}/${name}" | tee -a "${INVENTORY}"
+    CHECKPOINT_READY=0
+  fi
 done
-"${PYTHON}" - "${CHECKPOINT_DIR}/trainer_state.json" "${TARGET_GLOBAL_STEP}" <<'PY'
+
+if [ -s "${PERSISTED_PARTIAL}/trainer_state.json" ]; then
+  if ! "${PYTHON}" - "${PERSISTED_PARTIAL}/trainer_state.json" "${TARGET_GLOBAL_STEP}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -104,8 +141,25 @@ if state.get("global_step") != expected:
     raise SystemExit(f"final global_step={state.get('global_step')} expected={expected}")
 print(f"STAGE_STEP_CONTRACT_PASSED global_step={expected}")
 PY
+  then
+    echo "STOP: target global_step contract failed" | tee -a "${INVENTORY}"
+    CHECKPOINT_READY=0
+  fi
+else
+  CHECKPOINT_READY=0
+fi
 
-cp -a "${CHECKPOINT_DIR}" "${OUTDIR}/checkpoint"
+if [ "${SWIFT_EXIT_CODE}" -ne 0 ]; then
+  echo "STOP: swift returned ${SWIFT_EXIT_CODE}; partial checkpoint preserved" | tee -a "${INVENTORY}"
+  CHECKPOINT_READY=0
+fi
+
+if [ "${CHECKPOINT_READY}" -ne 1 ]; then
+  echo "STOP: staged checkpoint contract failed; inspect ${INVENTORY}"
+  false
+fi
+
+mv "${PERSISTED_PARTIAL}" "${OUTDIR}/checkpoint"
 cp "${OUTDIR}/checkpoint/trainer_state.json" "${OUTDIR}/trainer_state.json"
 cp -a "${OUTDIR}/checkpoint" "${OUTDIR}/adapter"
 write_parameter_audit "${OUTDIR}/adapter"
