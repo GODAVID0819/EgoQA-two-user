@@ -705,3 +705,356 @@ split / media / DPO 数据状态：
 本次不能证明：
 下一步唯一动作：
 ```
+
+## 16. 临时低利用率约束：一次提交 9 个短任务的分段超参 Sweep
+
+本节用于集群会审计运行超过约 2 小时且 GPU 利用率较低任务的情况。不要启动额外 CUDA 空转负载。训练拆为三条自动依赖链；每段只推进一个 epoch，完整恢复模型、optimizer、scheduler、随机状态和 global step：
+
+```text
+LR=3e-5：epoch 1（step 0→66）→ epoch 2（66→132）→ epoch 3（132→198）
+LR=6e-5：epoch 1（step 0→66）→ epoch 2（66→132）→ epoch 3（132→198）
+LR=1e-4：epoch 1（step 0→66）→ epoch 2（66→132）→ epoch 3（132→198）
+```
+
+每段申请 `01:50:00`。launcher 一次提交全部 9 个任务，用 `afterok` 自动衔接；不要求输入、回忆或记录 JobID。JobID 只用于 Slurm provenance 和唯一产物目录。
+
+### 16.1 Windows：提交本节代码改动后推送
+
+在 Windows PowerShell 执行：
+
+```powershell
+$Repo = 'C:\Users\20661\Desktop\Research\AR\multiuser\EgoQA-two-user-reviewer-v1'
+$Branch = 'feature/annotated-pareto-dpo'
+Set-Location -LiteralPath $Repo
+
+git status --short --branch
+git diff --check
+git diff -- `
+  hpc/grpo_v3/annotated_preference/staged_train.sbatch `
+  hpc/grpo_v3/annotated_preference/submit_staged_sweep.sh `
+  training/grpo_v3/experiments/annotated_preference/TORCH_RUNBOOK_CN.md
+
+git add -f -- `
+  hpc/grpo_v3/annotated_preference/staged_train.sbatch `
+  hpc/grpo_v3/annotated_preference/submit_staged_sweep.sh
+
+git add -- `
+  training/grpo_v3/experiments/annotated_preference/TORCH_RUNBOOK_CN.md `
+  tests/training/grpo_v3/experiments/annotated_preference/test_slurm.py `
+  tests/training/grpo_v3/experiments/annotated_preference/test_runbook.py
+
+git diff --cached --check
+git diff --cached --stat
+git commit -m "feat(training): add staged Pareto DPO sweep"
+git push origin $Branch
+
+$LocalHead = git rev-parse HEAD
+$RemoteHead = (
+  git ls-remote origin "refs/heads/$Branch" |
+    ForEach-Object { ($_ -split '\s+')[0] }
+)
+
+if ($LocalHead -eq $RemoteHead) {
+  Write-Host "STAGED_SWEEP_GIT_PUSH_PASSED head=$LocalHead"
+} else {
+  Write-Host "STOP: local=$LocalHead remote=$RemoteHead"
+}
+```
+
+由于仓库 `.gitignore` 忽略整个 `hpc/`，这里必须对两个明确的新脚本使用 `git add -f`；不要对整个 `hpc/` 目录强制添加。只有看到 `STAGED_SWEEP_GIT_PUSH_PASSED` 才继续。本节脚本通过 Git 同步，不需要 SFTP 上传 `cuda.py` 或其他运行脚本。
+
+### 16.2 Torch：同步代码并做只读预检
+
+在 Torch 登录节点整段执行：
+
+```bash
+export PROJECT_ROOT=/scratch/xl6775/projects/EgoQA-two-user-annotated-pareto-dpo
+export TRAIN_ENV=/scratch/xl6775/envs/egoqa-ms-swift-v4.2.2-vllm024
+export MODEL_DIR=/scratch/xl6775/models/Qwen3-VL-8B-Instruct
+export DATA_DIR=${PROJECT_ROOT}/data_RLHF/annotated_preference
+export OUTPUT_ROOT=${PROJECT_ROOT}/outputs/annotated_preference
+export DPO_DATA_DIR=${DATA_DIR}/dpo
+export PYTHON=${TRAIN_ENV}/bin/python
+BRANCH=feature/annotated-pareto-dpo
+
+if [ -e "${PROJECT_ROOT}/.git" ]; then
+  git -C "${PROJECT_ROOT}" fetch origin "${BRANCH}"
+  if [ -z "$(git -C "${PROJECT_ROOT}" status --porcelain)" ]; then
+    git -C "${PROJECT_ROOT}" merge --ff-only "origin/${BRANCH}"
+  else
+    echo "STOP: worktree has local changes; Git fast-forward skipped"
+  fi
+else
+  echo "STOP: missing Git worktree at ${PROJECT_ROOT}"
+fi
+
+STAGE_SCRIPT=${PROJECT_ROOT}/hpc/grpo_v3/annotated_preference/staged_train.sbatch
+SUBMIT_SCRIPT=${PROJECT_ROOT}/hpc/grpo_v3/annotated_preference/submit_staged_sweep.sh
+READY=1
+
+if ! bash -n "${STAGE_SCRIPT}"; then
+  echo "STOP: staged_train.sbatch syntax failed"
+  READY=0
+fi
+
+if ! bash -n "${SUBMIT_SCRIPT}"; then
+  echo "STOP: submit_staged_sweep.sh syntax failed"
+  READY=0
+fi
+
+if [ ! -x "${PYTHON}" ] || [ ! -d "${MODEL_DIR}" ]; then
+  echo "MISSING: Python environment or model"
+  READY=0
+fi
+
+for FILE in \
+  "${DPO_DATA_DIR}/train_dpo.jsonl" \
+  "${DPO_DATA_DIR}/validation_dpo.jsonl" \
+  "${DPO_DATA_DIR}/dataset_manifest.json"; do
+  if [ ! -s "${FILE}" ]; then
+    echo "MISSING: ${FILE}"
+    READY=0
+  fi
+done
+
+OVERFIT_RESULT=$("${PYTHON}" - "${OUTPUT_ROOT}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+candidates = []
+for path in Path(sys.argv[1]).glob("overfit_*/dpo_gate_result.json"):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        continue
+    if value.get("status") == "passed" and value.get("mode") == "overfit":
+        candidates.append((path.stat().st_mtime_ns, path))
+if candidates:
+    print(max(candidates)[1])
+PY
+)
+
+if [ -z "${OVERFIT_RESULT}" ] || [ ! -s "${OVERFIT_RESULT}" ]; then
+  echo "STOP: no passed overfit Gate was discovered"
+  READY=0
+else
+  echo "AUTO_DISCOVERED_OVERFIT_RESULT=${OVERFIT_RESULT}"
+fi
+
+if [ "${READY}" -eq 1 ]; then
+  echo "STAGED_SWEEP_PREFLIGHT_PASSED"
+else
+  echo "STOP: staged sweep preflight failed"
+fi
+```
+
+只有看到 `STAGED_SWEEP_PREFLIGHT_PASSED` 才提交。
+
+### 16.3 Torch：一次提交全部 9 个任务
+
+沿用上一节环境变量，执行：
+
+```bash
+if [ "${READY:-0}" -eq 1 ] && [ -f "${SUBMIT_SCRIPT}" ]; then
+  bash "${SUBMIT_SCRIPT}"
+else
+  echo "STOP: preflight did not pass; no staged sweep was submitted"
+fi
+```
+
+验收输出：
+
+```text
+STAGED_SWEEP_SUBMISSION_PASSED count=9
+ACTIVE_MANIFEST=.../active_staged_sweep_manifest.txt
+```
+
+持久化文件为：
+
+```text
+${OUTPUT_ROOT}/active_staged_sweep_manifest.txt
+${OUTPUT_ROOT}/staged_sweep_<时间戳>/jobs.tsv
+${OUTPUT_ROOT}/staged_sweep_<时间戳>/sweep_manifest.tsv
+```
+
+### 16.4 Torch：无需 JobID 的统一监控
+
+重新登录后也可直接执行：
+
+```bash
+export PROJECT_ROOT=/scratch/xl6775/projects/EgoQA-two-user-annotated-pareto-dpo
+export OUTPUT_ROOT=${PROJECT_ROOT}/outputs/annotated_preference
+ACTIVE_POINTER=${OUTPUT_ROOT}/active_staged_sweep_manifest.txt
+
+if [ -s "${ACTIVE_POINTER}" ]; then
+  JOBS=$(head -n 1 "${ACTIVE_POINTER}")
+else
+  JOBS=
+fi
+
+if [ -n "${JOBS}" ] && [ -s "${JOBS}" ]; then
+  JOB_IDS=$(awk -F '\t' 'NR > 1 {print $5}' "${JOBS}" | paste -sd, -)
+  echo "ACTIVE_STAGED_SWEEP=${JOBS}"
+  column -t -s $'\t' "${JOBS}"
+  squeue -j "${JOB_IDS}" -o "%.18i %.30j %.10T %.10M %.10l %.24R"
+  sacct -j "${JOB_IDS}" --units=G \
+    --format=JobIDRaw,JobName%30,State%28,ExitCode,Elapsed,Timelimit,MaxRSS
+
+  while IFS=$'\t' read -r LR EPOCH INITIAL TARGET JOB_ID DEP_JOB RESUME OUTDIR SUBMITTED; do
+    if [ "${JOB_ID}" != "job_id" ]; then
+      LOG=${PROJECT_ROOT}/logs/pareto-dpo-stage-${JOB_ID}.out
+      echo
+      echo "========== lr=${LR} target_epoch=${EPOCH} =========="
+      if [ -s "${LOG}" ]; then
+        grep -F "'global_step/max_steps':" "${LOG}" | tail -n 1 || true
+        grep -F "'eval_loss':" "${LOG}" | tail -n 1 || true
+      else
+        echo "WAITING: log has not been created"
+      fi
+      if [ -s "${OUTDIR}/stage_contract.json" ]; then
+        cat "${OUTDIR}/stage_contract.json"
+      fi
+    fi
+  done < "${JOBS}"
+else
+  echo "MISSING: active staged sweep manifest"
+fi
+```
+
+`PENDING (Dependency)` 是正常状态。若上游失败，下游可能显示 `DependencyNeverSatisfied`；此时不要手工强制启动下游，因为它没有完整 checkpoint。
+
+### 16.5 Torch：完成后自动汇总 9 行 validation 结果
+
+```bash
+export PROJECT_ROOT=/scratch/xl6775/projects/EgoQA-two-user-annotated-pareto-dpo
+export TRAIN_ENV=/scratch/xl6775/envs/egoqa-ms-swift-v4.2.2-vllm024
+export OUTPUT_ROOT=${PROJECT_ROOT}/outputs/annotated_preference
+export PYTHON=${TRAIN_ENV}/bin/python
+ACTIVE_POINTER=${OUTPUT_ROOT}/active_staged_sweep_manifest.txt
+
+if [ -s "${ACTIVE_POINTER}" ]; then
+  JOBS=$(head -n 1 "${ACTIVE_POINTER}")
+else
+  JOBS=
+fi
+
+if [ -n "${JOBS}" ] && [ -s "${JOBS}" ]; then
+  SWEEP_DIR=$(dirname "${JOBS}")
+  RESULTS=${SWEEP_DIR}/staged_sweep_results.csv
+  BEST=${SWEEP_DIR}/best_config.env
+
+  "${PYTHON}" - "${JOBS}" "${RESULTS}" "${BEST}" <<'PY'
+import csv
+import json
+import math
+import sys
+from pathlib import Path
+
+jobs_path, results_path, best_path = map(Path, sys.argv[1:])
+jobs = list(csv.DictReader(
+    jobs_path.open("r", encoding="utf-8", newline=""), delimiter="\t"
+))
+rows = []
+missing = []
+
+for job in jobs:
+    output_dir = Path(job["output_dir"])
+    state_path = output_dir / "trainer_state.json"
+    gate_path = output_dir / "dpo_gate_result.json"
+    if not state_path.is_file() or not gate_path.is_file():
+        missing.append(str(output_dir))
+        continue
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    eval_rows = [
+        item for item in state.get("log_history", [])
+        if isinstance(item, dict) and "eval_loss" in item
+    ]
+    if not eval_rows:
+        missing.append(str(output_dir))
+        continue
+    item = eval_rows[-1]
+    rows.append({
+        "learning_rate": job["learning_rate"],
+        "epoch": int(job["target_epoch"]),
+        "job_id": job["job_id"],
+        "global_step": state.get("global_step"),
+        "gate_status": gate.get("status"),
+        "eval_loss": item.get("eval_loss"),
+        "eval_pair_accuracy": item.get("eval_rewards/accuracies"),
+        "eval_reward_margin": item.get("eval_rewards/margins"),
+        "output_dir": str(output_dir),
+    })
+
+fields = [
+    "learning_rate", "epoch", "job_id", "global_step", "gate_status",
+    "eval_loss", "eval_pair_accuracy", "eval_reward_margin", "output_dir",
+]
+with results_path.open("w", encoding="utf-8", newline="") as handle:
+    writer = csv.DictWriter(handle, fieldnames=fields)
+    writer.writeheader()
+    writer.writerows(rows)
+
+def finite(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+valid = [
+    row for row in rows
+    if row["gate_status"] == "passed"
+    and finite(row["eval_loss"])
+    and finite(row["eval_pair_accuracy"])
+    and finite(row["eval_reward_margin"])
+]
+ranked = sorted(valid, key=lambda row: (
+    row["eval_loss"], -row["eval_pair_accuracy"],
+    -row["eval_reward_margin"], row["epoch"],
+))
+
+for row in ranked:
+    print(
+        f'lr={row["learning_rate"]:>5} epoch={row["epoch"]} '
+        f'loss={row["eval_loss"]:.9f} '
+        f'acc={row["eval_pair_accuracy"]:.6f} '
+        f'margin={row["eval_reward_margin"]:.9f}'
+    )
+
+if len(valid) == 9 and not missing:
+    best = ranked[0]
+    best_path.write_text(
+        f'BEST_LR={best["learning_rate"]}\n'
+        f'BEST_EPOCH={best["epoch"]}\n'
+        f'BEST_SOURCE_JOB={best["job_id"]}\n',
+        encoding="utf-8",
+    )
+    print("STAGED_SWEEP_RESULT_COUNT_PASSED count=9")
+    print(f"RESULTS={results_path}")
+    print(f"BEST_CONFIG={best_path}")
+else:
+    print(f"WAITING: valid_rows={len(valid)} missing={len(missing)}")
+PY
+else
+  echo "MISSING: active staged sweep manifest"
+fi
+```
+
+只有出现 `STAGED_SWEEP_RESULT_COUNT_PASSED count=9` 才进行最终配置选择。排序规则为：先最小化 `eval_loss`，再最大化 pair accuracy 和 reward margin，最后倾向更少 epoch。
+
+### 16.6 Windows：无需 JobID 下载 sweep 表
+
+先在 Torch 汇总成功并记下 `staged_sweep_<时间戳>` 目录名，然后在 Windows PowerShell 执行：
+
+```powershell
+$TorchHost = 'greene.hpc.nyu.edu'
+$RemoteRoot = '/scratch/xl6775/projects/EgoQA-two-user-annotated-pareto-dpo/outputs/annotated_preference'
+$SweepName = Read-Host '输入 staged_sweep_ 开头的目录名'
+$LocalDir = Join-Path $env:USERPROFILE "Downloads\$SweepName"
+New-Item -ItemType Directory -Force -Path $LocalDir | Out-Null
+
+scp "xl6775@${TorchHost}:${RemoteRoot}/${SweepName}/jobs.tsv" $LocalDir
+scp "xl6775@${TorchHost}:${RemoteRoot}/${SweepName}/staged_sweep_results.csv" $LocalDir
+scp "xl6775@${TorchHost}:${RemoteRoot}/${SweepName}/best_config.env" $LocalDir
+Get-ChildItem -LiteralPath $LocalDir
+```
+
+该下载只包含小型 manifest 和指标表，不下载 adapter、optimizer、视频或整个 outputs。

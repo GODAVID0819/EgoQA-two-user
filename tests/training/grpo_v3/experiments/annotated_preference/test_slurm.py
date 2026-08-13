@@ -16,6 +16,8 @@ SCRIPTS = (
     "overfit_probe.sbatch",
     "train.sbatch",
     "evaluate.sbatch",
+    "staged_train.sbatch",
+    "submit_staged_sweep.sh",
 )
 
 
@@ -47,6 +49,33 @@ def _assert_bash_syntax_if_available(test: unittest.TestCase) -> None:
 
 
 class AnnotatedPreferenceSlurmTests(unittest.TestCase):
+    def test_staged_sweep_submits_three_dependency_chains_and_persists_manifest(self) -> None:
+        submit = _read("submit_staged_sweep.sh")
+        for token in (
+            "3e-5 6e-5 1e-4",
+            "--dependency=afterok:",
+            "jobs.tsv",
+            "active_staged_sweep_manifest.txt",
+            "TARGET_GLOBAL_STEP",
+            "RESUME_CHECKPOINT",
+        ):
+            self.assertIn(token, submit)
+        self.assertNotIn("cuda.py", submit)
+
+    def test_staged_training_restores_full_checkpoint_and_checks_global_step(self) -> None:
+        staged = _read("staged_train.sbatch")
+        for token in (
+            '--resume_from_checkpoint "${RESUME_CHECKPOINT}"',
+            '--max_steps "${TARGET_GLOBAL_STEP}"',
+            'cp -a "${CHECKPOINT_DIR}" "${OUTDIR}/checkpoint"',
+            "EXPECTED_INITIAL_STEP",
+            "TARGET_GLOBAL_STEP",
+            "optimizer.pt",
+            "trainer_state.json",
+        ):
+            self.assertIn(token, staged)
+        self.assertNotIn("cuda.py", staged)
+
     def test_common_and_gate0_contract(self) -> None:
         common = _read("common.sh")
         gate0 = _read("gate0_data.sbatch")

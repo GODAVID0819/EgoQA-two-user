@@ -7,6 +7,19 @@ RUNBOOK = ROOT / "training/grpo_v3/experiments/annotated_preference/TORCH_RUNBOO
 
 
 class TorchRunbookTest(unittest.TestCase):
+    def test_runbook_contains_copyable_staged_sweep_workflow(self) -> None:
+        text = RUNBOOK.read_text(encoding="utf-8")
+        for token in (
+            "submit_staged_sweep.sh",
+            "active_staged_sweep_manifest.txt",
+            "3e-5",
+            "6e-5",
+            "1e-4",
+            "DependencyNeverSatisfied",
+            "staged_sweep_results.csv",
+        ):
+            self.assertIn(token, text)
+
     def test_runbook_locks_pareto_dpo_gate_contract_and_safe_login_shell(self) -> None:
         text = RUNBOOK.read_text(encoding="utf-8")
         required = (
