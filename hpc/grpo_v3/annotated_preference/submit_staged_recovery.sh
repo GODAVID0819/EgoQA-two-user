@@ -39,11 +39,35 @@ test -f "${SCRIPT}"
 test -s "${OVERFIT_RESULT}"
 mkdir -p "${OUTPUT_ROOT}"
 
+PREVIOUS_RECOVERY_MANIFEST=
 if [ -s "${ACTIVE_POINTER}" ]; then
   EXISTING_MANIFEST=$(head -n 1 "${ACTIVE_POINTER}")
   if [ -s "${EXISTING_MANIFEST}" ]; then
-    echo "STOP: active staged recovery already exists: ${EXISTING_MANIFEST}"
-    false
+    EXISTING_JOB_IDS=$(awk -F '\t' 'NR > 1 && $5 ~ /^[0-9]+$/ {print $5}' \
+      "${EXISTING_MANIFEST}" | sort -u | paste -sd, -)
+    EXISTING_JOB_COUNT=$(awk -F '\t' 'NR > 1 && $5 ~ /^[0-9]+$/ {seen[$5]=1} END {print length(seen)}' \
+      "${EXISTING_MANIFEST}")
+    TERMINAL_JOB_COUNT=0
+    if [ -n "${EXISTING_JOB_IDS}" ]; then
+      TERMINAL_JOB_COUNT=$(sacct -n -X -j "${EXISTING_JOB_IDS}" \
+        --format=JobIDRaw,State --parsable2 \
+        | awk -F '|' '
+            $1 ~ /^[0-9]+$/ {
+              state=$2
+              sub(/[ +].*$/, "", state)
+              if (state ~ /^(COMPLETED|FAILED|CANCELLED|TIMEOUT|OUT_OF_MEMORY|NODE_FAIL|PREEMPTED|BOOT_FAIL|DEADLINE|REVOKED|SPECIAL_EXIT)$/) {
+                seen[$1]=1
+              }
+            }
+            END {print length(seen)}')
+    fi
+    if [ "${EXISTING_JOB_COUNT}" -eq 0 ] || \
+       [ "${TERMINAL_JOB_COUNT}" -ne "${EXISTING_JOB_COUNT}" ]; then
+      echo "STOP: previous staged recovery still has non-terminal jobs: ${EXISTING_MANIFEST}"
+      false
+    fi
+    PREVIOUS_RECOVERY_MANIFEST=${EXISTING_MANIFEST}
+    echo "PREVIOUS_RECOVERY_MANIFEST=${PREVIOUS_RECOVERY_MANIFEST}"
   fi
 fi
 
@@ -90,6 +114,22 @@ printf 'learning_rate\ttarget_epoch\tinitial_step\ttarget_step\tjob_id\tdependen
 while read -r LR PARENT_JOB FAILED_E2 CANCELLED_E3; do
   LR_TAG=${LR//-/m}
   PARENT_CHECKPOINT=${OUTPUT_ROOT}/staged_${PARENT_JOB}/checkpoint
+  REPLACED_E2=${FAILED_E2}
+  REPLACED_E3=${CANCELLED_E3}
+  if [ -n "${PREVIOUS_RECOVERY_MANIFEST}" ]; then
+    PREVIOUS_E2=$(awk -F '\t' -v lr="${LR}" \
+      'NR > 1 && $1 == lr && $2 == 2 {job=$5} END {print job}' \
+      "${PREVIOUS_RECOVERY_MANIFEST}")
+    PREVIOUS_E3=$(awk -F '\t' -v lr="${LR}" \
+      'NR > 1 && $1 == lr && $2 == 3 {job=$5} END {print job}' \
+      "${PREVIOUS_RECOVERY_MANIFEST}")
+    if [ -n "${PREVIOUS_E2}" ]; then
+      REPLACED_E2=${PREVIOUS_E2}
+    fi
+    if [ -n "${PREVIOUS_E3}" ]; then
+      REPLACED_E3=${PREVIOUS_E3}
+    fi
+  fi
 
   E2_RAW=$(sbatch --parsable \
     --job-name="pareto-recovery-${LR_TAG}-e2" \
@@ -100,7 +140,7 @@ while read -r LR PARENT_JOB FAILED_E2 CANCELLED_E3; do
   E2_OUTPUT=${OUTPUT_ROOT}/staged_${E2_JOB}
   printf '%s\t2\t66\t132\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "${LR}" "${E2_JOB}" "${PARENT_JOB}" "${PARENT_CHECKPOINT}" \
-    "${E2_OUTPUT}" "$(date -Iseconds)" "${FAILED_E2}" >> "${JOBS}"
+    "${E2_OUTPUT}" "$(date -Iseconds)" "${REPLACED_E2}" >> "${JOBS}"
 
   E3_RESUME=${E2_OUTPUT}/checkpoint
   E3_RAW=$(sbatch --parsable \
@@ -113,7 +153,7 @@ while read -r LR PARENT_JOB FAILED_E2 CANCELLED_E3; do
   E3_OUTPUT=${OUTPUT_ROOT}/staged_${E3_JOB}
   printf '%s\t3\t132\t198\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "${LR}" "${E3_JOB}" "${E2_JOB}" "${E3_RESUME}" \
-    "${E3_OUTPUT}" "$(date -Iseconds)" "${CANCELLED_E3}" >> "${JOBS}"
+    "${E3_OUTPUT}" "$(date -Iseconds)" "${REPLACED_E3}" >> "${JOBS}"
 done <<< "${RECOVERY_SPECS}"
 
 ROW_COUNT=$(awk -F '\t' 'NR > 1 {count++} END {print count+0}' "${JOBS}")

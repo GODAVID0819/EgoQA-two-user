@@ -74,7 +74,7 @@ CMD=(swift rlhf
   --data_seed 42
   --eval_strategy epoch
   --save_strategy epoch
-  --save_total_limit 1
+  --save_total_limit 3
   --save_only_model false
   --logging_steps 1
   --output_dir "${SWIFT_OUTPUT}"

@@ -79,8 +79,10 @@ class AnnotatedPreferenceSlurmTests(unittest.TestCase):
             "TARGET_GLOBAL_STEP",
             "optimizer.pt",
             "trainer_state.json",
+            "--save_total_limit 3",
         ):
             self.assertIn(token, staged)
+        self.assertNotIn("--save_total_limit 1", staged)
         self.assertNotIn("cuda.py", staged)
 
     def test_staged_recovery_submits_only_failed_epoch2_to_epoch3_chains(self) -> None:
@@ -96,6 +98,9 @@ class AnnotatedPreferenceSlurmTests(unittest.TestCase):
             "active_staged_recovery_manifest.txt",
             "replaces_job_id",
             "RECOVERY_SUBMISSION_PASSED count=6",
+            "PREVIOUS_RECOVERY_MANIFEST",
+            "sacct -n -X",
+            "STOP: previous staged recovery still has non-terminal jobs",
         ):
             self.assertIn(token, recovery)
         self.assertNotIn("submit_staged_sweep.sh", recovery)
