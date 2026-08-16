@@ -17,6 +17,12 @@ from .clip_gap_demo import (
 )
 from .clip_exclusive_mining import mine_clip_exclusive_candidates
 from .group_relative_clip_sampling import mine_group_relative_clip_candidates
+from .generation_ablation import (
+    GENERATION_SWEEPS,
+    parse_generation_sweeps,
+    prepare_generation_ablation,
+    summarize_generation_ablation,
+)
 from .pruning_k_grid import (
     DEFAULT_K_VALUES,
     DEFAULT_RANDOM_SEED,
@@ -42,7 +48,13 @@ from .object_hints import (
     enrich_evidence_with_object_hints,
 )
 from .qa_pipeline import add_runner_args, validate_outputs
+from .repair_pruned_pair_media import repair_pruned_pair_media
 from .review_media import materialize_review_videos
+from .six_view_packet_prep import prepare_six_view_packets
+from .six_video_qa_tester import (
+    add_six_video_tester_args,
+    run_six_video_test_from_args,
+)
 from .video_qa_loop import add_video_loop_args, generate_video_qa_loop, parse_question_types
 
 
@@ -227,6 +239,50 @@ def main(argv: list[str] | None = None) -> int:
     evidence.add_argument("--no-download-media", action="store_true")
     evidence.add_argument("--random-seed", type=int)
     evidence.add_argument("--stratify-by-day", action="store_true")
+
+    six_view = sub.add_parser(
+        "prepare_six_view_packets",
+        help="Fetch four additional full videos for each two-video packet",
+    )
+    six_view.add_argument("--evidence", required=True)
+    six_view.add_argument("--manifest", required=True)
+    six_view.add_argument("--cache-dir", required=True)
+    six_view.add_argument(
+        "--output-dir",
+        help="Defaults to <evidence directory>/remaining_four_full_videos",
+    )
+    six_view.add_argument("--expected-packet-count", type=int, default=300)
+    six_view.add_argument(
+        "--materialize-mode",
+        choices=["hardlink", "copy"],
+        default="hardlink",
+    )
+    six_view.add_argument(
+        "--missing-view-policy",
+        choices=["sample", "error"],
+        default="sample",
+    )
+    six_view.add_argument("--fallback-random-seed", type=int, default=42)
+    six_view.add_argument("--no-download", action="store_true")
+
+    repair_pair = sub.add_parser(
+        "repair_clip_pruned_pair",
+        help="Restore missing original/pruned MP4s for one saved evidence packet",
+    )
+    repair_pair.add_argument("--evidence", required=True)
+    repair_pair.add_argument("--day", required=True)
+    repair_pair.add_argument("--time-token", required=True)
+    repair_pair.add_argument("--evidence-id")
+    repair_pair.add_argument("--cache-dir")
+    repair_pair.add_argument("--ffmpeg-binary", default="ffmpeg")
+    repair_pair.add_argument("--no-download-source", action="store_true")
+    repair_pair.add_argument("--report")
+
+    six_video_test = sub.add_parser(
+        "test_six_video_qa",
+        help="Blindly test a selected model on accepted QAs using six full videos",
+    )
+    add_six_video_tester_args(six_video_test)
 
     obs = sub.add_parser("observe_clips", help="Summarize individual user clips with Qwen3-VL")
     obs.add_argument("--manifest", required=True)
@@ -415,6 +471,36 @@ def main(argv: list[str] | None = None) -> int:
     pruning_ablation.add_argument("--ffmpeg-binary", default="ffmpeg")
     pruning_ablation.add_argument("--download-media", action="store_true")
 
+    generation_ablation = sub.add_parser(
+        "prepare_generation_ablation",
+        help=(
+            "Convert a fixed-cohort pruning ablation into matched evidence files and "
+            "a generation-arm manifest"
+        ),
+    )
+    generation_ablation.add_argument("--manifest", required=True)
+    generation_ablation.add_argument("--cohort", required=True)
+    generation_ablation.add_argument("--metrics", required=True)
+    generation_ablation.add_argument("--pruning-summary", required=True)
+    generation_ablation.add_argument("--output-dir", required=True)
+    generation_ablation.add_argument(
+        "--sweeps",
+        default=",".join(GENERATION_SWEEPS),
+        help="Comma-separated controlled sweeps to carry into QA generation.",
+    )
+
+    generation_ablation_summary = sub.add_parser(
+        "summarize_generation_ablation",
+        help="Aggregate complete or partial QA-generation ablation arms",
+    )
+    generation_ablation_summary.add_argument("--arm-manifest", required=True)
+    generation_ablation_summary.add_argument(
+        "--generation-output-root",
+        required=True,
+    )
+    generation_ablation_summary.add_argument("--output-dir", required=True)
+    generation_ablation_summary.add_argument("--require-complete", action="store_true")
+
     video_gen = sub.add_parser(
         "generate_video_qa_loop",
         help="Generate video-first question-answer items with judge/evaluator retry loop",
@@ -526,6 +612,50 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"wrote {len(rows)} evidence packets to {args.output}")
         return 0
+    if args.command == "prepare_six_view_packets":
+        summary = prepare_six_view_packets(
+            evidence_path=args.evidence,
+            manifest_path=args.manifest,
+            cache_dir=args.cache_dir,
+            output_dir=args.output_dir,
+            expected_packet_count=args.expected_packet_count,
+            download_missing=not args.no_download,
+            materialize_mode=args.materialize_mode,
+            missing_view_policy=args.missing_view_policy,
+            fallback_random_seed=args.fallback_random_seed,
+        )
+        print(
+            f"prepared {summary['packet_count']} six-view packet mappings with "
+            f"{summary['remaining_video_count']} stored remaining videos at "
+            f"{summary['output_dir']}"
+        )
+        return 0
+    if args.command == "repair_clip_pruned_pair":
+        report = repair_pruned_pair_media(
+            evidence_path=args.evidence,
+            day=args.day,
+            time_token=args.time_token,
+            evidence_id=args.evidence_id,
+            cache_dir=args.cache_dir,
+            ffmpeg_binary=args.ffmpeg_binary,
+            download_missing_source=not args.no_download_source,
+            report_path=args.report,
+        )
+        print(
+            f"repaired {report['evidence_id']}: "
+            f"originals={report['restored_original_video_count']} "
+            f"pruned={report['restored_pruned_video_count']} "
+            f"report={report['report_path']}"
+        )
+        return 0
+    if args.command == "test_six_video_qa":
+        summary = run_six_video_test_from_args(args)
+        print(
+            f"tested={summary['result_count']} correct={summary['correct_count']} "
+            f"accuracy_all_selected={summary['accuracy_all_selected']} "
+            f"summary={summary['summary_path']}"
+        )
+        return 0
     if args.command == "observe_clips":
         rows = observe_clips(
             manifest_path=args.manifest,
@@ -541,6 +671,7 @@ def main(argv: list[str] | None = None) -> int:
             base_url=args.base_url,
             max_new_tokens=args.max_new_tokens,
             max_image_pixels=args.max_image_pixels,
+            video_fps=args.video_fps,
             dtype=args.dtype,
             allow_cpu=args.allow_cpu,
             disable_thinking=args.disable_thinking,
@@ -739,6 +870,34 @@ def main(argv: list[str] | None = None) -> int:
             f"{summary['variant_count']} controlled pruning variants to {args.output_dir}"
         )
         return 0
+    if args.command == "prepare_generation_ablation":
+        summary = prepare_generation_ablation(
+            manifest_path=args.manifest,
+            cohort_path=args.cohort,
+            metrics_path=args.metrics,
+            pruning_summary_path=args.pruning_summary,
+            output_dir=args.output_dir,
+            sweeps=parse_generation_sweeps(args.sweeps),
+        )
+        print(
+            f"wrote {summary['generation_arm_count']} QA-generation ablation arms "
+            f"over {summary['common_usable_pair_count']} matched pairs to {args.output_dir}"
+        )
+        return 0
+    if args.command == "summarize_generation_ablation":
+        summary = summarize_generation_ablation(
+            arm_manifest_path=args.arm_manifest,
+            generation_output_root=args.generation_output_root,
+            output_dir=args.output_dir,
+            require_complete=args.require_complete,
+        )
+        print(
+            f"summarized {summary['arm_count']} generation arms; "
+            f"complete={summary['complete_arm_count']} "
+            f"incomplete={summary['incomplete_arm_count']} "
+            f"rationale_exposures={summary['generator_rationale_exposure_count']}"
+        )
+        return 0
     if args.command == "add_object_hints":
         rows = enrich_evidence_with_object_hints(
             evidence_path=args.evidence,
@@ -776,6 +935,9 @@ def main(argv: list[str] | None = None) -> int:
             prompts_path=args.prompts_output,
             rejected_path=args.rejected_output,
             intermediate_path=args.intermediate_output,
+            judge_entropy_path=args.judge_entropy_output,
+            judge_entropy_summary_path=args.judge_entropy_summary_output,
+            judge_entropy_report_path=args.judge_entropy_report_output,
             backend=args.backend,
             model_id=args.model_id,
             base_url=args.base_url,
@@ -795,7 +957,9 @@ def main(argv: list[str] | None = None) -> int:
             judge_max_new_tokens=args.judge_max_new_tokens,
             judge_reasoning_effort=args.judge_reasoning_effort,
             qa_formality_use_generator=args.qa_formality_use_generator,
+            judge_video_source=args.judge_video_source,
             judge_include_generator_rationale=args.judge_include_generator_rationale,
+            record_judge_decision_entropy=args.record_judge_decision_entropy,
             # Archived point-scoring CLI plumbing:
             # judge_pass_fail_only=args.judge_pass_fail_only,
             # judge_quality_quota=args.judge_quality_quota,

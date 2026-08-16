@@ -7,6 +7,8 @@ import json
 import re
 from typing import Any
 
+from .schema import extract_json_object
+
 
 VIDEO_GENERATION_SCHEMA = {
     "qa_id": "string",
@@ -19,9 +21,16 @@ VIDEO_GENERATION_SCHEMA = {
     "evidence": [
         {
             "user": "name",
-            "needed_fact": "specific visible fact from this user's own video",
-            "timeframe": "specific start-end time range, or an approximate moment, in this user's video",
-            "frames_used": ["video-level evidence or approximate moment labels"],
+            "needed_fact": (
+                "specific directly visible fact from this user's supplied visual evidence"
+            ),
+            "timeframe": (
+                "specific supported time range or approximate moment in this user's "
+                "supplied visual evidence"
+            ),
+            "frames_used": [
+                "supplied-visual-evidence references or approximate moment labels"
+            ],
         }
     ],
     "referred_timestamps": [
@@ -35,7 +44,10 @@ VIDEO_GENERATION_SCHEMA = {
         "Jake": "insufficient because the asker alone only provides ...",
         "Alice": "sufficient/insufficient because the evidence provider alone ...",
     },
-    "combined_answerability": "sufficient because the required users' videos together support exactly one option",
+    "combined_answerability": (
+        "sufficient because the required users' supplied visual evidence together "
+        "supports exactly one option"
+    ),
     "generator_rationale": (
         "why this is a natural first-person information need and what missing-detail or relational "
         "structure the question expresses"
@@ -45,7 +57,10 @@ VIDEO_GENERATION_SCHEMA = {
         "overstating either view's individual necessity"
     ),
     "per_user_evidence_claims": [
-        {"user": "name", "claim": "claim grounded in that user's own video"}
+        {
+            "user": "name",
+            "claim": "claim grounded in that user's supplied visual evidence",
+        }
     ],
     "review": {
         "generator_self_check": "why the asker alone cannot answer this, why the wording is natural and timestamp-free, and why any activity relation is not semantically shallow",
@@ -99,10 +114,9 @@ DISCOVERED_RELATION_SCHEMA = {
 
 
 ANSWERABILITY_SCHEMA = {
-    "choice": "A/B/C/D/E or insufficient",
-    "answer_text": "selected option text, or empty string if insufficient",
+    "choice": "exactly one of A/B/C/D/E",
+    "answer_text": "selected option text",
     "evidence_used": "short explanation grounded only in the provided videos",
-    "insufficient_reason": "explain what is missing if choice is insufficient",
 }
 
 
@@ -362,13 +376,14 @@ STRICT_JSON_OUTPUT_CONTRACT = """Output contract:
 QUESTION_TYPE_GENERATION_INSTRUCTIONS = {
     "commonality": (
         "Create a commonality question only when the shared state, consequence, or follow-up "
-        "becomes clear by combining a speaker-side anchor from one required user's video with "
-        "a related missing detail visible only in another required user's video. Do not ask "
-        "about an object, action, or room state that each single video reveals independently."
+        "becomes clear by combining a speaker-side anchor from one required user's visual "
+        "evidence with a related missing detail visible only in another required user's "
+        "visual evidence. Do not ask about an object, action, or room state that each "
+        "single-user evidence set reveals independently."
     ),
     "difference": (
         "Create a difference question whose answer identifies a meaningful contrast, "
-        "asymmetry, or complementary detail between the required users' egocentric videos."
+        "asymmetry, or complementary detail between the required users' visual evidence."
     ),
 }
 
@@ -394,10 +409,9 @@ QUESTION_TYPE_MULTIPLE_CHOICE_INSTRUCTIONS = {
 }
 
 
-# Archived for possible future integration. The production baseline builder does
-# not render this block, but preserving it here makes the former experiment easy
-# to restore without reconstructing the wording.
-ANTI_ACTIVITY_QUERY_GUIDANCE = """Concurrent-activity guidance:
+# Archived concurrent-activity experiment. Production prompts must not render
+# this block; it is retained only so the retired experiment can be reproduced.
+ARCHIVED_CONCURRENT_ACTIVITY_GUIDANCE = """Concurrent-activity guidance:
 - A concurrent question may use a concrete event from either user's synchronized view as the relative temporal key and ask which concrete event or activity in the other view occurred at the same time.
 - A second valid form asks which complete pair of activities, one associated with each view, overlapped.
 - The strict dependency must be real: each single-user condition lacks a required side of the temporal match, while the combined synchronized views establish exactly one answer.
@@ -405,6 +419,22 @@ ANTI_ACTIVITY_QUERY_GUIDANCE = """Concurrent-activity guidance:
 - The evidence and generator_rationale must record the concrete events and their original-video intervals. Timestamp proximity or equal positions in independently pruned videos are not proof of concurrency.
 - A shallow prompt such as "What was the other person doing?" still fails because it expresses no concrete temporal relation.
 - Use examples only to understand the structural distinction. Never copy their activities, objects, people, or setting.
+"""
+
+
+ANTI_ACTIVITY_QUERY_GUIDANCE = """Concurrent-activity restriction:
+- Do not generate a question whose answer is what one person was doing while or when another person was doing something else.
+- This restriction applies even when the anchor event is concrete, the supplied evidence comes from synchronized recordings, or the temporal overlap can be verified.
+- Do not generate reverse-direction variants that fix the evidence-provider event and ask what the asker was doing.
+- Do not generate options that encode pairs of concurrent activities.
+- Instead, ask for a concrete missing object, identity, state, location, placement, outcome, consequence, explanation, interaction result, or follow-up that reflects a natural speaker-side information need.
+"""
+
+
+RESTORED_GENERATOR_COVERAGE_GUIDANCE = """Restored design safeguards:
+- Do not reveal or strongly suggest the correct answer in the question stem. Ask for the missing detail directly (for example, ask "What was next to the counter?" rather than "Was there a blue garbage bin next to the counter?") and place the candidate answer in the options.
+- Prefer casual everyday wording over formal language. Be creative in tone and wording, just like how somebody would naturally ask everyday.
+- Shared clock time or proximity is not a relation by itself. Do not generate a question whose answer is another person's concurrent activity. Never expose time values in the question or options.
 """
 
 
@@ -425,11 +455,13 @@ The following are structural hints, not categories to choose from. They are opti
 
 - State verification or change. Ask about an observed state the asker could not verify. Claim a change only when both the earlier and later states are visible; otherwise ask only about the observed state.
   Example structure: "I can't wait to eat whatever is being baked in the oven. Is the oven done with cooking and turned off?"
+"""
 
-- Cross-view concurrent activity. Fix a concrete event from either user's view and ask which event in the other view happened at the same time. In each video, there may be multiple actions that the user takes, for example "walking down the stairs", "watching a video", "reaching for a mug", etc. Pick one from either user's video, and ask which event in the other user's video occured around the same time. 
+
+# Retired example retained for offline reproduction only. It is intentionally
+# excluded from POSITIVE_EXAMPLES_GUIDANCE and all production prompt builders.
+ARCHIVED_CONCURRENT_ACTIVITY_EXAMPLES = """- Cross-view concurrent activity. Fix a concrete event from either user's view and ask which event in the other view happened at the same time. In each video, there may be multiple actions that the user takes, for example "walking down the stairs", "watching a video", "reaching for a mug", etc. Pick one from either user's video, and ask which event in the other user's video occured around the same time.
   Example: "What was I doing when the person with pink hair chopped the vegetables for dinner?" Here, the answer option should be the event the asker's video supported, and "the person in pink hair chopping vegetables" is the event that the evidence provider's video shows.
-  
-All user-facing questions and options must avoid clock times, timestamps, timecodes, frame numbers, seconds from the start, and minute-mark citations. Precise times belong only in internal evidence and referred_timestamps fields.
 """
 
 
@@ -511,6 +543,26 @@ PASS_FAIL_ONLY_INSTRUCTION = """Binary decision contract:
 - Do not assign a numerical score, quality label, rank, quota, or comparison against other candidates.
 """
 
+JUDGE_OUTPUT_SCHEMA_MARKER = "Return exactly one valid JSON object with this exact shape:"
+
+JUDGE_FIRST_VERDICT_INSTRUCTION = """Authoritative first-verdict contract:
+- Apply exactly the same judge criteria and return the same detailed checks and feedback requested below.
+- The first JSON field must be verdict, with exactly one lowercase value: pass or fail.
+- verdict is the authoritative overall decision for this model judge. Decide it before generating checks, subchecks, reasons, fixes, blocking_failures, or feedback.
+- Every later status and blocking_failures entry must be consistent with verdict, but those later fields do not override it.
+- Do not emit review_passed. The lowercase verdict field replaces that boolean.
+- Return exactly one valid JSON object and no markdown, analysis, or text outside it.
+"""
+
+JUDGE_MINIMAL_VERDICT_PROBE_INSTRUCTION = """Independent entropy-probe contract:
+- Apply the judge criteria above silently to the provided candidate and media.
+- This is a separate diagnostic judgment. You are not given the production judge's answer.
+- Return exactly one valid JSON object and no markdown, analysis, or text outside it.
+- The object must contain exactly one field: verdict.
+- verdict must be exactly one lowercase value: pass or fail.
+- Do not return review_passed, checks, subchecks, reasons, fixes, blocking_failures, feedback, scores, or any other field.
+"""
+
 
 QA_FORMALITY_QUALITY_RUBRIC = """qa_formality quality_score rubric:
 - 3 / 3_strong: The JSON and five-option structure are clean, the question is natural and clearly first-person or shared-memory, references are unambiguous, no participant names or timestamp citations appear, and any activity relation is semantically concrete rather than shallow.
@@ -580,9 +632,9 @@ QA_FORMALITY_CHECK_SCHEMA = {
         "other_person_activity_query": {
             "status": "PASS/FAIL",
             "reason": (
-                "whether an activity question expresses a concrete semantic relation, such as a "
-                "specific temporal match, task outcome, handoff follow-up, or interaction, rather "
-                "than a vague activity report"
+                "whether the question asks what one person was doing concurrently with another "
+                "event instead of asking for a concrete missing object, state, location, outcome, "
+                "consequence, explanation, interaction result, or follow-up"
             ),
         },
         "direct_name_leakage": {
@@ -736,6 +788,78 @@ def judge_schema_for_check(
     return schema
 
 
+def build_judge_first_verdict_prompt(
+    review_prompt: str,
+    check_name: str,
+) -> str:
+    """Put the authoritative lowercase production verdict before judge details."""
+
+    if check_name not in {"qa_formality", "evidence_groundedness"}:
+        raise ValueError(f"unsupported first-verdict judge: {check_name}")
+    if JUDGE_OUTPUT_SCHEMA_MARKER not in review_prompt:
+        raise ValueError("judge prompt does not contain the expected output-schema marker")
+    rubric_prompt, schema_text = review_prompt.rsplit(JUDGE_OUTPUT_SCHEMA_MARKER, 1)
+    try:
+        detailed_schema = json.loads(schema_text.strip())
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ValueError(f"judge prompt output schema is not valid JSON: {exc}") from exc
+    if not isinstance(detailed_schema, dict):
+        raise ValueError("judge prompt output schema must be a JSON object")
+    detailed_schema.pop("review_passed", None)
+    detailed_schema.pop("verdict", None)
+    feedback_contract = detailed_schema.get("feedback_to_generator")
+    if isinstance(feedback_contract, str):
+        detailed_schema["feedback_to_generator"] = feedback_contract.replace(
+            "review_passed is false",
+            "verdict is fail",
+        )
+    first_verdict_schema = {
+        "verdict": "pass/fail",
+        **detailed_schema,
+    }
+    return f"""{rubric_prompt}
+
+{JUDGE_FIRST_VERDICT_INSTRUCTION}
+
+Judge decision field: {check_name}
+
+{JUDGE_OUTPUT_SCHEMA_MARKER}
+{json.dumps(first_verdict_schema, ensure_ascii=False, indent=2)}
+"""
+
+
+def build_judge_first_verdict_sidecar_prompt(
+    review_prompt: str,
+    check_name: str,
+) -> str:
+    """Compatibility alias for the offline sidecar experiment."""
+
+    return build_judge_first_verdict_prompt(review_prompt, check_name)
+
+
+def build_judge_minimal_verdict_probe_prompt(
+    review_prompt: str,
+    check_name: str,
+) -> str:
+    """Keep a judge's rubric and candidate, but request only a pass/fail verdict."""
+
+    if check_name not in {"qa_formality", "evidence_groundedness"}:
+        raise ValueError(f"unsupported minimal-verdict judge: {check_name}")
+    if JUDGE_OUTPUT_SCHEMA_MARKER not in review_prompt:
+        raise ValueError("judge prompt does not contain the expected output-schema marker")
+    rubric_prompt, _ = review_prompt.rsplit(JUDGE_OUTPUT_SCHEMA_MARKER, 1)
+    minimal_schema = {"verdict": "pass/fail"}
+    return f"""{rubric_prompt.rstrip()}
+
+{JUDGE_MINIMAL_VERDICT_PROBE_INSTRUCTION}
+
+Judge decision field: {check_name}
+
+{JUDGE_OUTPUT_SCHEMA_MARKER}
+{json.dumps(minimal_schema, ensure_ascii=False, indent=2)}
+"""
+
+
 def _pruned_to_original_time_map(
     keep_intervals: list[list[float]] | list[tuple[float, float]] | None,
 ) -> list[dict[str, float]]:
@@ -788,54 +912,127 @@ def temporal_pruning_brief(temporal_pruning: dict[str, Any] | None) -> dict[str,
     return brief
 
 
+SAMPLED_FRAME_GENERATOR_MEDIA_MODES = {
+    "centroid_frames_only",
+    "retained_cluster_frames_only",
+}
+
+
+def generator_uses_sampled_frames(packet: dict[str, Any]) -> bool:
+    if packet.get("generator_media_mode") in SAMPLED_FRAME_GENERATOR_MEDIA_MODES:
+        return True
+    return any(
+        isinstance(clip, dict)
+        and clip.get("generator_media_mode") in SAMPLED_FRAME_GENERATOR_MEDIA_MODES
+        for clip in packet.get("clips") or []
+    )
+
+
 def video_packet_brief(packet: dict[str, Any]) -> str:
     required_users = list(packet.get("required_users") or [])
     speaker_user = required_users[0] if required_users else None
     evidence_provider_user = required_users[1] if len(required_users) > 1 else None
     clips = []
+    packet_image_index = 1
+    sampled_media_modes: set[str] = set()
+    sampled_frame_modes = SAMPLED_FRAME_GENERATOR_MEDIA_MODES
+
     for clip in packet.get("clips", []):
         gaze_summary = clip.get("gaze_summary") if isinstance(clip.get("gaze_summary"), dict) else {}
+        generator_media_mode = clip.get("generator_media_mode")
+        pruning_summary = (
+            None
+            if generator_media_mode == "retained_cluster_frames_only"
+            else temporal_pruning_brief(clip.get("temporal_pruning"))
+        )
         clip_brief = {
-            "user": clip.get("agent_name"),
+            "user": clip.get("agent_name") or clip.get("user"),
             "day": clip.get("day"),
             "clip_clock": clip.get("clip_clock"),
             "duration_seconds": clip.get("duration_seconds"),
             "segment_count": clip.get("segment_count"),
             "local_video": clip.get("local_video"),
-            "generator_media_mode": clip.get("generator_media_mode"),
-            "pruning_summary": temporal_pruning_brief(clip.get("temporal_pruning")),
+            "generator_media_mode": generator_media_mode,
+            "pruning_summary": pruning_summary,
             "projection_status": gaze_summary.get("projection_status"),
         }
+
+        if generator_media_mode in sampled_frame_modes:
+            frame_rows = []
+            for frame in clip.get("frames", []):
+                if not isinstance(frame, dict):
+                    continue
+                frame_rows.append(
+                    {
+                        "packet_image_index": packet_image_index,
+                        "original_timestamp_seconds": frame.get("timestamp_seconds"),
+                    }
+                )
+                packet_image_index += 1
+            if frame_rows:
+                sampled_media_modes.add(str(generator_media_mode))
+                clip_brief["generator_frame_input"] = {
+                    "frame_count": len(frame_rows),
+                    "ordering": "chronological by original timestamp within this user",
+                    "frames": frame_rows,
+                }
+
         clips.append({key: value for key, value in clip_brief.items() if value is not None})
-    return json.dumps(
-        {
-            "evidence_id": packet.get("evidence_id"),
-            "required_users": required_users,
-            "role_contract": {
-                "speaker_user": speaker_user,
-                "evidence_provider_user": evidence_provider_user,
-                "required_users_order": (
-                    "required_users[0] is the asker and the question must use that user's natural "
-                    "first-person or shared-memory perspective. That user's view alone should be "
-                    "insufficient. required_users[1] supplies additional evidence and may be "
-                    "sufficient alone for an ordinary missing-detail question. In a strict "
-                    "comparison, identity-linkage, or temporal-match form, each view supplies an "
-                    "answer-bearing component and neither single view should determine the relation."
-                ),
-            },
-            "prompt_requirement": (
-                "Use the visual media directly and choose the strongest natural relation supported "
-                "by the current evidence. This may be a missing detail, comparison, identity link, "
-                "handoff follow-up, state verification, temporal relation, sequence, interaction, "
-                "or another coherent relation. Do not force a family. For concurrent questions, "
-                "either view may supply the fixed event, and original-time alignment must establish "
-                "the cross-view match. Do not cite timestamps in the user-facing question or options."
+
+    generator_media_contract = None
+    if sampled_media_modes:
+        if sampled_media_modes == {"centroid_frames_only"}:
+            mode = "retained_clip_cluster_centroid_images_only"
+            frame_description = "isolated representative still images"
+        elif sampled_media_modes == {"retained_cluster_frames_only"}:
+            mode = "retained_clip_cluster_member_images_only"
+            frame_description = "sampled still images from retained cluster content"
+        else:
+            mode = "mixed_sampled_frame_modes"
+            frame_description = "sampled still images"
+
+        generator_media_contract = {
+            "mode": mode,
+            "packet_image_order": (
+                "all required_users[0] sampled images first, followed by all "
+                "required_users[1] sampled images; each user's images are in original "
+                "timestamp order; use packet_image_index above when available"
             ),
-            "clips": clips,
+            "limitations": (
+                f"These are {frame_description}, not a continuous video. Adjacent supplied "
+                "images may be separated by omitted footage. Do not infer unseen motion, "
+                "transitions, duration, or events between images. Original timestamps are "
+                "internal evidence metadata and must not appear in the question or options."
+            ),
+        }
+
+    brief = {
+        "evidence_id": packet.get("evidence_id"),
+        "required_users": required_users,
+        "role_contract": {
+            "speaker_user": speaker_user,
+            "evidence_provider_user": evidence_provider_user,
+            "required_users_order": (
+                "required_users[0] is the asker and the question must use that user's natural "
+                "first-person or shared-memory perspective. That user's view alone should be "
+                "insufficient. required_users[1] supplies additional evidence and may be "
+                "sufficient alone for an ordinary missing-detail question. In a strict "
+                "comparison or identity-linkage form, each view supplies an answer-bearing "
+                "component and neither single view should determine the relation."
+            ),
         },
-        ensure_ascii=False,
-        indent=2,
-    )
+        "prompt_requirement": (
+            "Use the visual media directly and choose the strongest natural relation supported "
+            "by the current evidence. This may be a missing detail, comparison, identity link, "
+            "handoff follow-up, state verification, temporal relation, sequence, interaction, "
+            "or another coherent relation. Do not force a family. Do not cite timestamps in "
+            "the user-facing question or options."
+        ),
+        "clips": clips,
+    }
+    if generator_media_contract is not None:
+        brief["generator_media_contract"] = generator_media_contract
+    return json.dumps(brief, ensure_ascii=False, indent=2)
 
 
 def _frame_summary(frame: dict[str, Any] | None) -> dict[str, Any]:
@@ -922,7 +1119,12 @@ Rules for using these hints:
 """
 
 
-def object_guidance_brief(packet: dict[str, Any], *, max_objects: int = 6) -> dict[str, Any]:
+def object_guidance_brief(
+    packet: dict[str, Any],
+    *,
+    max_objects: int = 6,
+    sampled_frame_input: bool = False,
+) -> dict[str, Any]:
     """Return compact object-detection hints for prompt injection."""
 
     hints = packet.get("object_hints")
@@ -953,36 +1155,86 @@ def object_guidance_brief(packet: dict[str, Any], *, max_objects: int = 6) -> di
         "candidate_key_objects": rows,
         "warning": (
             "Object hints are VLM detections from sampled frames. They are attention anchors only; "
-            "verify object identity, location, state, and cross-user relation from the raw videos."
+            "verify object identity, location, state, and cross-user relation from "
+            + (
+                "the supplied sampled frames."
+                if sampled_frame_input
+                else "the raw videos."
+            )
         ),
     }
 
 
-def object_guidance_block(packet: dict[str, Any]) -> str:
-    brief = object_guidance_brief(packet)
+def object_guidance_block(
+    packet: dict[str, Any],
+    *,
+    sampled_frame_input: bool = False,
+) -> str:
+    brief = object_guidance_brief(
+        packet,
+        sampled_frame_input=sampled_frame_input,
+    )
     if not brief.get("available"):
         return ""
+    visual_source = (
+        "the supplied sampled frames"
+        if sampled_frame_input
+        else "the raw videos"
+    )
     return f"""Object-detection hints, for attention guidance only:
 {json.dumps(brief, ensure_ascii=False, indent=2)}
 
 Rules for using these hints:
-- Consider these objects as attention cues, but do not prefer an object question over a stronger comparison, state, interaction, temporal, or other relation supported by the raw videos.
+- Consider these objects as attention cues, but do not prefer an object question over a stronger comparison, state, interaction, temporal, or other relation supported by {visual_source}.
 - Treat the detected object name and bounding box as a pointer, not a fact.
-- Verify the object and answer from the raw videos before using it in the question, answer, options, or evidence fields.
+- Verify the object and answer from {visual_source} before using it in the question, answer, options, or evidence fields.
 - Do not mention object detection, bounding boxes, coordinates, detector models, sampled frames, or hint scores in the question or answer options.
 - Ignore these hints if they do not support a natural two-user information need.
 """
 
 
-def _feedback_block(feedback: str | None) -> str:
-    return (
-        "\nPrevious reviewer/evaluator feedback to address:\n"
-        f"{feedback}\n"
-        "Revise the new question, options, answer, and evidence to address this feedback. "
-        "Do not repeat the rejected issue.\n"
-        if feedback
-        else ""
+def _feedback_block(
+    feedback: str | None,
+    *,
+    previous_generation: str | None = None,
+) -> str:
+    if not feedback and not previous_generation:
+        return ""
+
+    rejected_item: dict[str, Any] = {}
+    if previous_generation:
+        try:
+            parsed = extract_json_object(previous_generation)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed = {}
+        for field in ("question", "options", "correct", "answer"):
+            value = parsed.get(field)
+            if value not in (None, "", []):
+                rejected_item[field] = value
+
+    blocks = ["\nRetry context:"]
+    if rejected_item:
+        blocks.extend(
+            [
+                "<previous_rejected_item>",
+                json.dumps(rejected_item, ensure_ascii=False, indent=2),
+                "</previous_rejected_item>",
+            ]
+        )
+    if feedback:
+        blocks.extend(
+            [
+                "<exact_judge_feedback>",
+                feedback,
+                "</exact_judge_feedback>",
+            ]
+        )
+    blocks.append(
+        "Generate a new question, options, answer, and evidence that avoid this failure. "
+        "Use the failed sample only as context; do not assume any of its claims are correct, "
+        "and do not repeat the failed pattern."
     )
+    return "\n".join(blocks) + "\n"
 
 
 def _numbered_lines(lines: list[str]) -> str:
@@ -998,6 +1250,7 @@ def build_video_generation_prompt(
     question_type: str,
     feedback: str | None = None,
     generation_mode: str = "baseline",
+    previous_generation: str | None = None,
 ) -> str:
     if generation_mode not in GENERATION_MODES:
         raise ValueError(f"unknown generation_mode: {generation_mode}")
@@ -1008,24 +1261,74 @@ def build_video_generation_prompt(
         if type_instruction
         else ""
     )
-    feedback_block = _feedback_block(feedback)
-    object_block = object_guidance_block(packet)
+    feedback_block = _feedback_block(
+        feedback,
+        previous_generation=previous_generation,
+    )
+    sampled_frame_input = generator_uses_sampled_frames(packet)
+    object_block = object_guidance_block(
+        packet,
+        sampled_frame_input=sampled_frame_input,
+    )
+    if sampled_frame_input:
+        generator_opening = """You are generating one natural, evidence-grounded multiple-choice question from egocentric visual evidence.
+
+Input: chronologically ordered sampled frames retained from multiple people's egocentric recordings during the same synchronized interval.
+
+These images are sparse samples rather than continuous video. Use only objects, states, actions, and relationships that are directly visible in the supplied frames and supported by the provided packet metadata.
+
+Do not infer an action, transition, handoff, state change, temporal sequence, or event occurring between sampled frames unless both relevant states or moments are visibly supported by the supplied evidence.
+
+Before returning the question, verify that every claim in the question, answer, options, evidence fields, and rationale is grounded in the supplied sampled frames.
+
+Do not use captions, subtitles, transcripts, pre-written observations, or outside knowledge."""
+        relation_source = "the supplied sampled frames"
+        timestamp_instruction = (
+            "Original timestamps may be supplied as internal metadata for ordering and "
+            "evidence bookkeeping. Do not treat timestamp proximity as proof of an unseen "
+            "event or transition. Do not include participant names, clock times, timestamps, "
+            "timecodes, frame numbers, seconds from the start, minute marks, filenames, or "
+            "clip positions in the question or options."
+        )
+        evidence_timeframe_instruction = (
+            "Fill the evidence field with each needed user's directly visible fact and the "
+            "specific supplied-frame moment or supported timeframe."
+        )
+        single_user_visibility = "the supplied sampled frames"
+        interval_wording = "the frame sets come from the same synchronized interval"
+    else:
+        generator_opening = """You are generating one natural, evidence-grounded multiple-choice question from raw egocentric videos.
+
+Input: raw videos from multiple people during the same time interval. They may be near each other or in different places. Look directly at the videos and use only visual evidence, video metadata, and provided 2D gaze coordinates when available. Do not use captions, subtitles, transcripts, pre-written observations, or outside knowledge."""
+        relation_source = "the supplied videos"
+        timestamp_instruction = (
+            "The timestamp is supplied on the top-left corner of each frame to infer exact "
+            "timing. However, do not include participant names, clock times, timestamps, "
+            "timecodes, frame numbers, seconds from the start, minute marks, filenames, or "
+            "clip positions in the question or options. Precise times belong only in internal "
+            "evidence and referred_timestamps fields."
+        )
+        evidence_timeframe_instruction = (
+            "Fill the evidence field with each needed user's visible fact and a specific "
+            "original-video timeframe."
+        )
+        single_user_visibility = "the supplied video"
+        interval_wording = "the videos share a time interval"
 
     task_lines = [
         "Generate exactly one five-option multiple-choice question.",
         *([type_requirement] if type_requirement else []),
         "Treat required_users[0] as the asker and write a natural first-person or shared-memory question from that user's perspective.",
         "Make the question a speaker-side information need: required_users[0]'s view should explain why the question naturally comes up, but should not already make the answer obvious.",
-        "Choose the strongest natural grounded relation supported by the videos. It may be a speaker-side missing detail, comparison, identity link, handoff follow-up, state verification, temporal relation, sequence, interaction, or another coherent relation you discover. Do not force a family or default automatically to an object or isolated-activity question.",
-        "required_users[0]'s view alone must be insufficient. The question should not be answered by the asker on their own; It must require additional evidence from required_user[1].",
+        f"Choose the strongest natural grounded relation supported by {relation_source}. It may be a speaker-side missing detail, comparison, identity link, handoff follow-up, state verification, temporal relation, sequence, interaction, or another coherent relation you discover. Do not force a family or default automatically to an object or isolated-activity question.",
+        "required_users[0]'s view alone must be insufficient. The question should not be answered by the asker on their own; it must require additional evidence from required_users[1].",
         "The available evidence must make exactly one answer option correct.",
-        "The timestamp is supplied on the top-left corner of each frame to infer exact timing. However, do not include participant names, clock times, timestamps, timecodes, frame numbers, seconds from the start, minute marks, filenames, or clip positions in the question or options. Precise times belong only in internal evidence and referred_timestamps fields.",
-        "Fill the evidence field with each needed user's visible fact and a specific original-video timeframe.",
-        "Return every field in the JSON shape exactly. Do not omit single_user_answerability, combined_answerability, generator_rationale, why_two_users_needed, per_user_evidence_claims, referred_timestamps, or review.",
+        timestamp_instruction,
+        evidence_timeframe_instruction,
         "The answer field must exactly equal the correct option's text, and the correct option must be one of A, B, C, D, or E.",
     ]
 
-    guidelines_block = """Guidelines:
+    guidelines_block = f"""Guidelines:
 - Use natural, informal, everyday first-person or shared-memory wording with I, me, my, we, us, or our.
 - Do not ask required_users[1] a second-person question and do not name any participant in the question or options. 
 - Do not refer to locations ambiguously, for example merely saying "the other room". Always specify with more detail; Perhaps identify the room as the living room or bedroom, or find some details that distinguishes the room and refer to that, something like "the room with a blue painting on the wall".
@@ -1033,31 +1336,23 @@ def build_video_generation_prompt(
 - Make all five options multi-word, plausible, mutually exclusive, and parallel in grammar, length, and specificity. Keep distractor options grounded in the same scene type. Do not make the correct option obvious by specificity, grammar, or option length.
 - Lead with the information request, then place first-person context when it helps identify the event or object. Prefer a direct interrogative opening such as what, which, where, who, how, did, was, or were. You can also start with "I was ...", "We were ...", "When I ...", "While I ...", "After I ...", "Once I ...", etc, then proceed to asking the question.
 - When 2D gaze coordinates are available, they indicate an attended image area. You may use nearby visible evidence, but do not invent exact gaze-to-object claims when projection is unclear.
-- single_user_answerability must contain one truthful entry for each required user. Do not manufacture insufficiency to fit an intended relation. For example, do not say an item was occluded or blurry when it was clearly visible in the video.
+- single_user_answerability must contain one truthful entry for each required user. Do not manufacture insufficiency to fit an intended relation. For example, do not say an item was occluded or blurry when it was clearly visible in {single_user_visibility}.
 - combined_answerability must explicitly say "sufficient because ..." and explain why the available views together support exactly one option.
+- Do not stitch unrelated scenes together, invent person or object continuity, or exaggerate a cross-view dependency merely because {interval_wording}.
 """
 
-    design_block = """Design rules:
-- Treat required_users[0] as the asker. The question should sound like that person trying to remember or verify something from their own experience or querying external information that they do not possess.
-- Ask for a related missing detail supplied by required_users[1]: object identity, location, text, count, state, placement, outcome, follow-up, or another concrete visual fact.
-- Do not stitch together unrelated scenes just because they happen during the same interval.
-- Prefer casual everyday wording over formal language. Be creative in tone and wording, just like how somebody would naturally ask everyday.
-- Shared clock time or proximity is not a relation by itself. For concurrency, map pruned intervals to original time and verify overlap. Never expose the time values in the question or options.
-- Do not stitch unrelated scenes together, invent person or object continuity, or exaggerate a cross-view dependency.
-"""
-
-    return f"""You are generating one natural, evidence-grounded multiple-choice question from raw egocentric videos.
+    return f"""{generator_opening}
 
 {STRICT_JSON_OUTPUT_CONTRACT}
-
-Input: raw videos from multiple people during the same time interval. They may be near each other or in different places. Look directly at the videos and use only visual evidence, video metadata, and provided 2D gaze coordinates when available. Do not use captions, subtitles, transcripts, or pre-written observations.
 
 Your task:
 {_numbered_lines(task_lines)}
 
 {guidelines_block}
 
-{design_block}
+{ANTI_ACTIVITY_QUERY_GUIDANCE}
+
+{RESTORED_GENERATOR_COVERAGE_GUIDANCE}
 
 {POSITIVE_EXAMPLES_GUIDANCE}
 
@@ -1102,7 +1397,7 @@ Select a concurrent-activity relation only when a concrete event from either vie
 
 {QUESTION_CATEGORY_GUIDANCE}
 
-{ANTI_ACTIVITY_QUERY_GUIDANCE}
+{ARCHIVED_CONCURRENT_ACTIVITY_GUIDANCE}
 
 {object_guidance_block(packet)}
 
@@ -1153,11 +1448,13 @@ Input: raw videos from multiple people during the same time interval. Look direc
 Requirements:
 {_numbered_lines(requirement_lines)}
 
-{ANTI_ACTIVITY_QUERY_GUIDANCE}
+{ARCHIVED_CONCURRENT_ACTIVITY_GUIDANCE}
 
 {QUESTION_CATEGORY_GUIDANCE}
 
 {POSITIVE_EXAMPLES_GUIDANCE}
+
+{ARCHIVED_CONCURRENT_ACTIVITY_EXAMPLES}
 
 {object_guidance_block(packet)}
 
@@ -1210,12 +1507,12 @@ Run every semantic subcheck explicitly:
 - Judge semantic form only, not whether the described facts are true.
 
 3. other_person_activity_query
-- This subcheck rejects semantically shallow activity reports, not all questions about another person's activity.
-- PASS a concrete temporal relation in either direction: a fixed asker-side event may ask for the simultaneous provider-side event, or a fixed provider-side event may ask which asker-side event was simultaneous.
-- PASS a pair-matching form when every option states a complete cross-view activity pair.
-- PASS linked task outcomes, interactions, and post-handoff follow-ups that ask what a person did with a specific object or after a concrete exchange.
-- FAIL generic questions such as "What was someone doing?", vague anchors such as "while I was there", or options that do not encode the temporal or relational structure asked by the question.
-- Do not judge whether the anchor truly localizes an interval, whether the events overlap, whether a clip was cropped, or whether one view is sufficient.
+- FAIL when the question asks what one person was doing while or when another person was doing something else, and the answer is that person's concurrent activity.
+- Apply this restriction in either direction: reject both an asker-side event used to query the provider's activity and a provider-side event used to query the asker's activity.
+- FAIL pair-matching questions whose options encode two concurrent activities.
+- The question still FAILS when the anchor event is concrete, the wording is natural, or the temporal overlap could be verified from synchronized videos.
+- PASS linked task outcomes, interactions, and post-handoff follow-ups only when the answer target is a concrete object, identity, state, location, placement, outcome, consequence, explanation, interaction result, or follow-up rather than a concurrent activity report.
+- Do not judge whether the described facts are visually grounded, whether a clip was cropped, or whether one view is sufficient.
 
 4. direct_name_leakage
 - FAIL when the question or any option directly names a required user or another participant. PASS otherwise.
@@ -1230,6 +1527,7 @@ Run every semantic subcheck explicitly:
 
 6. ambiguous_reference
 - FAIL when the question contains ambiguous references to people, places or other visual details.
+- FAIL when the question is asked in a second-person perspective, for example "what were you doing".
 - Examples that FAIL include "the other room", "the other person", "the cup", etc.
 
 Deterministic structure rules:
@@ -1276,15 +1574,17 @@ def build_evidence_groundedness_judge_prompt(
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
-You will see the same raw videos used by the generator. Judge only visual and temporal grounding. Do not fail for names, missing first-person wording, awkward phrasing, timestamp citations, or schema style. Do not decide whether a single-user condition is sufficient.
+You will see the full original videos for this evidence packet, which may be fuller than the sampled visual media shown to the generator. Judge only visual and temporal grounding. Do not fail for names, missing first-person wording, awkward phrasing, timestamp citations, or schema style. Do not decide whether a single-user condition is sufficient.
 
 evidence_groundedness asks whether the material claims and declared answer are supported by the videos and metadata:
 {rationale_rule}
 - Verify every material factual claim in the question stem and declared correct answer against concrete visible moments or supplied metadata.
+- Be very strict and verify every claim made in the question.
 - Incorrect distractors do not need to occur in the videos for an ordinary object, state, action, or location MCQ; they must simply not make the declared answer ambiguous.
 - For a cross-view activity-pair question, verify that every component activity used across the options actually occurs, because the distractors are supposed to recombine real activities. Verify that only the declared pair overlaps.
 - For a comparison whose options make concrete claims about both operands, verify the declared complete relation and ensure no alternative option is also supported.
 - Treat every object, action, person, state, identity, and continuity description as unverified. The generator may hallucinate or misidentify them.
+- When the generator received sampled still frames, do not accept a claimed transition, continuous action, or intermediate event merely because it seems plausible between adjacent images; verify it directly in the full original videos.
 - Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
 - Treat required_users[0] as the asker and required_users[1] as the evidence provider. For an ordinary information gap, verify the asker-side contextual anchor and provider-side answer-bearing detail.
 - For identity or role linkage, verify enough visible continuity or distinguishing evidence to establish same-person versus different-person rather than inferring identity from roles, timing, or option wording.
@@ -1328,17 +1628,12 @@ Options:
 {options}
 
 Rules:
-- Choose A, B, C, D, or E only when the provided condition establishes exactly one option.
-- If evidence is missing, ambiguous, supports more than one option, or is too unclear to distinguish an option, set choice to "insufficient".
-- DO NOT GUESS FROM COMMON SENSE, WORDING PRIORS, OMITTED VIDEOS, OR THE ANSWER OPTIONS THEMSELVES. Make sure you only answer when the answer can be inferred from the provided videos.
+- You must choose exactly one answer: A, B, C, D, or E.
+- Never return "insufficient", "unknown", a refusal, multiple choices, or an empty choice. If the evidence is incomplete or ambiguous, make the best forced choice from the provided condition.
+- Base the forced choice on the provided condition, not common-sense priors, omitted videos, or clues from how the answer options are written.
 - Use only visible evidence, supplied metadata, and available gaze information from this condition.
 - When both users' videos are provided, answer-bearing facts may be split across them and need not coexist in either single view.
 - It is acceptable for the evidence-provider-only condition to answer an ordinary missing-detail question when that video independently establishes the requested detail.
-- A concurrent question may use a concrete event from either user's view as the relative temporal key and ask which event or activity from the other view overlapped. If this condition omits either the fixed event or the candidate-side activities needed to establish the cross-view match, choose "insufficient".
-- Do not treat the start or end of a cropped condition as an implicit temporal key unless the question or supplied metadata explicitly grounds that boundary.
-- For a cross-view activity-pair question, a single-user condition is insufficient when it shows only one side's activities but not which cross-view pair overlaps. Seeing one component of an option is not enough.
-- For a cross-view comparison or identity-linkage question, a single-user condition is insufficient when it shows only one operand or role and lacks the other view needed to establish the complete relation. Do not fill the missing side from an option or common sense.
-- For a post-handoff follow-up, require the condition to identify the anchored exchange target and visibly establish the follow-up. A provider-only condition may answer only when it independently makes the same recipient, object, and follow-up unambiguous.
 
 Return exactly one valid JSON object with this exact shape:
 {json.dumps(ANSWERABILITY_SCHEMA, ensure_ascii=False, indent=2)}

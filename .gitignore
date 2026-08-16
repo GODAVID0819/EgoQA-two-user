@@ -1,5 +1,8 @@
 __pycache__/
 *.py[cod]
+.venv/
+.cache/
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
@@ -11,8 +14,14 @@ __pycache__/
 /analysis_outputs/
 /tmp/
 /logs/
+/checkpoints/
+/weights/
+/artifacts/
+/data/reference/
+/data/processed/
 /egolife_two_user_qa/outputs/
 /.rebase-untracked-backup-*/
+slurm-*.out
 
 /hpc/logs/*
 !/hpc/logs/.gitkeep
@@ -23,3 +32,8 @@ __pycache__/
 
 ~$*
 *.tmp
+
+# Local secrets
+.env
+*.token
+/hpc/site.env

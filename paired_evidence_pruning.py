@@ -129,9 +129,12 @@ def _compact_packet_pruning(
     pruning: dict[str, Any],
     *,
     diagnostics_path: Path,
+    sample_interval_seconds: float,
 ) -> dict[str, Any]:
     return {
         "method": pruning.get("method"),
+        "sampling_fps": 1.0 / sample_interval_seconds,
+        "sample_interval_seconds": sample_interval_seconds,
         "clusters_per_video": pruning.get("cluster_count"),
         "left_cluster_count": pruning.get("left_cluster_count"),
         "right_cluster_count": pruning.get("right_cluster_count"),
@@ -307,7 +310,9 @@ def prune_prepared_evidence_pairs(
             output_packet["paired_video_pruning"] = _compact_packet_pruning(
                 pruning,
                 diagnostics_path=diagnostics_path,
+                sample_interval_seconds=sample_interval_seconds,
             )
+            output_packet["generator_media_mode"] = "pruned_video"
             output_packet["candidate_type"] = f"ten_minute_k{clusters_per_video}_pruned_pair"
             yield output_packet
 

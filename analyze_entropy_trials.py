@@ -183,6 +183,8 @@ def recompute_entropy(uncertainty: Any) -> dict[str, Any]:
         "stored_argmax_choice": None,
         "generated_choice": None,
         "generated_matches_recalculated_argmax": None,
+        "decision_measurement_valid": None,
+        "decision_measurement_warning": None,
         "selection_sort_key": None,
         "selection_order": "PASS low H > PASS high H > FAIL high H > FAIL low H",
     }
@@ -214,6 +216,36 @@ def recompute_entropy(uncertainty: Any) -> dict[str, Any]:
             "log_weights contains neither PASS/FAIL, legacy P/F, A-E, nor legacy 1/2/3"
         )
         return base
+    decision_measurement_valid = None
+    decision_measurement_warning = None
+    if entropy_mode == "status_pass_fail":
+        valid_detailed_first_verdict = bool(
+            uncertainty.get("probe_version") == "first_verdict_detailed_v2"
+            and uncertainty.get("measurement_context")
+            == "authoritative_first_detailed_judge_verdict"
+            and uncertainty.get("field_name") == "verdict"
+            and uncertainty.get("prior_generated_verdict") is False
+            and uncertainty.get("probe_output_contract_valid") is True
+        )
+        valid_independent_minimal_probe = bool(
+            uncertainty.get("probe_version") == "independent_minimal_verdict_v1"
+            and uncertainty.get("measurement_context")
+            == "independent_minimal_judge_verdict"
+            and uncertainty.get("field_name") == "verdict"
+            and uncertainty.get("prior_generated_verdict") is False
+            and uncertainty.get("probe_output_contract_valid") is True
+            and uncertainty.get("decision_role") == "independent_diagnostic_probe"
+            and uncertainty.get("verdict_affects_acceptance") is False
+            and uncertainty.get("independent_from_acceptance_gate") is True
+        )
+        decision_measurement_valid = (
+            valid_detailed_first_verdict or valid_independent_minimal_probe
+        )
+        if not decision_measurement_valid:
+            decision_measurement_warning = (
+                "legacy or unverified nested-status measurement; it may follow "
+                "review_passed and must not be interpreted as decision uncertainty"
+            )
     try:
         logits = {label: float(raw[label]) for label in labels}
     except (KeyError, TypeError, ValueError):
@@ -307,6 +339,8 @@ def recompute_entropy(uncertainty: Any) -> dict[str, Any]:
         "generated_matches_recalculated_argmax": (
             generated_choice == argmax_choice if generated_choice is not None else None
         ),
+        "decision_measurement_valid": decision_measurement_valid,
+        "decision_measurement_warning": decision_measurement_warning,
         "selection_sort_key": selection_sort_key,
         "selection_order": "PASS low H > PASS high H > FAIL high H > FAIL low H",
     }
@@ -636,9 +670,14 @@ def entropy_markdown(runs: Sequence[dict[str, Any]]) -> str:
     lines = [
         "# Final-Attempt Entropy Review",
         "",
-        "`qa_formality` and `evidence_groundedness` use PASS/FAIL status entropy. "
-        "Answerability uses per-condition A-E choice entropy when it emits a direct option; "
-        "`insufficient` rows are marked unavailable.",
+        "**Validity warning:** historical `qa_formality` and "
+        "`evidence_groundedness` PASS/FAIL rows usually captured nested `status` "
+        "after `review_passed`. Those values measure verdict repetition and are "
+        "not valid decision uncertainty. Current production rows capture the only "
+        "field of a second independent minimal-verdict probe; that probe cannot "
+        "affect the detailed production gate. The offline compatibility sidecar "
+        "instead captures a detailed first-verdict contract. Answerability uses "
+        "per-condition forced-choice entropy over A-E.",
         "",
         "For every row below, probabilities and entropy are recalculated from the stored raw "
         "choice weights using a softmax over the stored choice set. Legacy 1/2/3 rows are "

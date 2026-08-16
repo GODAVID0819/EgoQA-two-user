@@ -1,0 +1,1146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Stream EgoLife evidence clips by day and time token without copying HPC video files.">
+  <title>EgoLife Evidence Streamer</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0e12;
+      --panel: #131820;
+      --panel-raised: #181f29;
+      --line: #29313d;
+      --muted: #97a1af;
+      --text: #f3f5f7;
+      --accent: #c9ff59;
+      --accent-ink: #142000;
+      --blue: #7ac7ff;
+      --danger: #ff958f;
+      --radius: 18px;
+      --shadow: 0 18px 45px rgba(0, 0, 0, .28);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-width: 320px;
+      min-height: 100vh;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% -10%, rgba(122, 199, 255, .12), transparent 32rem),
+        radial-gradient(circle at 85% 0%, rgba(201, 255, 89, .08), transparent 28rem),
+        var(--bg);
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    button,
+    .file-button {
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      color: var(--text);
+      background: #1b222c;
+      cursor: pointer;
+      transition: border-color .16s ease, background .16s ease, transform .16s ease;
+    }
+
+    button:hover,
+    .file-button:hover {
+      border-color: #455263;
+      background: #222b37;
+    }
+
+    button:active,
+    .file-button:active {
+      transform: translateY(1px);
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    .file-button:focus-within {
+      outline: 3px solid rgba(122, 199, 255, .34);
+      outline-offset: 2px;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      color: var(--accent-ink);
+      background: var(--accent);
+      font-weight: 760;
+    }
+
+    button.primary:hover {
+      background: #d5ff7d;
+    }
+
+    button.ghost {
+      background: transparent;
+    }
+
+    button.small {
+      min-height: 34px;
+      padding: 6px 10px;
+      font-size: .82rem;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .45;
+    }
+
+    .shell {
+      width: min(1240px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 38px 0 64px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 28px;
+      margin-bottom: 26px;
+    }
+
+    .eyebrow {
+      margin: 0 0 9px;
+      color: var(--accent);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .76rem;
+      font-weight: 760;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 780px;
+      margin: 0;
+      font-size: clamp(2rem, 5vw, 4.35rem);
+      font-weight: 760;
+      letter-spacing: -.055em;
+      line-height: .98;
+    }
+
+    .lede {
+      max-width: 680px;
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-size: 1rem;
+      line-height: 1.55;
+    }
+
+    .storage-badge {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 9px;
+      padding: 11px 14px;
+      border: 1px solid #344050;
+      border-radius: 999px;
+      color: #d5dbe3;
+      background: rgba(19, 24, 32, .82);
+      font-size: .82rem;
+      white-space: nowrap;
+    }
+
+    .storage-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 5px rgba(201, 255, 89, .1);
+    }
+
+    .control-panel {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(19, 24, 32, .92);
+      box-shadow: var(--shadow);
+    }
+
+    .search-row {
+      display: grid;
+      grid-template-columns: minmax(120px, .6fr) minmax(210px, 1.2fr) minmax(210px, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+    }
+
+    label.field {
+      display: grid;
+      gap: 7px;
+      color: var(--muted);
+      font-size: .78rem;
+      font-weight: 700;
+      letter-spacing: .035em;
+      text-transform: uppercase;
+    }
+
+    input,
+    select {
+      width: 100%;
+      height: 45px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      padding: 0 12px;
+      color: var(--text);
+      background: #0f141b;
+    }
+
+    input::placeholder {
+      color: #626d7b;
+    }
+
+    .manifest-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+    }
+
+    .manifest-copy {
+      min-width: 0;
+    }
+
+    .manifest-copy strong {
+      display: block;
+      margin-bottom: 3px;
+      font-size: .91rem;
+    }
+
+    .manifest-copy span {
+      display: block;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: .8rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .manifest-actions {
+      display: flex;
+      flex: 0 0 auto;
+      gap: 8px;
+    }
+
+    .file-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 14px;
+      font-size: .84rem;
+      font-weight: 680;
+    }
+
+    .file-button input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .result-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 58px;
+      margin-top: 22px;
+    }
+
+    .result-heading {
+      min-width: 0;
+    }
+
+    .result-heading h2 {
+      margin: 0;
+      font-size: 1.02rem;
+      letter-spacing: -.015em;
+    }
+
+    .result-heading p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: .82rem;
+    }
+
+    .result-actions {
+      display: flex;
+      flex: 0 0 auto;
+      gap: 8px;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .empty {
+      grid-column: 1 / -1;
+      padding: 52px 24px;
+      border: 1px dashed #354050;
+      border-radius: var(--radius);
+      color: var(--muted);
+      text-align: center;
+      background: rgba(19, 24, 32, .5);
+    }
+
+    .card {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: 0 14px 35px rgba(0, 0, 0, .2);
+    }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 17px 18px 14px;
+    }
+
+    .person {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 11px;
+    }
+
+    .avatar {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      flex: 0 0 auto;
+      place-items: center;
+      border: 1px solid #3a4656;
+      border-radius: 12px;
+      color: var(--blue);
+      background: #101720;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .76rem;
+      font-weight: 760;
+    }
+
+    .person h3 {
+      overflow: hidden;
+      margin: 0;
+      font-size: 1rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .person p {
+      overflow: hidden;
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .73rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .count {
+      flex: 0 0 auto;
+      padding: 5px 8px;
+      border: 1px solid #334052;
+      border-radius: 999px;
+      color: #cbd3dc;
+      background: #111720;
+      font-size: .72rem;
+    }
+
+    .stage {
+      position: relative;
+      display: grid;
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
+      place-items: center;
+      border-block: 1px solid var(--line);
+      background:
+        linear-gradient(135deg, rgba(122, 199, 255, .07), transparent 45%),
+        #07090c;
+    }
+
+    .stage video {
+      display: none;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      object-fit: contain;
+    }
+
+    .stage.loaded video {
+      display: block;
+    }
+
+    .placeholder {
+      display: grid;
+      max-width: 310px;
+      justify-items: center;
+      gap: 11px;
+      padding: 20px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .stage.loaded .placeholder {
+      display: none;
+    }
+
+    .play-mark {
+      display: grid;
+      width: 50px;
+      height: 50px;
+      place-items: center;
+      border: 1px solid #4a586b;
+      border-radius: 50%;
+      color: var(--accent);
+      background: #111720;
+      font-size: 1rem;
+      text-indent: 2px;
+    }
+
+    .placeholder p {
+      margin: 0;
+      font-size: .8rem;
+      line-height: 1.4;
+    }
+
+    .card-controls {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 13px 15px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .segment-label {
+      overflow: hidden;
+      color: #dbe0e6;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .76rem;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .card-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 15px 15px;
+    }
+
+    .stream-state {
+      overflow: hidden;
+      color: var(--muted);
+      font-size: .74rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .link-actions {
+      display: flex;
+      flex: 0 0 auto;
+      gap: 6px;
+    }
+
+    .notice {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border: 1px solid #2e3947;
+      border-radius: 13px;
+      color: var(--muted);
+      background: rgba(16, 21, 28, .7);
+      font-size: .78rem;
+      line-height: 1.5;
+    }
+
+    .notice strong {
+      color: var(--text);
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (max-width: 850px) {
+      header {
+        display: block;
+      }
+
+      .storage-badge {
+        width: fit-content;
+        margin-top: 20px;
+      }
+
+      .search-row {
+        grid-template-columns: 1fr 1.4fr;
+      }
+
+      .search-row .primary {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 680px) {
+      .shell {
+        width: min(100% - 20px, 1240px);
+        padding-top: 24px;
+      }
+
+      .search-row,
+      .cards {
+        grid-template-columns: 1fr;
+      }
+
+      .manifest-row,
+      .result-bar {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .manifest-actions,
+      .result-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .file-button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">EgoLife · remote evidence</p>
+        <h1>Watch the evidence.<br>Keep the disk space.</h1>
+        <p class="lede">
+          Find a synchronized time token and stream its source clips directly from Hugging Face.
+          Nothing is copied from the HPC scratch directory.
+        </p>
+      </div>
+      <div class="storage-badge" title="Videos are streamed into the browser and are not saved as local project files.">
+        <span class="storage-dot" aria-hidden="true"></span>
+        0 project video files
+      </div>
+    </header>
+
+    <section class="control-panel" aria-label="Evidence search">
+      <form id="search-form" class="search-row">
+        <label class="field">
+          Day
+          <select id="day" name="day">
+            <option>DAY1</option>
+            <option>DAY2</option>
+            <option>DAY3</option>
+            <option>DAY4</option>
+            <option>DAY5</option>
+            <option>DAY6</option>
+            <option>DAY7</option>
+          </select>
+        </label>
+        <label class="field">
+          Time token
+          <input id="time-token" name="time" inputmode="numeric" maxlength="8"
+                 pattern="[0-9]{8}" placeholder="e.g. 11100000" autocomplete="off" required>
+        </label>
+        <label class="field">
+          Video source
+          <select id="source-mode" name="view">
+            <option value="raw">Original RGB evidence</option>
+            <option value="overlay">Eye-tracking overlay</option>
+          </select>
+        </label>
+        <button class="primary" type="submit">Find evidence</button>
+      </form>
+
+      <div class="manifest-row">
+        <div class="manifest-copy">
+          <strong>Exact HPC selection (optional)</strong>
+          <span id="manifest-status">No manifest loaded — searches will show all six participant candidates.</span>
+        </div>
+        <div class="manifest-actions">
+          <label class="file-button">
+            Load JSON / JSONL
+            <input id="manifest-file" type="file" accept=".json,.jsonl,application/json,application/x-ndjson">
+          </label>
+          <button id="clear-manifest" class="ghost" type="button" disabled>Clear</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="result-bar">
+      <div class="result-heading">
+        <h2 id="result-title">Enter a time token</h2>
+        <p id="result-status" role="status" aria-live="polite">Videos stay unloaded until you press Stream.</p>
+      </div>
+      <div class="result-actions">
+        <button id="copy-link" class="small ghost" type="button" disabled>Copy search link</button>
+        <button id="unload-all" class="small ghost" type="button" disabled>Unload all</button>
+      </div>
+    </div>
+
+    <section id="cards" class="cards" aria-label="Evidence videos">
+      <div class="empty">Use an 8-digit HHMMSScc token such as <strong>11100000</strong>.</div>
+    </section>
+
+    <aside class="notice">
+      <strong>Space-aware behavior:</strong> cards contain no video source until Stream is pressed, only one
+      30-second segment per card is attached at a time, and Unload removes it from the player. For a ten-minute
+      packet, load its small evidence manifest and the page will play the retained source segments as a playlist
+      instead of downloading or assembling a 600-second file.
+    </aside>
+  </main>
+
+  <script>
+    "use strict";
+
+    const AGENTS = [
+      { dir: "A1_JAKE", name: "Jake", id: "A1" },
+      { dir: "A2_ALICE", name: "Alice", id: "A2" },
+      { dir: "A3_TASHA", name: "Tasha", id: "A3" },
+      { dir: "A4_LUCIA", name: "Lucia", id: "A4" },
+      { dir: "A5_KATRINA", name: "Katrina", id: "A5" },
+      { dir: "A6_SHURE", name: "Shure", id: "A6" }
+    ];
+
+    const VIDEO_DATASET = "https://huggingface.co/datasets/lmms-lab/EgoLife/resolve/main";
+    const OVERLAY_DATASET =
+      "https://huggingface.co/datasets/Wangtwohappy/EgoLife_EyeTracking_EyeGaze/resolve/main/EyeTracking";
+
+    const form = document.querySelector("#search-form");
+    const dayInput = document.querySelector("#day");
+    const tokenInput = document.querySelector("#time-token");
+    const sourceModeInput = document.querySelector("#source-mode");
+    const fileInput = document.querySelector("#manifest-file");
+    const clearManifestButton = document.querySelector("#clear-manifest");
+    const manifestStatus = document.querySelector("#manifest-status");
+    const cardsNode = document.querySelector("#cards");
+    const resultTitle = document.querySelector("#result-title");
+    const resultStatus = document.querySelector("#result-status");
+    const unloadAllButton = document.querySelector("#unload-all");
+    const copyLinkButton = document.querySelector("#copy-link");
+
+    let manifestRecords = null;
+    let activePlayers = [];
+    let currentSearch = null;
+
+    function cleanDay(value) {
+      const match = String(value || "").toUpperCase().match(/DAY_?([1-7])/);
+      return match ? `DAY${match[1]}` : "";
+    }
+
+    function cleanToken(value) {
+      return String(value || "").replace(/\D/g, "").slice(0, 8);
+    }
+
+    function clockFromToken(token) {
+      return `${token.slice(0, 2)}:${token.slice(2, 4)}:${token.slice(4, 6)}.${token.slice(6, 8)}`;
+    }
+
+    function tokenFromUrl(url) {
+      const match = String(url || "").match(/_(\d{8})\.(?:mp4|csv)(?:$|\?)/i);
+      return match ? match[1] : "";
+    }
+
+    function agentFromValue(value) {
+      const text = String(value || "").toUpperCase();
+      return AGENTS.find((agent) => text.includes(agent.dir) || text.includes(agent.id)) || null;
+    }
+
+    function rawUrl(agentDir, day, token) {
+      return `${VIDEO_DATASET}/${agentDir}/${day}/${day}_${agentDir}_${token}.mp4`;
+    }
+
+    function overlayUrl(agentDir, day, token) {
+      return `${OVERLAY_DATASET}/${agentDir}/${day}/${day}_${agentDir}_${token}.mp4`;
+    }
+
+    function parseManifestText(text) {
+      const trimmed = text.trim();
+      if (!trimmed) {
+        throw new Error("The selected file is empty.");
+      }
+
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && Array.isArray(parsed.rows)) return parsed.rows;
+        if (parsed && Array.isArray(parsed.clips) && parsed.datasets) {
+          return parsed.clips.map((clip) => ({ ...clip, __baseManifestClip: true }));
+        }
+        return [parsed];
+      } catch (wholeFileError) {
+        const records = [];
+        for (const [index, line] of trimmed.split(/\r?\n/).entries()) {
+          if (!line.trim()) continue;
+          try {
+            records.push(JSON.parse(line));
+          } catch (lineError) {
+            throw new Error(`Invalid JSON on non-empty line ${index + 1}.`);
+          }
+        }
+        if (!records.length) throw wholeFileError;
+        return records;
+      }
+    }
+
+    function normalizeSegment(segment, clip, fallbackDay, fallbackToken) {
+      const agent = agentFromValue(
+        clip.agent_dir || clip.agent_id || clip.user || clip.agent_name ||
+        segment.video_url || segment.overlay_url || segment.local_video
+      );
+      const day = cleanDay(segment.day || clip.day || fallbackDay);
+      const token = cleanToken(
+        segment.time_token || tokenFromUrl(segment.video_url) ||
+        tokenFromUrl(segment.overlay_url) || clip.time_token || fallbackToken
+      );
+      const agentDir = clip.agent_dir || (agent && agent.dir) || "";
+      const raw = segment.video_url || (agentDir && day && token ? rawUrl(agentDir, day, token) : "");
+      const overlay =
+        segment.overlay_url || (agentDir && day && token ? overlayUrl(agentDir, day, token) : "");
+      return {
+        token,
+        day,
+        raw,
+        overlay,
+        windowStart: segment.window_start_seconds,
+        windowEnd: segment.window_end_seconds
+      };
+    }
+
+    function normalizeClip(clip, fallbackDay, fallbackToken, record) {
+      const agent = agentFromValue(
+        clip.agent_dir || clip.agent_id || clip.user || clip.agent_name ||
+        clip.video_url || clip.local_video
+      );
+      const day = cleanDay(clip.day || fallbackDay);
+      const token = cleanToken(clip.time_token || fallbackToken || tokenFromUrl(clip.video_url));
+      const agentDir = clip.agent_dir || (agent && agent.dir) || "";
+      let sourceSegments = Array.isArray(clip.source_segments) ? clip.source_segments : [];
+
+      if (!sourceSegments.length && Array.isArray(clip.source_video_urls)) {
+        sourceSegments = clip.source_video_urls.map((url, index) => ({
+          segment_index: index,
+          video_url: url,
+          overlay_url: Array.isArray(clip.source_overlay_urls) ? clip.source_overlay_urls[index] : "",
+          time_token: tokenFromUrl(url)
+        }));
+      }
+
+      if (!sourceSegments.length) {
+        sourceSegments = [{
+          video_url: clip.video_url || "",
+          overlay_url: clip.overlay_url || "",
+          time_token: token,
+          day
+        }];
+      }
+
+      const segments = sourceSegments
+        .map((segment) => normalizeSegment(segment, clip, day, token))
+        .filter((segment) => segment.raw || segment.overlay);
+
+      if (!segments.length && agentDir && day && token) {
+        segments.push({
+          token,
+          day,
+          raw: rawUrl(agentDir, day, token),
+          overlay: overlayUrl(agentDir, day, token)
+        });
+      }
+
+      return {
+        agentDir,
+        agentId: clip.agent_id || (agent && agent.id) || agentDir.split("_")[0] || "?",
+        name: clip.agent_name || clip.user || (agent && agent.name) || agentDir || "Unknown user",
+        day,
+        token,
+        segments,
+        evidenceId: record.evidence_id || record.qa_id || "",
+        source: record.__baseManifestClip ? "dataset manifest" : "evidence manifest"
+      };
+    }
+
+    function clipsFromRecord(record, day, token) {
+      if (!record || typeof record !== "object") return [];
+      const recordDay = cleanDay(record.day);
+      const recordToken = cleanToken(record.time_token);
+      const directMatch = recordDay === day && recordToken === token;
+
+      if (record.__baseManifestClip) {
+        return directMatch ? [normalizeClip(record, day, token, record)] : [];
+      }
+
+      const rawClips = Array.isArray(record.clips)
+        ? record.clips
+        : Array.isArray(record.video_evidence)
+          ? record.video_evidence
+          : Array.isArray(record.videos)
+            ? record.videos
+            : [];
+
+      if (rawClips.length) {
+        if (directMatch) {
+          return rawClips.map((clip) => normalizeClip(clip, day, token, record));
+        }
+        return rawClips
+          .filter((clip) =>
+            cleanDay(clip.day || recordDay) === day &&
+            cleanToken(clip.time_token || recordToken) === token
+          )
+          .map((clip) => normalizeClip(clip, day, token, record));
+      }
+
+      return directMatch ? [normalizeClip(record, day, token, record)] : [];
+    }
+
+    function dedupeClips(clips) {
+      const seen = new Set();
+      return clips.filter((clip) => {
+        const key = [
+          clip.evidenceId,
+          clip.agentDir || clip.name,
+          clip.segments.map((segment) => segment.raw || segment.overlay).join("|")
+        ].join("::");
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    function fallbackClips(day, token) {
+      return AGENTS.map((agent) => ({
+        agentDir: agent.dir,
+        agentId: agent.id,
+        name: agent.name,
+        day,
+        token,
+        evidenceId: "",
+        source: "constructed candidate",
+        segments: [{
+          day,
+          token,
+          raw: rawUrl(agent.dir, day, token),
+          overlay: overlayUrl(agent.dir, day, token)
+        }]
+      }));
+    }
+
+    function selectedUrl(segment) {
+      return sourceModeInput.value === "overlay" ? segment.overlay : segment.raw;
+    }
+
+    function stopAndUnload(player) {
+      const { video, stage, state, unloadButton } = player;
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      stage.classList.remove("loaded");
+      state.textContent = "Unloaded · no media attached";
+      player.loadedIndex = -1;
+      if (unloadButton) unloadButton.disabled = true;
+    }
+
+    function unloadAll() {
+      activePlayers.forEach(stopAndUnload);
+    }
+
+    function copyText(value, button, successText) {
+      const original = button.textContent;
+      if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+        window.prompt("Copy this value:", value);
+        return;
+      }
+      navigator.clipboard.writeText(value).then(() => {
+        button.textContent = successText;
+        window.setTimeout(() => {
+          button.textContent = original;
+        }, 1100);
+      }).catch(() => {
+        window.prompt("Copy this value:", value);
+      });
+    }
+
+    function createCard(clip) {
+      const card = document.createElement("article");
+      card.className = "card";
+      card.innerHTML = `
+        <div class="card-top">
+          <div class="person">
+            <span class="avatar" aria-hidden="true"></span>
+            <div>
+              <h3></h3>
+              <p></p>
+            </div>
+          </div>
+          <span class="count"></span>
+        </div>
+        <div class="stage">
+          <video controls playsinline preload="none"></video>
+          <div class="placeholder">
+            <span class="play-mark" aria-hidden="true">▶</span>
+            <p>No video bytes requested yet.</p>
+            <button class="primary stream" type="button">Stream segment</button>
+          </div>
+        </div>
+        <div class="card-controls">
+          <button class="small previous" type="button" aria-label="Previous segment">←</button>
+          <span class="segment-label"></span>
+          <button class="small next" type="button" aria-label="Next segment">→</button>
+        </div>
+        <div class="card-foot">
+          <span class="stream-state">Unloaded · no media attached</span>
+          <span class="link-actions">
+            <button class="small copy" type="button">Copy URL</button>
+            <button class="small open" type="button">Open</button>
+            <button class="small unload" type="button" disabled>Unload</button>
+          </span>
+        </div>
+      `;
+
+      const avatar = card.querySelector(".avatar");
+      const name = card.querySelector("h3");
+      const metadata = card.querySelector(".person p");
+      const count = card.querySelector(".count");
+      const stage = card.querySelector(".stage");
+      const video = card.querySelector("video");
+      const streamButton = card.querySelector(".stream");
+      const previousButton = card.querySelector(".previous");
+      const nextButton = card.querySelector(".next");
+      const segmentLabel = card.querySelector(".segment-label");
+      const state = card.querySelector(".stream-state");
+      const copyButton = card.querySelector(".copy");
+      const openButton = card.querySelector(".open");
+      const unloadButton = card.querySelector(".unload");
+      let segmentIndex = 0;
+
+      avatar.textContent = clip.agentId;
+      name.textContent = clip.name;
+      metadata.textContent = clip.evidenceId || clip.agentDir || clip.source;
+      count.textContent = `${clip.segments.length} segment${clip.segments.length === 1 ? "" : "s"}`;
+
+      const player = { video, stage, state, unloadButton, loadedIndex: -1 };
+      activePlayers.push(player);
+
+      function updateSegmentUi() {
+        const segment = clip.segments[segmentIndex];
+        const token = segment.token || clip.token;
+        segmentLabel.textContent =
+          `${segmentIndex + 1} / ${clip.segments.length} · ${clockFromToken(token)} · ${token}`;
+        previousButton.disabled = segmentIndex === 0;
+        nextButton.disabled = segmentIndex >= clip.segments.length - 1;
+        const url = selectedUrl(segment);
+        streamButton.disabled = !url;
+        copyButton.disabled = !url;
+        openButton.disabled = !url;
+        if (!url) state.textContent = "This source is not present in the manifest";
+      }
+
+      function loadSegment(autoplay) {
+        const segment = clip.segments[segmentIndex];
+        const url = selectedUrl(segment);
+        if (!url) return;
+        video.pause();
+        video.src = url;
+        video.preload = "metadata";
+        video.load();
+        stage.classList.add("loaded");
+        state.textContent = `Streaming segment ${segmentIndex + 1} from Hugging Face`;
+        player.loadedIndex = segmentIndex;
+        unloadButton.disabled = false;
+        if (autoplay) {
+          video.play().catch(() => {
+            state.textContent = "Ready · press play in the video controls";
+          });
+        }
+      }
+
+      function moveSegment(direction) {
+        const nextIndex = Math.max(0, Math.min(clip.segments.length - 1, segmentIndex + direction));
+        if (nextIndex === segmentIndex) return;
+        const wasLoaded = player.loadedIndex >= 0;
+        segmentIndex = nextIndex;
+        updateSegmentUi();
+        if (wasLoaded) loadSegment(false);
+      }
+
+      streamButton.addEventListener("click", () => loadSegment(true));
+      previousButton.addEventListener("click", () => moveSegment(-1));
+      nextButton.addEventListener("click", () => moveSegment(1));
+      unloadButton.addEventListener("click", () => {
+        stopAndUnload(player);
+        unloadButton.disabled = true;
+      });
+      copyButton.addEventListener("click", () => {
+        copyText(selectedUrl(clip.segments[segmentIndex]), copyButton, "Copied");
+      });
+      openButton.addEventListener("click", () => {
+        window.open(selectedUrl(clip.segments[segmentIndex]), "_blank", "noopener,noreferrer");
+      });
+      video.addEventListener("ended", () => {
+        if (segmentIndex < clip.segments.length - 1) {
+          segmentIndex += 1;
+          updateSegmentUi();
+          loadSegment(true);
+        }
+      });
+      video.addEventListener("loadedmetadata", () => {
+        const seconds = Number.isFinite(video.duration) ? ` · ${video.duration.toFixed(1)}s` : "";
+        state.textContent = `Streaming from Hugging Face${seconds}`;
+      });
+      video.addEventListener("error", () => {
+        state.textContent = "Unavailable or blocked — try Open to inspect the source";
+      });
+
+      updateSegmentUi();
+      return card;
+    }
+
+    function updateQuery(day, token, mode) {
+      if (location.protocol === "file:") return;
+      const query = new URLSearchParams({ day, time: token, view: mode });
+      history.replaceState(null, "", `${location.pathname}?${query.toString()}`);
+    }
+
+    function performSearch() {
+      const day = cleanDay(dayInput.value);
+      const token = cleanToken(tokenInput.value);
+      tokenInput.value = token;
+      if (!day || token.length !== 8) {
+        resultTitle.textContent = "Invalid time token";
+        resultStatus.textContent = "Use exactly 8 digits in HHMMSScc format.";
+        tokenInput.focus();
+        return;
+      }
+
+      unloadAll();
+      activePlayers = [];
+      let clips = [];
+      let usedFallback = false;
+      if (manifestRecords) {
+        clips = dedupeClips(manifestRecords.flatMap((record) => clipsFromRecord(record, day, token)));
+      }
+      if (!clips.length) {
+        clips = fallbackClips(day, token);
+        usedFallback = true;
+      }
+
+      currentSearch = { day, token, mode: sourceModeInput.value };
+      updateQuery(day, token, sourceModeInput.value);
+      resultTitle.textContent = `${day} · ${clockFromToken(token)}`;
+      if (usedFallback && manifestRecords) {
+        resultStatus.textContent =
+          `No exact manifest row matched ${token}; showing six deterministic source candidates.`;
+      } else if (usedFallback) {
+        resultStatus.textContent =
+          "Showing six source candidates. Load an evidence JSONL to isolate the exact HPC-selected users.";
+      } else {
+        const evidenceIds = new Set(clips.map((clip) => clip.evidenceId).filter(Boolean));
+        resultStatus.textContent =
+          `Matched ${clips.length} participant video${clips.length === 1 ? "" : "s"}` +
+          `${evidenceIds.size ? ` in ${evidenceIds.size} evidence row${evidenceIds.size === 1 ? "" : "s"}` : ""}.`;
+      }
+
+      cardsNode.replaceChildren(...clips.map(createCard));
+      unloadAllButton.disabled = false;
+      copyLinkButton.disabled = false;
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      performSearch();
+    });
+
+    tokenInput.addEventListener("input", () => {
+      tokenInput.value = cleanToken(tokenInput.value);
+    });
+
+    sourceModeInput.addEventListener("change", () => {
+      if (currentSearch) performSearch();
+    });
+
+    fileInput.addEventListener("change", async () => {
+      const [file] = fileInput.files;
+      if (!file) return;
+      try {
+        manifestStatus.textContent = `Reading ${file.name}…`;
+        manifestRecords = parseManifestText(await file.text());
+        manifestStatus.textContent =
+          `${file.name} · ${manifestRecords.length.toLocaleString()} record${manifestRecords.length === 1 ? "" : "s"} loaded`;
+        clearManifestButton.disabled = false;
+        if (cleanToken(tokenInput.value).length === 8) performSearch();
+      } catch (error) {
+        manifestRecords = null;
+        manifestStatus.textContent = error instanceof Error ? error.message : "Could not parse that file.";
+        clearManifestButton.disabled = true;
+      } finally {
+        fileInput.value = "";
+      }
+    });
+
+    clearManifestButton.addEventListener("click", () => {
+      manifestRecords = null;
+      manifestStatus.textContent = "No manifest loaded — searches will show all six participant candidates.";
+      clearManifestButton.disabled = true;
+      if (cleanToken(tokenInput.value).length === 8) performSearch();
+    });
+
+    unloadAllButton.addEventListener("click", unloadAll);
+
+    copyLinkButton.addEventListener("click", () => {
+      if (!currentSearch) return;
+      const url = new URL(location.href);
+      url.search = new URLSearchParams({
+        day: currentSearch.day,
+        time: currentSearch.token,
+        view: currentSearch.mode
+      }).toString();
+      copyText(url.href, copyLinkButton, "Copied");
+    });
+
+    const initialQuery = new URLSearchParams(location.search);
+    const initialDay = cleanDay(initialQuery.get("day"));
+    const initialToken = cleanToken(initialQuery.get("time"));
+    const initialView = initialQuery.get("view");
+    if (initialDay) dayInput.value = initialDay;
+    if (initialToken) tokenInput.value = initialToken;
+    if (initialView === "overlay") sourceModeInput.value = "overlay";
+    if (initialToken.length === 8) performSearch();
+  </script>
+</body>
+</html>
