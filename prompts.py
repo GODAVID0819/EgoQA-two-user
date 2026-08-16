@@ -1,4 +1,4 @@
-"""Prompts for EgoLife two-user video question-answer generation and review."""
+"""Prompts for EgoLife multi-user video question-answer generation and review."""
 
 from __future__ import annotations
 
@@ -931,7 +931,8 @@ def generator_uses_sampled_frames(packet: dict[str, Any]) -> bool:
 def video_packet_brief(packet: dict[str, Any]) -> str:
     required_users = list(packet.get("required_users") or [])
     speaker_user = required_users[0] if required_users else None
-    evidence_provider_user = required_users[1] if len(required_users) > 1 else None
+    evidence_provider_users = required_users[1:]
+    evidence_provider_user = evidence_provider_users[0] if evidence_provider_users else None
     clips = []
     packet_image_index = 1
     sampled_media_modes: set[str] = set()
@@ -991,12 +992,16 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
             mode = "mixed_sampled_frame_modes"
             frame_description = "sampled still images"
 
+        ordered_image_groups = [
+            f"all required_users[{index}] sampled images"
+            for index in range(len(required_users))
+        ]
         generator_media_contract = {
             "mode": mode,
             "packet_image_order": (
-                "all required_users[0] sampled images first, followed by all "
-                "required_users[1] sampled images; each user's images are in original "
-                "timestamp order; use packet_image_index above when available"
+                ", followed by ".join(ordered_image_groups)
+                + "; each user's images are in original timestamp order; use "
+                "packet_image_index above when available"
             ),
             "limitations": (
                 f"These are {frame_description}, not a continuous video. Adjacent supplied "
@@ -1006,20 +1011,33 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
             ),
         }
 
+    if len(required_users) == 3:
+        required_users_order = (
+            "Treat required_users[0] as the speaker and required_users[1] and "
+            "required_users[2] as two distinct evidence providers. required_users[0] "
+            "together with only required_users[1] must remain insufficient, and "
+            "required_users[0] together with only required_users[2] must remain "
+            "insufficient. Only all three required users together may determine the "
+            "unique correct option."
+        )
+    else:
+        required_users_order = (
+            "required_users[0] is the asker and the question must use that user's natural "
+            "first-person or shared-memory perspective. That user's view alone should be "
+            "insufficient. required_users[1] supplies additional evidence and may be "
+            "sufficient alone for an ordinary missing-detail question. In a strict "
+            "comparison or identity-linkage form, each view supplies an answer-bearing "
+            "component and neither single view should determine the relation."
+        )
+
     brief = {
         "evidence_id": packet.get("evidence_id"),
         "required_users": required_users,
         "role_contract": {
             "speaker_user": speaker_user,
             "evidence_provider_user": evidence_provider_user,
-            "required_users_order": (
-                "required_users[0] is the asker and the question must use that user's natural "
-                "first-person or shared-memory perspective. That user's view alone should be "
-                "insufficient. required_users[1] supplies additional evidence and may be "
-                "sufficient alone for an ordinary missing-detail question. In a strict "
-                "comparison or identity-linkage form, each view supplies an answer-bearing "
-                "component and neither single view should determine the relation."
-            ),
+            "evidence_provider_users": evidence_provider_users,
+            "required_users_order": required_users_order,
         },
         "prompt_requirement": (
             "Use the visual media directly and choose the strongest natural relation supported "
@@ -1181,6 +1199,7 @@ def object_guidance_block(
         if sampled_frame_input
         else "the raw videos"
     )
+    user_scope = "multi-user" if len(packet.get("required_users") or []) > 2 else "two-user"
     return f"""Object-detection hints, for attention guidance only:
 {json.dumps(brief, ensure_ascii=False, indent=2)}
 
@@ -1189,7 +1208,7 @@ Rules for using these hints:
 - Treat the detected object name and bounding box as a pointer, not a fact.
 - Verify the object and answer from {visual_source} before using it in the question, answer, options, or evidence fields.
 - Do not mention object detection, bounding boxes, coordinates, detector models, sampled frames, or hint scores in the question or answer options.
-- Ignore these hints if they do not support a natural two-user information need.
+- Ignore these hints if they do not support a natural {user_scope} information need.
 """
 
 
@@ -1266,6 +1285,8 @@ def build_video_generation_prompt(
         previous_generation=previous_generation,
     )
     sampled_frame_input = generator_uses_sampled_frames(packet)
+    required_users = list(packet.get("required_users") or [])
+    strong_three_user_dependency = len(required_users) == 3
     object_block = object_guidance_block(
         packet,
         sampled_frame_input=sampled_frame_input,
@@ -1315,13 +1336,54 @@ Input: raw videos from multiple people during the same time interval. They may b
         single_user_visibility = "the supplied video"
         interval_wording = "the videos share a time interval"
 
+    dependency_lines = (
+        [
+            "Treat required_users[1] and required_users[2] as two distinct evidence providers; each provider must contribute a different answer-bearing visual fact.",
+            "required_users[0] together with only required_users[1] must remain insufficient.",
+            "required_users[0] together with only required_users[2] must remain insufficient.",
+            "Only all three required users together may determine the unique correct option. Do not generate a question that can be answered without either provider.",
+        ]
+        if strong_three_user_dependency
+        else [
+            "required_users[0]'s view alone must be insufficient. The question should not be answered by the asker on their own; it must require additional evidence from required_users[1]."
+        ]
+    )
+    provider_reference = (
+        "required_users[1] or required_users[2]"
+        if strong_three_user_dependency
+        else "required_users[1]"
+    )
+    output_schema = VIDEO_GENERATION_SCHEMA
+    if strong_three_user_dependency:
+        output_schema = {
+            **VIDEO_GENERATION_SCHEMA,
+            "required_users": [
+                "asker user first",
+                "first evidence-provider user second",
+                "second evidence-provider user third",
+            ],
+            "single_user_answerability": {
+                "Speaker": "insufficient because the speaker alone only provides ...",
+                "ProviderOne": "insufficient because the first provider alone only provides ...",
+                "ProviderTwo": "insufficient because the second provider alone only provides ...",
+            },
+            "combined_answerability": (
+                "sufficient because the speaker and both evidence providers together "
+                "support exactly one option"
+            ),
+            "why_two_users_needed": (
+                "legacy field name: explain why all three required users are necessary and "
+                "why omitting either evidence provider leaves the answer underdetermined"
+            ),
+        }
+
     task_lines = [
         "Generate exactly one five-option multiple-choice question.",
         *([type_requirement] if type_requirement else []),
         "Treat required_users[0] as the asker and write a natural first-person or shared-memory question from that user's perspective.",
         "Make the question a speaker-side information need: required_users[0]'s view should explain why the question naturally comes up, but should not already make the answer obvious.",
         f"Choose the strongest natural grounded relation supported by {relation_source}. It may be a speaker-side missing detail, comparison, identity link, handoff follow-up, state verification, temporal relation, sequence, interaction, or another coherent relation you discover. Do not force a family or default automatically to an object or isolated-activity question.",
-        "required_users[0]'s view alone must be insufficient. The question should not be answered by the asker on their own; it must require additional evidence from required_users[1].",
+        *dependency_lines,
         "The available evidence must make exactly one answer option correct.",
         timestamp_instruction,
         evidence_timeframe_instruction,
@@ -1330,7 +1392,7 @@ Input: raw videos from multiple people during the same time interval. They may b
 
     guidelines_block = f"""Guidelines:
 - Use natural, informal, everyday first-person or shared-memory wording with I, me, my, we, us, or our.
-- Do not ask required_users[1] a second-person question and do not name any participant in the question or options. 
+- Do not ask {provider_reference} a second-person question and do not name any participant in the question or options.
 - Do not refer to locations ambiguously, for example merely saying "the other room". Always specify with more detail; Perhaps identify the room as the living room or bedroom, or find some details that distinguishes the room and refer to that, something like "the room with a blue painting on the wall".
 - Use a concise appearance-and-location description when needed referring to people. For example, "the person in the white shirt standing next to the television", or "the person with pink hair and wearing a pink blouse whose next to the bed".
 - Make all five options multi-word, plausible, mutually exclusive, and parallel in grammar, length, and specificity. Keep distractor options grounded in the same scene type. Do not make the correct option obvious by specificity, grammar, or option length.
@@ -1363,7 +1425,7 @@ Evidence packet metadata:
 {video_packet_brief(packet)}
 
 Return exactly one valid JSON object with this exact shape:
-{json.dumps(VIDEO_GENERATION_SCHEMA, ensure_ascii=False, indent=2)}
+{json.dumps(output_schema, ensure_ascii=False, indent=2)}
 """
 
 
@@ -1487,8 +1549,9 @@ def build_qa_formality_judge_prompt(
     )
     schema_status = "PASS" if not schema_errors else "FAIL"
     binary_block = PASS_FAIL_ONLY_INSTRUCTION
+    user_scope = "three-user" if len(packet.get("required_users") or []) == 3 else "two-user"
 
-    return f"""You are the qa_formality judge for a two-user multiple-choice question. You are a pure text-only semantic judge and do not see the videos.
+    return f"""You are the qa_formality judge for a {user_scope} multiple-choice question. You are a pure text-only semantic judge and do not see the videos.
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
@@ -1569,8 +1632,23 @@ def build_evidence_groundedness_judge_prompt(
         else "- Infer no hidden generator interpretation; judge the question, declared answer, material option claims, and videos shown."
     )
     binary_block = PASS_FAIL_ONLY_INSTRUCTION
+    strong_three_user_dependency = len(packet.get("required_users") or []) == 3
+    question_scope = "three-user" if strong_three_user_dependency else "two-user"
+    role_grounding_rule = (
+        "- Treat required_users[0] as the speaker and required_users[1] and "
+        "required_users[2] as the two evidence providers. For every candidate, verify a "
+        "distinct answer-bearing contribution from each of required_users[1] and "
+        "required_users[2]. FAIL if the declared answer remains fully supported after "
+        "omitting either evidence provider."
+        if strong_three_user_dependency
+        else (
+            "- Treat required_users[0] as the asker and required_users[1] as the evidence "
+            "provider. For an ordinary information gap, verify the asker-side contextual "
+            "anchor and provider-side answer-bearing detail."
+        )
+    )
 
-    return f"""You are the evidence_groundedness judge for a two-user multiple-choice question generated from egocentric videos.
+    return f"""You are the evidence_groundedness judge for a {question_scope} multiple-choice question generated from egocentric videos.
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
@@ -1586,7 +1664,7 @@ evidence_groundedness asks whether the material claims and declared answer are s
 - Treat every object, action, person, state, identity, and continuity description as unverified. The generator may hallucinate or misidentify them.
 - When the generator received sampled still frames, do not accept a claimed transition, continuous action, or intermediate event merely because it seems plausible between adjacent images; verify it directly in the full original videos.
 - Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
-- Treat required_users[0] as the asker and required_users[1] as the evidence provider. For an ordinary information gap, verify the asker-side contextual anchor and provider-side answer-bearing detail.
+{role_grounding_rule}
 - For identity or role linkage, verify enough visible continuity or distinguishing evidence to establish same-person versus different-person rather than inferring identity from roles, timing, or option wording.
 - For a post-handoff follow-up, verify the initial exchange, same recipient, same object, and claimed later action/location/state. FAIL links based only on lookalikes, similar objects, or temporal proximity.
 - For state verification, verify the exact object and observed state. Accept a claimed change only when both earlier and later states are visible.
@@ -1614,6 +1692,22 @@ def build_answerability_prompt(qa_item: dict[str, Any], condition: dict[str, Any
         f"{letter}. {option}"
         for letter, option in zip(["A", "B", "C", "D", "E"], qa_item.get("options", []))
     )
+    strong_three_user_dependency = len(qa_item.get("required_users") or []) == 3
+    dependency_rules = (
+        "- The accepted question requires the speaker and both evidence providers to "
+        "determine the unique correct option.\n"
+        "- Any single-user or proper-subset condition is intentionally incomplete. Still "
+        "make the best forced choice from only the supplied condition so downstream "
+        "answerability evaluation can measure whether that subset leaks the answer."
+        if strong_three_user_dependency
+        else (
+            "- When both users' videos are provided, answer-bearing facts may be split across "
+            "them and need not coexist in either single view.\n"
+            "- It is acceptable for the evidence-provider-only condition to answer an "
+            "ordinary missing-detail question when that video independently establishes "
+            "the requested detail."
+        )
+    )
     return f"""Answer this EgoLife multiple-choice question using only the videos provided for this condition.
 
 {STRICT_JSON_OUTPUT_CONTRACT}
@@ -1632,8 +1726,7 @@ Rules:
 - Never return "insufficient", "unknown", a refusal, multiple choices, or an empty choice. If the evidence is incomplete or ambiguous, make the best forced choice from the provided condition.
 - Base the forced choice on the provided condition, not common-sense priors, omitted videos, or clues from how the answer options are written.
 - Use only visible evidence, supplied metadata, and available gaze information from this condition.
-- When both users' videos are provided, answer-bearing facts may be split across them and need not coexist in either single view.
-- It is acceptable for the evidence-provider-only condition to answer an ordinary missing-detail question when that video independently establishes the requested detail.
+{dependency_rules}
 
 Return exactly one valid JSON object with this exact shape:
 {json.dumps(ANSWERABILITY_SCHEMA, ensure_ascii=False, indent=2)}
