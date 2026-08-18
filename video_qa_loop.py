@@ -678,6 +678,19 @@ def choose_question_type(
 
 def build_answerability_conditions(required_users: list[str]) -> list[dict[str, Any]]:
     users = list(required_users)
+    if len(users) == 6:
+        return [
+            {
+                "condition_id": f"speaker_only::{users[0]}",
+                "condition_type": "speaker_only",
+                "users": [users[0]],
+            },
+            {
+                "condition_id": "combined_all_six_users::" + "+".join(users),
+                "condition_type": "combined_all_six_users",
+                "users": users,
+            },
+        ]
     conditions = [
         {
             "condition_id": f"single_user::{user}",
@@ -720,6 +733,84 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
     except ValueError as exc:
         return {"passed": False, "reason": str(exc)}
 
+    required_users = list(qa_item.get("required_users") or [])
+    if len(required_users) == 6:
+        speaker_rows = [
+            row for row in evaluations if row.get("condition_type") == "speaker_only"
+        ]
+        all_six_rows = [
+            row
+            for row in evaluations
+            if row.get("condition_type") == "combined_all_six_users"
+        ]
+        base = {"answerability_evaluated_condition_count": len(evaluations)}
+        if not speaker_rows:
+            return {
+                "passed": False,
+                "reason": "missing speaker-only evaluation",
+                "failure_label": "speaker_only_missing",
+                **base,
+            }
+        if not all_six_rows:
+            return {
+                "passed": False,
+                "reason": "missing all-six evaluation",
+                "failure_label": "all_six_missing",
+                **base,
+            }
+
+        speaker_choice, speaker_invalid = parsed_choice(speaker_rows[-1].get("choice"))
+        all_six_choice, all_six_invalid = parsed_choice(all_six_rows[-1].get("choice"))
+        if speaker_invalid:
+            return {
+                "passed": False,
+                "reason": "speaker-only evaluation did not select exactly one A-E answer",
+                "failure_label": "speaker_only_unparsed",
+                "speaker_only_choice": None,
+                "all_six_choice": all_six_choice,
+                **base,
+            }
+        if all_six_invalid:
+            return {
+                "passed": False,
+                "reason": "all-six evaluation did not select exactly one A-E answer",
+                "failure_label": "all_six_unparsed",
+                "speaker_only_choice": speaker_choice,
+                "all_six_choice": None,
+                **base,
+            }
+
+        speaker_only_correct = speaker_choice == correct
+        all_six_correct = all_six_choice == correct
+        metrics = {
+            "speaker_only_choice": speaker_choice,
+            "all_six_choice": all_six_choice,
+            "speaker_only_correct": speaker_only_correct,
+            "all_six_correct": all_six_correct,
+            "cross_view_gain": int(all_six_correct) - int(speaker_only_correct),
+            **base,
+        }
+        if speaker_only_correct:
+            return {
+                "passed": False,
+                "reason": "speaker-only condition selected the declared correct answer",
+                "failure_label": "speaker_only_correct",
+                **metrics,
+            }
+        if not all_six_correct:
+            return {
+                "passed": False,
+                "reason": "six-video condition did not select the declared correct answer",
+                "failure_label": "all_six_wrong",
+                **metrics,
+            }
+        return {
+            "passed": True,
+            "reason": "speaker-only was incorrect and the six-video condition selected the declared correct answer",
+            "failure_label": None,
+            **metrics,
+        }
+
     combined = [row for row in evaluations if row.get("condition_type") == "combined_all_users"]
     if not combined:
         return {"passed": False, "reason": "missing combined_all_users evaluation"}
@@ -742,7 +833,6 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
             "reason": f"combined_all_users did not select correct answer {correct}",
         }
 
-    required_users = list(qa_item.get("required_users") or [])
     asker_user = required_users[0] if required_users else None
     evidence_provider_user = required_users[1] if len(required_users) > 1 else None
     blocking_leaks = []
