@@ -916,6 +916,17 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
     speaker_user = required_users[0] if required_users else None
     evidence_provider_users = required_users[1:]
     evidence_provider_user = evidence_provider_users[0] if evidence_provider_users else None
+    six_user_mode = len(required_users) == 6
+    anchor_provider_users = (
+        list(packet.get("anchor_provider_users") or required_users[1:3])
+        if six_user_mode
+        else []
+    )
+    additional_provider_users = (
+        list(packet.get("additional_provider_users") or required_users[3:6])
+        if six_user_mode
+        else []
+    )
     clips = []
     packet_image_index = 1
     sampled_media_modes: set[str] = set()
@@ -994,14 +1005,13 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
             ),
         }
 
-    if len(required_users) == 3:
+    if six_user_mode:
         required_users_order = (
-            "Treat required_users[0] as the speaker and required_users[1] and "
-            "required_users[2] as two distinct evidence providers. required_users[0] "
-            "together with only required_users[1] must remain insufficient, and "
-            "required_users[0] together with only required_users[2] must remain "
-            "insufficient. Only all three required users together may determine the "
-            "unique correct option."
+            "required_users[0] is the speaker. required_users[1] and required_users[2] "
+            "are anchor providers. required_users[3] through required_users[5] are "
+            "additional providers. The speaker view alone must be insufficient, while "
+            "the six-video input must support one unique answer. One or more provider "
+            "views may support the answer; an unused provider does not invalidate the item."
         )
     else:
         required_users_order = (
@@ -1020,6 +1030,8 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
             "speaker_user": speaker_user,
             "evidence_provider_user": evidence_provider_user,
             "evidence_provider_users": evidence_provider_users,
+            "anchor_provider_users": anchor_provider_users,
+            "additional_provider_users": additional_provider_users,
             "required_users_order": required_users_order,
         },
         "prompt_requirement": (
@@ -1269,7 +1281,7 @@ def build_video_generation_prompt(
     )
     sampled_frame_input = generator_uses_sampled_frames(packet)
     required_users = list(packet.get("required_users") or [])
-    strong_three_user_dependency = len(required_users) == 3
+    six_user_mode = len(required_users) == 6
     object_block = object_guidance_block(
         packet,
         sampled_frame_input=sampled_frame_input,
@@ -1321,42 +1333,48 @@ Input: raw videos from multiple people during the same time interval. They may b
 
     dependency_lines = (
         [
-            "Treat required_users[1] and required_users[2] as two distinct evidence providers; each provider must contribute a different answer-bearing visual fact.",
-            "required_users[0] together with only required_users[1] must remain insufficient.",
-            "required_users[0] together with only required_users[2] must remain insufficient.",
-            "Only all three required users together may determine the unique correct option. Do not generate a question that can be answered without either provider.",
+            "required_users[0] is the speaker, required_users[1] and required_users[2] are the two anchor providers, and required_users[3] through required_users[5] are additional providers.",
+            "The speaker's video alone must remain insufficient, while the six-video input must support exactly one correct option.",
+            "One or more provider views may supply the answer or the cross-view relation needed to identify it.",
+            "Do not require every provider to contribute, and do not reject a natural question merely because some additional provider views are irrelevant.",
         ]
-        if strong_three_user_dependency
+        if six_user_mode
         else [
             "required_users[0]'s view alone must be insufficient. The question should not be answered by the asker on their own; it must require additional evidence from required_users[1]."
         ]
     )
     provider_reference = (
-        "required_users[1] or required_users[2]"
-        if strong_three_user_dependency
+        "required_users[1] through required_users[5]"
+        if six_user_mode
         else "required_users[1]"
     )
     output_schema = VIDEO_GENERATION_SCHEMA
-    if strong_three_user_dependency:
+    if six_user_mode:
         output_schema = {
             **VIDEO_GENERATION_SCHEMA,
             "required_users": [
-                "asker user first",
-                "first evidence-provider user second",
-                "second evidence-provider user third",
+                "speaker user first",
+                "first anchor provider second",
+                "second anchor provider third",
+                "first additional provider fourth",
+                "second additional provider fifth",
+                "third additional provider sixth",
             ],
             "single_user_answerability": {
                 "Speaker": "insufficient because the speaker alone only provides ...",
-                "ProviderOne": "insufficient because the first provider alone only provides ...",
-                "ProviderTwo": "insufficient because the second provider alone only provides ...",
+                "AnchorOne": "sufficient/insufficient based only on this provider view ...",
+                "AnchorTwo": "sufficient/insufficient based only on this provider view ...",
+                "AdditionalOne": "sufficient/insufficient based only on this provider view ...",
+                "AdditionalTwo": "sufficient/insufficient based only on this provider view ...",
+                "AdditionalThree": "sufficient/insufficient based only on this provider view ...",
             },
             "combined_answerability": (
-                "sufficient because the speaker and both evidence providers together "
-                "support exactly one option"
+                "sufficient because the six-video input supports exactly one option"
             ),
             "why_two_users_needed": (
-                "legacy field name: explain why all three required users are necessary and "
-                "why omitting either evidence provider leaves the answer underdetermined"
+                "legacy field name: explain why the speaker view alone is insufficient and "
+                "which provider view or provider combination supplies the missing evidence; "
+                "do not claim that every provider is necessary unless the videos establish it"
             ),
         }
 
@@ -1532,7 +1550,7 @@ def build_qa_formality_judge_prompt(
     )
     schema_status = "PASS" if not schema_errors else "FAIL"
     binary_block = PASS_FAIL_ONLY_INSTRUCTION
-    user_scope = "three-user" if len(packet.get("required_users") or []) == 3 else "two-user"
+    user_scope = "six-user" if len(packet.get("required_users") or []) == 6 else "two-user"
 
     return f"""You are the qa_formality judge for a {user_scope} multiple-choice question. You are a pure text-only semantic judge and do not see the videos.
 
@@ -1615,15 +1633,15 @@ def build_evidence_groundedness_judge_prompt(
         else "- Infer no hidden generator interpretation; judge the question, declared answer, material option claims, and videos shown."
     )
     binary_block = PASS_FAIL_ONLY_INSTRUCTION
-    strong_three_user_dependency = len(packet.get("required_users") or []) == 3
-    question_scope = "three-user" if strong_three_user_dependency else "two-user"
+    six_user_mode = len(packet.get("required_users") or []) == 6
+    question_scope = "six-user" if six_user_mode else "two-user"
     role_grounding_rule = (
-        "- Treat required_users[0] as the speaker and required_users[1] and "
-        "required_users[2] as the two evidence providers. For every candidate, verify a "
-        "distinct answer-bearing contribution from each of required_users[1] and "
-        "required_users[2]. FAIL if the declared answer remains fully supported after "
-        "omitting either evidence provider."
-        if strong_three_user_dependency
+        "- Treat required_users[0] as the speaker, required_users[1] and "
+        "required_users[2] as anchor providers, and required_users[3] through "
+        "required_users[5] as additional providers. Verify that at least one external "
+        "provider view or provider combination supplies the answer-bearing evidence "
+        "missing from the speaker view. Do not fail merely because an input provider is unused."
+        if six_user_mode
         else (
             "- Treat required_users[0] as the asker and required_users[1] as the evidence "
             "provider. For an ordinary information gap, verify the asker-side contextual "
@@ -1675,22 +1693,28 @@ def build_answerability_prompt(qa_item: dict[str, Any], condition: dict[str, Any
         f"{letter}. {option}"
         for letter, option in zip(["A", "B", "C", "D", "E"], qa_item.get("options", []))
     )
-    strong_three_user_dependency = len(qa_item.get("required_users") or []) == 3
-    dependency_rules = (
-        "- The accepted question requires the speaker and both evidence providers to "
-        "determine the unique correct option.\n"
-        "- Any single-user or proper-subset condition is intentionally incomplete. Still "
-        "make the best forced choice from only the supplied condition so downstream "
-        "answerability evaluation can measure whether that subset leaks the answer."
-        if strong_three_user_dependency
-        else (
+    six_user_mode = len(qa_item.get("required_users") or []) == 6
+    condition_type = str(condition.get("condition_type") or "")
+    if six_user_mode and condition_type == "speaker_only":
+        dependency_rules = (
+            "- This is the speaker-only condition. Use only the speaker video and make the "
+            "best forced choice even though the accepted item is intended to withhold the "
+            "answer-bearing external evidence from this condition."
+        )
+    elif six_user_mode and condition_type == "combined_all_six_users":
+        dependency_rules = (
+            "- This is the six-video condition. Use the speaker video and all five provider "
+            "videos together; the supplied set should support exactly one answer. Some "
+            "provider views may be irrelevant to the answer."
+        )
+    else:
+        dependency_rules = (
             "- When both users' videos are provided, answer-bearing facts may be split across "
             "them and need not coexist in either single view.\n"
             "- It is acceptable for the evidence-provider-only condition to answer an "
             "ordinary missing-detail question when that video independently establishes "
             "the requested detail."
         )
-    )
     return f"""Answer this EgoLife multiple-choice question using only the videos provided for this condition.
 
 {STRICT_JSON_OUTPUT_CONTRACT}
