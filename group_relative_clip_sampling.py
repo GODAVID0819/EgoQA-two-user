@@ -1296,6 +1296,84 @@ def compact_pair_rejection_summary(pair_analysis: dict[str, Any], *, limit: int 
     return rows
 
 
+def build_six_user_role_structures(
+    pair_scores: list[dict[str, Any]],
+    *,
+    rng: random.Random | None = None,
+) -> dict[str, Any]:
+    """从六人全部 pair 结果中构造可依次尝试的双锚点星型角色结构。"""
+
+    expected_keys = {
+        (left_index, right_index)
+        for left_index in range(6)
+        for right_index in range(left_index + 1, 6)
+    }
+    pair_by_indices: dict[tuple[int, int], dict[str, Any]] = {}
+    for pair in pair_scores:
+        left_index = int(pair.get("left_index", -1))
+        right_index = int(pair.get("right_index", -1))
+        key = tuple(sorted((left_index, right_index)))
+        if key not in expected_keys:
+            raise ValueError(f"invalid six-user pair edge: {key!r}")
+        if key in pair_by_indices:
+            raise ValueError(f"duplicate six-user pair edge: {key!r}")
+        pair_by_indices[key] = pair
+
+    if set(pair_by_indices) != expected_keys:
+        missing = sorted(expected_keys - set(pair_by_indices))
+        raise ValueError(
+            "six-user role selection requires all 15 pair edges; "
+            f"received {len(pair_by_indices)}, missing {missing}"
+        )
+
+    kept_neighbors: dict[int, list[int]] = {index: [] for index in range(6)}
+    for (left_index, right_index), pair in pair_by_indices.items():
+        if pair.get("status") == "kept":
+            kept_neighbors[left_index].append(right_index)
+            kept_neighbors[right_index].append(left_index)
+    for neighbors in kept_neighbors.values():
+        neighbors.sort()
+
+    role_structures = []
+    for speaker_index in range(6):
+        neighbors = kept_neighbors[speaker_index]
+        for first_offset, first_anchor in enumerate(neighbors):
+            for second_anchor in neighbors[first_offset + 1 :]:
+                anchor_indices = [first_anchor, second_anchor]
+                additional_indices = [
+                    index
+                    for index in range(6)
+                    if index != speaker_index and index not in anchor_indices
+                ]
+                selected_anchor_edges = [
+                    pair_by_indices[tuple(sorted((speaker_index, anchor_index)))]
+                    for anchor_index in anchor_indices
+                ]
+                role_structures.append(
+                    {
+                        "speaker_index": speaker_index,
+                        "anchor_indices": anchor_indices,
+                        "additional_indices": additional_indices,
+                        "selected_anchor_edges": selected_anchor_edges,
+                    }
+                )
+
+    active_rng = rng or random.Random()
+    active_rng.shuffle(role_structures)
+    for candidate_rank, structure in enumerate(role_structures, start=1):
+        structure["candidate_rank"] = candidate_rank
+
+    kept_degrees = [len(kept_neighbors[index]) for index in range(6)]
+    return {
+        "role_structures": role_structures,
+        "eligible_speaker_indices": [
+            index for index, degree in enumerate(kept_degrees) if degree >= 2
+        ],
+        "kept_degrees": kept_degrees,
+        "diagnostic_pair_edges": list(pair_scores),
+    }
+
+
 def _resolve_local_video(
     clip: dict[str, Any],
     *,
