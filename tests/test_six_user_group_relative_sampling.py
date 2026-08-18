@@ -17,8 +17,11 @@ if "egolife_two_user_qa" not in sys.modules:
     sys.modules["egolife_two_user_qa"] = package
 
 from egolife_two_user_qa.group_relative_clip_sampling import (  # noqa: E402
+    analyze_group_relative_similarity,
+    build_candidate_packet,
     build_six_user_role_structures,
     materialize_six_user_role_structure,
+    mine_group_relative_clip_candidates,
 )
 from egolife_two_user_qa import group_relative_clip_sampling  # noqa: E402
 
@@ -232,6 +235,150 @@ class SixUserRoleSelectionTests(unittest.TestCase):
                 min_pruned_video_seconds=2.0,
                 ffmpeg_binary="ffmpeg",
             )
+
+    def test_six_user_analysis_scores_15_edges_and_retries_role_materialization(self) -> None:
+        rows = self.six_rows()
+        for index, row in enumerate(rows):
+            row["frames"] = [{"path": f"frame-{index}.jpg"}]
+        scores = pair_scores(kept_keys={"0-1", "0-2", "0-3"})
+        for row in scores:
+            row.update({"mean_sim": 0.5, "topk_sim": 0.7})
+        pair_analysis = {
+            "pair_filter": {"pair_count": 15},
+            "pair_scores": scores,
+            "surviving_pairs": [row for row in scores if row["status"] == "kept"],
+            "ranked_pairs": [row for row in scores if row["status"] == "kept"],
+            "rejected_pairs": [row for row in scores if row["status"] == "rejected"],
+        }
+
+        class Encoder:
+            model_id = "fake/clip"
+
+            def __init__(self) -> None:
+                self.calls = []
+
+            def encode(self, paths):
+                self.calls.append(list(paths))
+                return [[1.0, 0.0] for _ in paths]
+
+        encoder = Encoder()
+        materialization_attempts = []
+
+        def fake_materialize(_rows, structure, **kwargs):
+            materialization_attempts.append(structure["candidate_rank"])
+            if len(materialization_attempts) == 1:
+                raise ValueError("synthetic first-role failure")
+            ordered_indices = [
+                structure["speaker_index"],
+                *structure["anchor_indices"],
+                *structure["additional_indices"],
+            ]
+            roles = [
+                "speaker_pruned",
+                "anchor_provider_pruned",
+                "anchor_provider_pruned",
+                "additional_provider_full",
+                "additional_provider_full",
+                "additional_provider_full",
+            ]
+            return [
+                {**dict(_rows[index]["clip"]), "media_role": role}
+                for index, role in zip(ordered_indices, roles)
+            ]
+
+        group = {
+            "day": "DAY1",
+            "time_token": "120000",
+            "clip_clock": "12:00:00",
+            "clips": [dict(row["clip"]) for row in rows],
+        }
+        with (
+            mock.patch.object(
+                group_relative_clip_sampling,
+                "group_clip_frames",
+                return_value=rows,
+            ),
+            mock.patch.object(
+                group_relative_clip_sampling,
+                "score_video_pairs",
+                return_value=pair_analysis,
+            ) as score_mock,
+            mock.patch.object(
+                group_relative_clip_sampling,
+                "materialize_six_user_role_structure",
+                side_effect=fake_materialize,
+            ),
+        ):
+            result = analyze_group_relative_similarity(
+                group,
+                output_dir=self.tmp_path / "analysis",
+                cache_dir=self.tmp_path / "cache",
+                encoder=encoder,
+                selected_count=6,
+                rng=random.Random(11),
+            )
+
+        self.assertEqual(len(encoder.calls), 6)
+        self.assertEqual(len(score_mock.call_args.args[0]), 6)
+        self.assertEqual(len(result["pair_scores"]), 15)
+        self.assertEqual(len(materialization_attempts), 2)
+        self.assertEqual(len(result["selection"]["role_materialization_attempts"]), 2)
+        self.assertEqual(result["selection"]["selected_count"], 6)
+        self.assertEqual(result["selection"]["method"], "six_user_two_anchor_star")
+        self.assertEqual(len(result["selected_clips"]), 6)
+
+        packet = build_candidate_packet(result)
+        users = [clip["agent_name"] for clip in result["selected_clips"]]
+        self.assertEqual(packet["candidate_type"], "six_user_two_anchor_mixed_media")
+        self.assertEqual(packet["input_users"], users)
+        self.assertEqual(packet["required_users"], users)
+        self.assertEqual(packet["speaker_user"], users[0])
+        self.assertEqual(packet["anchor_provider_users"], users[1:3])
+        self.assertEqual(packet["additional_provider_users"], users[3:6])
+        self.assertEqual(packet["evidence_provider_user"], users[1])
+        self.assertEqual(packet["evidence_provider_users"], users[1:3])
+        self.assertEqual(len(packet["selected_anchor_edges"]), 2)
+        self.assertEqual(len(packet["diagnostic_pair_edges"]), 15)
+        self.assertEqual(set(packet["media_roles"]), set(users))
+
+    def test_invalid_selected_count_fails_before_encoder_initialization(self) -> None:
+        with (
+            mock.patch.object(
+                group_relative_clip_sampling,
+                "TransformersClipEncoder",
+            ) as encoder_class,
+            mock.patch.object(group_relative_clip_sampling, "read_json") as read_json_mock,
+        ):
+            with self.assertRaisesRegex(ValueError, "2 or 6"):
+                mine_group_relative_clip_candidates(
+                    manifest_path=self.tmp_path / "manifest.json",
+                    output_path=self.tmp_path / "output.jsonl",
+                    output_dir=self.tmp_path / "output",
+                    cache_dir=self.tmp_path / "cache",
+                    selected_count=3,
+                )
+
+        encoder_class.assert_not_called()
+        read_json_mock.assert_not_called()
+
+    def test_two_user_candidate_packet_keeps_legacy_shape(self) -> None:
+        selected_clips = [
+            {"agent_name": "speaker", "agent_id": "A", "media_role": "legacy"},
+            {"agent_name": "provider", "agent_id": "B", "media_role": "legacy"},
+        ]
+        group_result = {
+            "day": "DAY1",
+            "time_token": "120000",
+            "clip_clock": "12:00:00",
+            "selected_clips": selected_clips,
+            "selection": {"selected_pair": {"pair_key": "0-1"}},
+        }
+
+        packet = build_candidate_packet(group_result)
+
+        self.assertEqual(packet["candidate_type"], "random_synchronized_pair_cluster_pruned_video")
+        self.assertEqual(packet["required_users"], ["speaker", "provider"])
+        self.assertNotIn("input_users", packet)
 
 
 if __name__ == "__main__":

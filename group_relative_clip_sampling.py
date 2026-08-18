@@ -1833,17 +1833,17 @@ def analyze_group_relative_similarity(
     ffmpeg_binary: str = "ffmpeg",
     download_media: bool = False,
 ) -> dict[str, Any]:
-    """Analyze one synchronized group after optionally sampling a two-video pair first."""
+    """分析一个同步组，并按双用户或六用户合同物化候选。"""
 
-    if selected_count != 2:
-        raise ValueError("pair-ranking mode currently selects exactly two clips")
+    if selected_count not in {2, 6}:
+        raise ValueError("selected_count must be 2 or 6")
     if pairs_per_group < 1:
         raise ValueError("pairs_per_group must be positive")
     rng = rng or random.Random()
     original_group_size = len(group.get("clips", []))
     sampled_source_clips = (
         _sample_group_clips_for_pair(group, selected_count=selected_count, rng=rng)
-        if random_pair_first
+        if random_pair_first or selected_count == 6
         else sorted(group.get("clips", []), key=lambda item: str(item.get("agent_dir")))
     )
     if len(sampled_source_clips) < selected_count:
@@ -1888,22 +1888,106 @@ def analyze_group_relative_similarity(
         min_pruned_video_percent=min_pruned_video_percent,
         max_pair_time_difference_seconds=max_pair_time_difference_seconds,
     )
-    surviving_pairs = pair_analysis["surviving_pairs"]
-    if not surviving_pairs:
-        diagnostics = compact_pair_rejection_summary(pair_analysis)
-        raise ValueError(f"no video pairs survived the frame-matrix pair filters: {diagnostics}")
-    sampled_pairs = rng.sample(surviving_pairs, min(pairs_per_group, len(surviving_pairs)))
-    for sample_rank, pair in enumerate(sampled_pairs, 1):
-        pair["sample_rank"] = sample_rank
-    selected_pair = sampled_pairs[0]
-    selected_indices = [int(selected_pair["left_index"]), int(selected_pair["right_index"])]
     group_output_dir = Path(output_dir) / stable_id(group.get("day"), group.get("time_token"))
-    selected_clips = selected_clips_for_pair_from_rows(
-        rows,
-        selected_pair,
-        output_dir=group_output_dir,
-        ffmpeg_binary=ffmpeg_binary,
-    )
+    surviving_pairs = pair_analysis["surviving_pairs"]
+    role_selection: dict[str, Any] | None = None
+    if selected_count == 2:
+        if not surviving_pairs:
+            diagnostics = compact_pair_rejection_summary(pair_analysis)
+            raise ValueError(f"no video pairs survived the frame-matrix pair filters: {diagnostics}")
+        sampled_pairs = rng.sample(surviving_pairs, min(pairs_per_group, len(surviving_pairs)))
+        for sample_rank, pair in enumerate(sampled_pairs, 1):
+            pair["sample_rank"] = sample_rank
+        selected_pair = sampled_pairs[0]
+        selected_indices = [int(selected_pair["left_index"]), int(selected_pair["right_index"])]
+        selected_clips = selected_clips_for_pair_from_rows(
+            rows,
+            selected_pair,
+            output_dir=group_output_dir,
+            ffmpeg_binary=ffmpeg_binary,
+        )
+        selection_details = {
+            "method": "random_synchronized_pair_then_cluster_prune",
+            "selected_pair": selected_pair,
+            "selected_pair_mean_sim": selected_pair["mean_sim"],
+            "selected_pair_topk_sim": selected_pair["topk_sim"],
+            "rationale": (
+                "The sampler first randomly selects two videos from the synchronized group, then "
+                "takes one frame per second only from those videos, clusters each selected video "
+                "with CLIP embeddings, compares representative frames, removes uniform intervals "
+                "around frames assigned to high-similarity clusters, and materializes paired "
+                "original/pruned videos. Generators consume pruned videos; judges and "
+                "answerability gates consume the original videos."
+            ),
+        }
+    else:
+        role_selection = build_six_user_role_structures(pair_analysis["pair_scores"], rng=rng)
+        if not role_selection["role_structures"]:
+            raise ValueError(
+                "no six-user speaker has two kept anchor neighbors: "
+                f"kept_degrees={role_selection['kept_degrees']}"
+            )
+        materialization_attempts = []
+        selected_structure = None
+        selected_clips = None
+        for structure in role_selection["role_structures"]:
+            try:
+                candidate_clips = materialize_six_user_role_structure(
+                    rows,
+                    structure,
+                    output_dir=group_output_dir,
+                    start_seconds=start_seconds,
+                    duration_seconds=duration_seconds,
+                    min_pruned_video_seconds=min_pruned_video_seconds,
+                    ffmpeg_binary=ffmpeg_binary,
+                )
+            except Exception as exc:
+                materialization_attempts.append(
+                    {
+                        "candidate_rank": structure.get("candidate_rank"),
+                        "speaker_index": structure.get("speaker_index"),
+                        "anchor_indices": structure.get("anchor_indices"),
+                        "status": "failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+            selected_structure = structure
+            selected_clips = candidate_clips
+            materialization_attempts.append(
+                {
+                    "candidate_rank": structure.get("candidate_rank"),
+                    "speaker_index": structure.get("speaker_index"),
+                    "anchor_indices": structure.get("anchor_indices"),
+                    "status": "selected",
+                }
+            )
+            break
+        if selected_structure is None or selected_clips is None:
+            raise ValueError(
+                "all six-user role structures failed media materialization: "
+                f"{materialization_attempts}"
+            )
+        selected_indices = [
+            int(selected_structure["speaker_index"]),
+            *[int(index) for index in selected_structure["anchor_indices"]],
+            *[int(index) for index in selected_structure["additional_indices"]],
+        ]
+        sampled_pairs = list(selected_structure["selected_anchor_edges"])
+        selection_details = {
+            "method": "six_user_two_anchor_star",
+            "selected_role_structure": selected_structure,
+            "selected_anchor_edges": list(selected_structure["selected_anchor_edges"]),
+            "role_materialization_attempts": materialization_attempts,
+            "eligible_speaker_indices": role_selection["eligible_speaker_indices"],
+            "kept_degrees": role_selection["kept_degrees"],
+            "rationale": (
+                "Six synchronized videos are scored across all 15 pair edges. A speaker with "
+                "at least two kept neighbors is paired with two anchor providers. The speaker "
+                "uses the union of both anchor-edge removals, each anchor uses pair-specific "
+                "pruning, and three additional providers remain full for generation."
+            ),
+        }
 
     return {
         "day": group.get("day"),
@@ -1918,7 +2002,7 @@ def analyze_group_relative_similarity(
         "group_size": original_group_size,
         "embedded_clip_count": len(rows),
         "selection": {
-            "method": "random_synchronized_pair_then_cluster_prune",
+            **selection_details,
             "selected_count": selected_count,
             "pairs_per_group": pairs_per_group,
             "random_pair_first": random_pair_first,
@@ -1941,21 +2025,11 @@ def analyze_group_relative_similarity(
             "selected_indices": selected_indices,
             "selected_agents": [clip.get("agent_dir") for clip in selected_clips],
             "selected_users": [clip.get("agent_name") for clip in selected_clips],
-            "selected_pair": selected_pair,
-            "selected_pair_mean_sim": selected_pair["mean_sim"],
-            "selected_pair_topk_sim": selected_pair["topk_sim"],
-            "rationale": (
-                "The sampler first randomly selects two videos from the synchronized group, then "
-                "takes one frame per second only from those videos, clusters each selected video "
-                "with CLIP embeddings, compares representative frames, removes uniform intervals "
-                "around frames assigned to high-similarity clusters, and materializes paired "
-                "original/pruned videos. Generators consume pruned videos; judges and "
-                "answerability gates consume the original 30-second videos."
-            ),
         },
         **scoring,
         **pair_analysis,
         "sampled_pairs": sampled_pairs,
+        **({"six_user_role_selection": role_selection} if role_selection is not None else {}),
         "group_clips": [row["clip"] for row in rows],
         "selected_clips": selected_clips,
     }
@@ -2047,7 +2121,15 @@ def write_review_bundle(group_result: dict[str, Any], review_root: str | Path) -
         score_fields,
     )
 
-    selected_pair_key = group_result.get("selection", {}).get("selected_pair", {}).get("pair_key")
+    selection = group_result.get("selection", {})
+    selected_pair_keys = {
+        str(pair.get("pair_key"))
+        for pair in selection.get("selected_anchor_edges", [])
+        if pair.get("pair_key") is not None
+    }
+    selected_pair_key = selection.get("selected_pair", {}).get("pair_key")
+    if selected_pair_key is not None:
+        selected_pair_keys.add(str(selected_pair_key))
     pair_fields = [
         "trace_rank",
         "sample_rank",
@@ -2071,7 +2153,7 @@ def write_review_bundle(group_result: dict[str, Any], review_root: str | Path) -
     pair_rows = []
     for pair in group_result.get("pair_scores", []):
         row = dict(pair)
-        row["selected"] = row.get("pair_key") == selected_pair_key
+        row["selected"] = str(row.get("pair_key")) in selected_pair_keys
         pair_rows.append(row)
     _write_csv(traces_dir / "pair_scores_ranked_for_qa.csv", pair_rows, pair_fields)
     _write_csv(
@@ -2094,15 +2176,19 @@ def write_review_bundle(group_result: dict[str, Any], review_root: str | Path) -
         matrix_rows.append({"clip": label, **{labels[index]: value for index, value in enumerate(row)}})
     _write_csv(traces_dir / "pairwise_similarity_matrix.csv", matrix_rows, ["clip", *labels])
 
-    selected_users = ", ".join(group_result.get("selection", {}).get("selected_users", []))
-    selected_agents_text = ", ".join(group_result.get("selection", {}).get("selected_agents", []))
+    selected_users = ", ".join(selection.get("selected_users", []))
+    selected_agents_text = ", ".join(selection.get("selected_agents", []))
+    selected_relation_label = (
+        ", ".join(sorted(selected_pair_keys))
+        if selection.get("method") == "six_user_two_anchor_star"
+        else str(selected_pair_key)
+    )
     readme = (
         f"# {bundle_id}\n\n"
         f"- Day/time: {group_result.get('day')} {group_result.get('clip_clock')}\n"
-        f"- Selected pair: {selected_users} ({selected_agents_text})\n"
-        f"- Selected mean_sim: {group_result.get('selection', {}).get('selected_pair_mean_sim')}\n"
-        f"- Selected topk_sim: {group_result.get('selection', {}).get('selected_pair_topk_sim')}\n"
-        f"- Videos: `videos/` contains the sampled synchronized pair; selected files end with `_SELECTED.mp4`.\n"
+        f"- Selected users: {selected_users} ({selected_agents_text})\n"
+        f"- Selected pair edges: {selected_relation_label}\n"
+        f"- Videos: `videos/` contains the sampled synchronized inputs; selected files end with `_SELECTED.mp4`.\n"
         f"- Pair trace: `comparison_traces/pair_scores_ranked_for_qa.csv` shows kept/rejected pair decisions.\n"
         f"- Sample pool: `comparison_traces/surviving_pairs_sample_pool.csv` shows all pairs eligible for random sampling.\n"
         f"- Clip trace: `comparison_traces/clip_scores_ranked_by_group_similarity.csv` shows per-video typicality.\n"
@@ -2147,6 +2233,74 @@ def result_for_sampled_pair(
 def build_candidate_packet(group_result: dict[str, Any]) -> dict[str, Any]:
     selected_clips = group_result["selected_clips"]
     required_users = [clip.get("agent_name") for clip in selected_clips]
+    if len(required_users) == 6:
+        selection = group_result.get("selection", {})
+        media_roles = {
+            str(clip.get("agent_name")): str(clip.get("media_role"))
+            for clip in selected_clips
+        }
+        packet_id = stable_id(
+            "EGOLIFE6U_TWO_ANCHOR_MIXED",
+            group_result.get("day"),
+            group_result.get("time_token"),
+            *[clip.get("agent_id") or clip.get("agent_name") for clip in selected_clips],
+            selection.get("selected_role_structure", {}).get("candidate_rank"),
+        )
+        return {
+            "evidence_id": packet_id,
+            "candidate_type": "six_user_two_anchor_mixed_media",
+            "day": group_result.get("day"),
+            "time_token": group_result.get("time_token"),
+            "clip_clock": group_result.get("clip_clock"),
+            "input_users": required_users,
+            "required_users": required_users,
+            "speaker_user": required_users[0],
+            "anchor_provider_users": required_users[1:3],
+            "additional_provider_users": required_users[3:6],
+            "evidence_provider_user": required_users[1],
+            "evidence_provider_users": required_users[1:3],
+            "media_roles": media_roles,
+            "selected_anchor_edges": list(selection.get("selected_anchor_edges") or []),
+            "diagnostic_pair_edges": list(group_result.get("pair_scores") or []),
+            "requirement": (
+                "Six synchronized input videos are ordered as one speaker, two anchor providers, "
+                "and three additional providers. Generation uses the pruned speaker and anchors "
+                "plus three full additional videos. Groundedness uses all six full videos. "
+                "Answerability requires the speaker-only condition to choose incorrectly and the "
+                "all-six condition to choose correctly; providers need not all contribute."
+            ),
+            "generator_media_mode": "three_pruned_three_full_videos",
+            "clips": selected_clips,
+            "source_urls": {
+                "videos": [clip.get("video_url") for clip in selected_clips],
+                "gazes": [clip.get("gaze_url") for clip in selected_clips],
+                "overlays": [
+                    clip.get("overlay_url")
+                    for clip in selected_clips
+                    if clip.get("overlay_url")
+                ],
+            },
+            "group_relative_clip_similarity": {
+                key: group_result[key]
+                for key in [
+                    "model_id",
+                    "window",
+                    "group_size",
+                    "selection",
+                    "clip_scores",
+                    "ranked_by_group_similarity",
+                    "similarity_matrix",
+                    "pair_filter",
+                    "pair_scores",
+                    "surviving_pairs",
+                    "sampled_pairs",
+                    "six_user_role_selection",
+                    "review_bundle",
+                ]
+                if key in group_result
+            },
+        }
+
     packet_id = stable_id(
         "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED",
         group_result.get("day"),
@@ -2236,14 +2390,17 @@ def mine_group_relative_clip_candidates(
     review_dir: str | Path | None = None,
     encoder: ImageEncoder | None = None,
 ) -> list[dict[str, Any]]:
-    """Write CLIP-pruned candidates from random synchronized two-video pairs."""
+    """写出双用户 pair 或六用户双锚点 CLIP 裁剪候选。"""
 
+    if selected_count not in {2, 6}:
+        raise ValueError("selected_count must be 2 or 6")
     manifest = read_json(manifest_path)
     rng = random.Random(random_seed) if random_seed is not None else random.Random()
+    effective_min_group_size = max(int(min_group_size), selected_count)
     groups = [
         group
         for group in group_manifest_clips(manifest)
-        if len(group.get("clips", [])) >= min_group_size
+        if len(group.get("clips", [])) >= effective_min_group_size
     ]
     rng.shuffle(groups)
     if max_groups is not None:
@@ -2301,18 +2458,23 @@ def mine_group_relative_clip_candidates(
         bundle_dir = write_review_bundle(result, review_root)
         result["review_bundle"] = str(bundle_dir)
         write_json(result_path, result)
-        for pair in result.get("sampled_pairs", []):
-            packet_result = result_for_sampled_pair(
-                result,
-                pair,
-                output_dir=output_dir / stable_id(group.get("day"), group.get("time_token")),
-                ffmpeg_binary=ffmpeg_binary,
-            )
-            packet = build_candidate_packet(packet_result)
+        if selected_count == 6:
+            packet = build_candidate_packet(result)
             packet["group_relative_clip_similarity"]["result_path"] = str(result_path)
             candidates.append(packet)
-            if len(candidates) >= target_count:
-                break
+        else:
+            for pair in result.get("sampled_pairs", []):
+                packet_result = result_for_sampled_pair(
+                    result,
+                    pair,
+                    output_dir=output_dir / stable_id(group.get("day"), group.get("time_token")),
+                    ffmpeg_binary=ffmpeg_binary,
+                )
+                packet = build_candidate_packet(packet_result)
+                packet["group_relative_clip_similarity"]["result_path"] = str(result_path)
+                candidates.append(packet)
+                if len(candidates) >= target_count:
+                    break
 
     write_jsonl(output_path, candidates)
     write_json(
@@ -2330,6 +2492,7 @@ def mine_group_relative_clip_candidates(
                 "target_count": target_count,
                 "max_groups": max_groups,
                 "min_group_size": min_group_size,
+                "effective_min_group_size": effective_min_group_size,
                 "group_order": "randomized_before_max_groups",
                 "duration_seconds": duration_seconds,
                 "sample_interval_seconds": sample_interval_seconds,
@@ -2360,7 +2523,7 @@ def mine_group_relative_clip_candidates(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Sidecar sampler that CLIP-prunes random synchronized two-video pairs"
+        description="CLIP-pruned synchronized candidate sampler for two or six input videos"
     )
     parser.add_argument("--manifest", required=True, help="Input EgoLife manifest JSON")
     parser.add_argument("--output", required=True, help="Output candidate JSONL")
@@ -2377,7 +2540,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--duration-seconds", type=float, default=30.0)
     parser.add_argument("--sample-interval-seconds", type=float, default=1.0)
     parser.add_argument("--start-seconds", type=float, default=0.0)
-    parser.add_argument("--selected-count", type=int, default=2)
+    parser.add_argument(
+        "--selected-count",
+        type=int,
+        choices=[2, 6],
+        default=2,
+        help="Use 2 for the legacy pair path or 6 for one speaker, two anchors, and three additionals",
+    )
     parser.add_argument("--pairs-per-group", type=int, default=1)
     parser.add_argument("--topk", type=int, default=3, help="Number of strongest frame matches averaged into topk_sim")
     parser.add_argument(
@@ -2492,7 +2661,7 @@ def main(argv: list[str] | None = None) -> int:
         download_media=args.download_media,
         review_dir=args.review_dir,
     )
-    print(f"wrote {len(candidates)} random-pair CLIP-pruned candidates to {args.output}")
+    print(f"wrote {len(candidates)} CLIP-pruned candidates to {args.output}")
     return 0
 
 
