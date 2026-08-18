@@ -1589,6 +1589,222 @@ def selected_clips_for_pair_from_group_result(
     ]
 
 
+def _pair_side_for_clip(pair: dict[str, Any], clip_index: int) -> str:
+    if int(pair.get("left_index", -1)) == clip_index:
+        return "left"
+    if int(pair.get("right_index", -1)) == clip_index:
+        return "right"
+    raise ValueError(
+        f"pair {pair.get('pair_key')!r} does not contain clip index {clip_index}"
+    )
+
+
+def _pair_side_intervals(
+    pair: dict[str, Any],
+    clip_index: int,
+) -> tuple[list[list[float]], list[list[float]]]:
+    side = _pair_side_for_clip(pair, clip_index)
+    pruning = pair.get("temporal_pruning")
+    if not isinstance(pruning, dict):
+        raise ValueError(f"pair {pair.get('pair_key')!r} is missing temporal_pruning")
+    keep_intervals = pruning.get(f"{side}_keep_intervals")
+    remove_intervals = pruning.get(f"{side}_remove_intervals")
+    if not isinstance(keep_intervals, list) or not isinstance(remove_intervals, list):
+        raise ValueError(
+            f"pair {pair.get('pair_key')!r} is missing {side}-side pruning intervals"
+        )
+    return keep_intervals, remove_intervals
+
+
+def _materialize_six_user_clip(
+    clip: dict[str, Any],
+    *,
+    media_role: str,
+    position: int,
+    output_dir: str | Path,
+    keep_intervals: list[list[float]] | list[tuple[float, float]] | None,
+    remove_intervals: list[list[float]] | list[tuple[float, float]],
+    source_edges: list[dict[str, Any]],
+    ffmpeg_binary: str,
+) -> dict[str, Any]:
+    result = dict(clip)
+    source_video = result.get("local_video")
+    if not source_video or not Path(source_video).is_file():
+        raise FileNotFoundError(
+            f"six-user selected clip is missing local_video: {result.get('clip_id')}"
+        )
+
+    role_dir = Path(output_dir)
+    role_dir.mkdir(parents=True, exist_ok=True)
+    agent = _safe_filename_part(result.get("agent_dir") or result.get("agent_name") or position)
+    source_suffix = Path(source_video).suffix or ".mp4"
+    full_video = role_dir / f"{position:02d}_{agent}_full{source_suffix}"
+    shutil.copy2(source_video, full_video)
+
+    is_pruned = keep_intervals is not None
+    if is_pruned:
+        generator_video = role_dir / f"{position:02d}_{agent}_pruned.mp4"
+        materialize_pruned_video(
+            source_video,
+            generator_video,
+            keep_intervals,
+            ffmpeg_binary=ffmpeg_binary,
+        )
+        generator_media_mode = "pruned_video"
+    else:
+        generator_video = full_video
+        generator_media_mode = "full_video"
+
+    result.update(
+        {
+            "source_local_video": str(source_video),
+            "original_local_video": str(full_video),
+            "full_local_video": str(full_video),
+            "local_video": str(generator_video),
+            "generator_local_video": str(generator_video),
+            "generator_media_mode": generator_media_mode,
+            "media_role": media_role,
+            "is_pruned": is_pruned,
+            "benchmark_media": {
+                "generator_video": str(generator_video),
+                "judge_video": str(full_video),
+                "answerability_video": str(full_video),
+                "source_cache_video": str(source_video),
+            },
+        }
+    )
+    if is_pruned:
+        kept_duration = round(
+            sum(float(end) - float(start) for start, end in keep_intervals),
+            3,
+        )
+        removed_duration = round(
+            sum(float(end) - float(start) for start, end in remove_intervals),
+            3,
+        )
+        result["temporal_pruning"] = {
+            "method": (
+                "speaker_two_anchor_remove_interval_union"
+                if media_role == "speaker_pruned"
+                else "anchor_pair_specific_pruning"
+            ),
+            "keep_intervals": list(keep_intervals),
+            "remove_intervals": list(remove_intervals),
+            "kept_duration_seconds": kept_duration,
+            "removed_duration_seconds": removed_duration,
+            "source_pair_keys": [edge.get("pair_key") for edge in source_edges],
+        }
+    return result
+
+
+def materialize_six_user_role_structure(
+    rows: list[dict[str, Any]],
+    structure: dict[str, Any],
+    *,
+    output_dir: str | Path,
+    start_seconds: float,
+    duration_seconds: float,
+    min_pruned_video_seconds: float,
+    ffmpeg_binary: str,
+) -> list[dict[str, Any]]:
+    """按 speaker、anchors、additionals 顺序物化三段裁剪和三段完整视频。"""
+
+    if len(rows) != 6:
+        raise ValueError(f"six-user materialization requires 6 rows, got {len(rows)}")
+    speaker_index = int(structure["speaker_index"])
+    anchor_indices = [int(index) for index in structure.get("anchor_indices", [])]
+    additional_indices = [int(index) for index in structure.get("additional_indices", [])]
+    selected_edges = list(structure.get("selected_anchor_edges") or [])
+    if len(anchor_indices) != 2 or len(additional_indices) != 3 or len(selected_edges) != 2:
+        raise ValueError("six-user role structure must contain two anchors and three additionals")
+
+    window_start = float(start_seconds)
+    window_end = round(window_start + float(duration_seconds), 3)
+    speaker_remove_rows = []
+    for edge in selected_edges:
+        _keep, remove = _pair_side_intervals(edge, speaker_index)
+        speaker_remove_rows.extend(remove)
+    speaker_remove = _merge_intervals(
+        [
+            (max(window_start, float(start)), min(window_end, float(end)))
+            for start, end in speaker_remove_rows
+            if min(window_end, float(end)) > max(window_start, float(start))
+        ]
+    )
+    speaker_keep = _subtract_intervals((window_start, window_end), speaker_remove)
+    speaker_kept_seconds = sum(end - start for start, end in speaker_keep)
+    if speaker_kept_seconds < float(min_pruned_video_seconds):
+        raise ValueError(
+            "speaker pruned video is too short after merging two anchor-edge removals: "
+            f"kept {speaker_kept_seconds:.3f}s, need {float(min_pruned_video_seconds):.3f}s"
+        )
+
+    role_dir = (
+        Path(output_dir)
+        / "six_user_role_structures"
+        / f"candidate_{int(structure.get('candidate_rank') or 1):03d}"
+    )
+    clips = [
+        _materialize_six_user_clip(
+            rows[speaker_index]["clip"],
+            media_role="speaker_pruned",
+            position=0,
+            output_dir=role_dir,
+            keep_intervals=speaker_keep,
+            remove_intervals=speaker_remove,
+            source_edges=selected_edges,
+            ffmpeg_binary=ffmpeg_binary,
+        )
+    ]
+
+    for position, anchor_index in enumerate(anchor_indices, start=1):
+        matching_edge = next(
+            (
+                edge
+                for edge in selected_edges
+                if anchor_index
+                in (int(edge.get("left_index", -1)), int(edge.get("right_index", -1)))
+            ),
+            None,
+        )
+        if matching_edge is None:
+            raise ValueError(f"anchor index {anchor_index} has no selected speaker edge")
+        keep_intervals, remove_intervals = _pair_side_intervals(matching_edge, anchor_index)
+        kept_seconds = sum(float(end) - float(start) for start, end in keep_intervals)
+        if kept_seconds < float(min_pruned_video_seconds):
+            raise ValueError(
+                f"anchor {anchor_index} pruned video is too short: kept {kept_seconds:.3f}s, "
+                f"need {float(min_pruned_video_seconds):.3f}s"
+            )
+        clips.append(
+            _materialize_six_user_clip(
+                rows[anchor_index]["clip"],
+                media_role="anchor_provider_pruned",
+                position=position,
+                output_dir=role_dir,
+                keep_intervals=keep_intervals,
+                remove_intervals=remove_intervals,
+                source_edges=[matching_edge],
+                ffmpeg_binary=ffmpeg_binary,
+            )
+        )
+
+    for position, additional_index in enumerate(additional_indices, start=3):
+        clips.append(
+            _materialize_six_user_clip(
+                rows[additional_index]["clip"],
+                media_role="additional_provider_full",
+                position=position,
+                output_dir=role_dir,
+                keep_intervals=None,
+                remove_intervals=[],
+                source_edges=[],
+                ffmpeg_binary=ffmpeg_binary,
+            )
+        )
+    return clips
+
+
 def analyze_group_relative_similarity(
     group: dict[str, Any],
     *,
