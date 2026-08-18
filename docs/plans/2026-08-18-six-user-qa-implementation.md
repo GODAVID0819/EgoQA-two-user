@@ -6,6 +6,8 @@
 
 **架构：** 保留当前二用户 pair 采样路径；六用户路径对一个同步六人集合计算 15 条 pair edges，选择拥有至少两个合格邻居的 speaker 和两个 anchors。speaker 合并两条 anchor 边的裁剪区间，anchors 分别裁剪，additional providers 保持完整。六用户 answerability 只生成两个条件，不改变 GRPO、DPO 或 reviewer 训练合同。
 
+**版本与文件标识约束：** 本功能不得计算、测试、保存或冻结任何版本、文件、prompt 或媒体哈希。作业只记录分支名、dirty state、JobID、参数和实际路径。
+
 **技术栈：** Python、pytest/unittest、CLIP、FFmpeg、Qwen3-VL、Slurm、Bash。
 
 ---
@@ -429,8 +431,7 @@ git status --short --branch
 ### 步骤 2：范围审计
 
 ```powershell
-git diff 6bfb63d..HEAD --stat
-git log --oneline 6bfb63d..HEAD
+git diff --stat origin/main...
 rg -n "len\(required_users\) == 3|selected_count != 2|exactly two|required_users\[2\]" prompts.py video_qa_loop.py group_relative_clip_sampling.py
 ```
 
@@ -440,7 +441,7 @@ rg -n "len\(required_users\) == 3|selected_count != 2|exactly two|required_users
 
 报告：
 
-- 分支与 HEAD；
+- 分支与 dirty state；
 - 核心输入、角色、媒体和 answerability 合同；
 - 本地测试数量和结果；
 - Bash 静态验证结果或未验证边界；

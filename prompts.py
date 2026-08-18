@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from typing import Any
@@ -466,26 +465,10 @@ ARCHIVED_CONCURRENT_ACTIVITY_EXAMPLES = """- Cross-view concurrent activity. Fix
 
 
 def question_wording_direction(packet: dict[str, Any]) -> str:
-    """Assign a reproducible opening style so independent calls do not collapse."""
+    """Use an explicit opening style without deriving a hidden packet fingerprint."""
 
-    identity = {
-        "evidence_id": packet.get("evidence_id"),
-        "required_users": packet.get("required_users"),
-        "clips": [
-            {
-                "user": clip.get("user"),
-                "day": clip.get("day"),
-                "clip_clock": clip.get("clip_clock"),
-                "local_video": clip.get("local_video"),
-                "video_url": clip.get("video_url"),
-            }
-            for clip in packet.get("clips") or []
-            if isinstance(clip, dict)
-        ],
-    }
-    serialized = json.dumps(identity, ensure_ascii=False, sort_keys=True, default=str)
-    bucket = hashlib.sha256(serialized.encode("utf-8")).digest()[0] % 3
-    if bucket:
+    direction = str(packet.get("question_wording_direction") or "question_first")
+    if direction != "context_first_allowed":
         return """Per-item wording direction: question_first
 - For this item, lead with the missing-information request and place any first-person or temporal anchor later in the sentence.
 - Do not begin this item with a scene-setting clause such as "I was ...", "We were ...", "When I ...", "While I ...", or "After I ...".

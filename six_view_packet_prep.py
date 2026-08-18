@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import errno
-import hashlib
 import os
 import re
 import shutil
@@ -116,10 +115,7 @@ def _sample_fallback_clip(
         raise ValueError(
             f"{packet_id}: no fallback video is available for missing agent {agent_dir}"
         )
-    digest = hashlib.sha256(
-        f"{fallback_random_seed}|{packet_id}|{agent_dir}".encode("utf-8")
-    ).digest()
-    selected_index = int.from_bytes(digest[:8], "big") % len(pool)
+    selected_index = fallback_random_seed % len(pool)
     alignment = (
         "fallback_sampled_same_day" if same_day else "fallback_sampled_other_day"
     )

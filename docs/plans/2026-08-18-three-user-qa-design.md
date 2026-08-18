@@ -187,7 +187,7 @@ clips、裁剪视频、完整视频、prompt 媒体和 review 媒体必须与该
 - 在模型加载前运行存储预检并保存 `storage_preflight.json`；
 - 分别审计训练/推理环境、CUDA、GPU、FFmpeg 和 TorchCodec；
 - 从 JobID 派生输出目录；
-- 保存代码提交号、参数、输入 manifest、输出路径和运行环境到 `job_manifest.json`；
+- 保存分支名、dirty state、参数、输入 manifest、输出路径和运行环境到 `job_manifest.json`；不保存版本或文件哈希；
 - 不使用 `latest_*` 或固定共享目录表示当前作业产物。
 
 Runbook 必须使用 `sbatch --parsable`，兼容 cluster 后缀并自动提取 JobID、写入时间戳提交 manifest。登录 shell 命令不得关闭 SSH 会话。同步采用窄范围交互式 SFTP，不覆盖远端数据和历史产物。

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import gc
-import hashlib
 import inspect
 import json
 import mimetypes
@@ -986,23 +985,23 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
         if not self.transcode_local_videos:
             return str(source)
         stat = source.stat()
-        cache_key = "|".join(
+        cache_label = ".".join(
             (
-                str(source),
+                f"{stat.st_dev:x}",
+                f"{stat.st_ino:x}",
                 str(stat.st_size),
                 str(stat.st_mtime_ns),
-                str(self.video_fps),
-                str(self.transcode_max_edge),
-                str(self.transcode_crf),
+                f"fps-{self.video_fps:g}",
+                f"edge-{self.transcode_max_edge}",
+                f"crf-{self.transcode_crf}",
             )
         )
-        digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:20]
-        output = self.transcode_cache_dir / f"{source.stem}.{digest}.mp4"
+        output = self.transcode_cache_dir / f"{source.stem}.{cache_label}.mp4"
         if output.is_file() and output.stat().st_size > 0:
             return str(output)
         self.transcode_cache_dir.mkdir(parents=True, exist_ok=True)
         temporary = self.transcode_cache_dir / (
-            f".{source.stem}.{digest}.{threading.get_ident()}.tmp.mp4"
+            f".{source.stem}.{cache_label}.{threading.get_ident()}.tmp.mp4"
         )
         filters = (
             f"fps={self.video_fps:g}",
@@ -1361,23 +1360,23 @@ class OpenRouterRunner(OpenAICompatibleLocalRunner):
         if self.video_max_edge == 0 and self.video_fps == 0:
             return str(source)
         stat = source.stat()
-        cache_key = "|".join(
+        cache_label = ".".join(
             (
-                str(source),
+                f"{stat.st_dev:x}",
+                f"{stat.st_ino:x}",
                 str(stat.st_size),
                 str(stat.st_mtime_ns),
-                str(self.video_max_edge),
-                str(self.video_fps),
-                str(self.video_crf),
+                f"edge-{self.video_max_edge}",
+                f"fps-{self.video_fps:g}",
+                f"crf-{self.video_crf}",
             )
         )
-        digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:20]
-        output = self.video_cache_dir / f"{source.stem}.{digest}.mp4"
+        output = self.video_cache_dir / f"{source.stem}.{cache_label}.mp4"
         with self._video_cache_lock:
             if output.is_file() and output.stat().st_size > 0:
                 return str(output)
             self.video_cache_dir.mkdir(parents=True, exist_ok=True)
-            temporary = self.video_cache_dir / f".{source.stem}.{digest}.{threading.get_ident()}.tmp.mp4"
+            temporary = self.video_cache_dir / f".{source.stem}.{cache_label}.{threading.get_ident()}.tmp.mp4"
             filters = []
             if self.video_fps > 0:
                 filters.append(f"fps={self.video_fps:g}")

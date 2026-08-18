@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-import hashlib
 import itertools
 import json
 import math
@@ -1106,7 +1105,6 @@ def validate_first_verdict_sidecar_generation(
             "prior_generated_verdict": prior_verdict,
             "probe_output_contract_valid": not output_contract_errors,
             "measurement_contract_valid": not measurement_errors,
-            "probe_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
         }
     )
     return {
@@ -1159,7 +1157,6 @@ def run_first_verdict_entropy_sidecar_call(
                 "field_name": FIRST_VERDICT_FIELD,
                 "prior_generated_verdict": False,
                 "probe_output_contract_valid": False,
-                "probe_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             },
             "probe_version": FIRST_VERDICT_ENTROPY_VERSION,
             "sidecar_verdict_is_authoritative": True,
@@ -1292,7 +1289,6 @@ def validate_minimal_verdict_probe_generation(
             "prior_generated_verdict": prior_verdict,
             "probe_output_contract_valid": not output_contract_errors,
             "measurement_contract_valid": not measurement_errors,
-            "probe_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             "decision_role": "independent_diagnostic_probe",
             "verdict_affects_acceptance": False,
             "entropy_used_as_threshold": False,
@@ -1387,7 +1383,6 @@ def decision_uncertainty_from_choice_logits(signal: dict[str, Any] | None) -> di
         "prior_generated_verdict": signal.get("prior_generated_verdict"),
         "probe_output_contract_valid": signal.get("probe_output_contract_valid"),
         "measurement_contract_valid": signal.get("measurement_contract_valid"),
-        "probe_prompt_sha256": signal.get("probe_prompt_sha256"),
         "decision_role": signal.get("decision_role"),
         "verdict_affects_acceptance": signal.get("verdict_affects_acceptance"),
         "entropy_used_as_threshold": signal.get("entropy_used_as_threshold"),
@@ -2187,7 +2182,6 @@ def production_entropy_rows_for_attempt(
                 "measurement_contract_valid": uncertainty.get(
                     "measurement_contract_valid"
                 ),
-                "probe_prompt_sha256": uncertainty.get("probe_prompt_sha256"),
                 "independent_from_acceptance_gate": uncertainty.get(
                     "independent_from_acceptance_gate"
                 ),

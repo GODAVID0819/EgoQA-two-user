@@ -286,7 +286,7 @@ python -m pytest tests/test_three_user_torch_job_contract.py -q
 - 永久输出路径包含 `${SLURM_JOB_ID}`；
 - probe 是唯一 smoke，只处理一个候选；
 - pilot 目标为 5 accepted，`accepted_count=0` 视为 Gate 失败；
-- 保存环境、Git HEAD、参数、媒体数量、accepted/rejected/attempt 计数。
+- 保存环境、分支名、dirty state、参数、媒体数量、accepted/rejected/attempt 计数，不保存版本或文件哈希。
 
 ### 步骤 3：静态验证并提交
 
@@ -311,7 +311,7 @@ git commit -m "feat: 添加三用户 QA Torch 作业"
 
 在写 Runbook 前重新只读核对：
 
-- 当前 HEAD、branch、dirty state；
+- 当前 branch、dirty state；
 - 两个 `.sbatch` 的实际参数、输出和资源；
 - `training/torch_storage_preflight.py`；
 - QA CLI、模型 ID、环境路径和输入 manifest 来源；
@@ -365,8 +365,7 @@ git status --short --branch
 ### 步骤 2：审计范围和历史兼容
 
 ```powershell
-git diff 6bfb63d..HEAD --stat
-git log --oneline 6bfb63d..HEAD
+git diff --stat origin/main...
 rg -n "selected_count != 2|exactly two|evidence_provider_user|required_users\[1\]" group_relative_clip_sampling.py video_qa_loop.py prompts.py
 ```
 
@@ -376,7 +375,7 @@ rg -n "selected_count != 2|exactly two|evidence_provider_user|required_users\[1\
 
 报告：
 
-- 当前 branch 与 HEAD；
+- 当前 branch 与 dirty state；
 - 修改文件和核心合同；
 - 本地测试数量与结果；
 - Bash 静态验证结果；

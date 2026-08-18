@@ -11,7 +11,6 @@ correctness metadata beyond the asker's name.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -85,27 +84,18 @@ def _unique_index(
 def _evaluation_id(
     *,
     qa_path: Path,
+    source_index: int,
     row_number: int,
     qa: dict[str, Any],
 ) -> str:
-    identity = {
-        "source_path": str(qa_path.resolve()),
-        "source_row": row_number,
-        "qa_id": str(qa.get("qa_id") or ""),
-        "evidence_id": str(qa.get("evidence_id") or ""),
-        "question": qa.get("question"),
-        "options": qa.get("options"),
-        "correct": qa.get("correct"),
-        "required_users": qa.get("required_users"),
-    }
-    payload = json.dumps(
-        identity,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
+    return "_".join(
+        (
+            "EVAL",
+            f"{source_index:03d}",
+            f"{row_number:06d}",
+            _safe_component(qa.get("qa_id") or qa_path.stem),
+        )
     )
-    return f"EVAL_{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:24]}"
 
 
 def load_qa_rows(qa_paths: list[str | Path]) -> list[dict[str, Any]]:
@@ -113,7 +103,7 @@ def load_qa_rows(qa_paths: list[str | Path]) -> list[dict[str, Any]]:
 
     rows = []
     seen_evaluation_ids = set()
-    for qa_path in qa_paths:
+    for source_index, qa_path in enumerate(qa_paths, 1):
         qa_path = Path(qa_path).resolve()
         for row_number, qa in enumerate(iter_jsonl(qa_path), 1):
             qa_id = str(qa.get("qa_id") or "")
@@ -121,6 +111,7 @@ def load_qa_rows(qa_paths: list[str | Path]) -> list[dict[str, Any]]:
                 raise ValueError(f"{qa_path}:{row_number}: accepted QA is missing qa_id")
             evaluation_id = _evaluation_id(
                 qa_path=qa_path,
+                source_index=source_index,
                 row_number=row_number,
                 qa=qa,
             )
@@ -425,11 +416,9 @@ def _anonymous_video_alias(source: Path, alias_dir: Path) -> tuple[Path, str]:
     if not _nonempty_file(source):
         raise FileNotFoundError(f"cannot alias missing video: {source}")
     stat = source.stat()
-    digest = hashlib.sha256(
-        f"{source.resolve()}|{stat.st_size}|{stat.st_mtime_ns}".encode("utf-8")
-    ).hexdigest()[:24]
     suffix = source.suffix.lower() or ".mp4"
-    destination = alias_dir / f"{digest}{suffix}"
+    alias_name = f"{stat.st_dev:x}_{stat.st_ino:x}_{stat.st_size:x}_{stat.st_mtime_ns:x}"
+    destination = alias_dir / f"{alias_name}{suffix}"
     if destination.exists():
         if not destination.is_file() or destination.stat().st_size != stat.st_size:
             raise ValueError(f"anonymous media alias conflicts with source: {destination}")

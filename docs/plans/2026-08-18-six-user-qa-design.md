@@ -25,6 +25,7 @@
 - 不要求 additional providers 提供答案。
 - 不遍历全部用户子集做 answerability 搜索。
 - 不修改 GRPO、DPO 和 reviewer 训练数据、奖励或模型结构。
+- 不计算、校验、冻结或保存版本哈希、文件哈希或媒体哈希。
 - 不把 runtime probe 通过表述为 QA 质量结论。
 - 不把自动 reviewer 通过表述为人工确认的自然性或可回答性。
 - 正式 5 条 accepted QA 仅用于初步定性观察，不支持统计显著性结论。
@@ -261,6 +262,7 @@ accepted QA 的 `cross_view_gain` 应为 1。
 - 在模型加载前运行存储预检；
 - 审计 Python、CUDA、GPU、FFmpeg 和 TorchCodec；
 - 保存 `storage_preflight.json` 与 `job_manifest.json`；
+- `job_manifest.json` 只保存分支名、dirty state、参数和路径，不保存任何哈希；
 - 使用 `sbatch --parsable` 提交并自动记录 JobID；
 - 提交前根据远端查询复核 account、partition、QOS 和 H100 资源；
 - 不自动 push、上传或提交作业。
