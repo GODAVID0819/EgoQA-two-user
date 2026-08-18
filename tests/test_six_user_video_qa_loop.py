@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import types
 import unittest
+import uuid
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,9 +20,14 @@ from egolife_two_user_qa.video_qa_loop import (  # noqa: E402
     answerability_gate,
     build_answerability_conditions,
     complete_generator_metadata,
+    condition_media_for_clips,
     human_audit_packet,
+    media_for_clips,
+    run_parallel_review_judges,
     run_answerability_eval,
+    video_evidence_for_packet,
 )
+from egolife_two_user_qa import video_qa_loop  # noqa: E402
 from egolife_two_user_qa.schema import validate_qa_item  # noqa: E402
 
 
@@ -105,6 +113,35 @@ def qa_for_metadata(*, supporting_user: str = "anchor_one") -> dict[str, object]
 
 
 class SixUserAnswerabilityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp_root = ROOT / "tmp"
+        tmp_root.mkdir(exist_ok=True)
+        self.tmp_path = tmp_root / f"six_user_loop_{uuid.uuid4().hex}"
+        self.tmp_path.mkdir()
+        self.addCleanup(shutil.rmtree, self.tmp_path, True)
+
+    def media_packet(self) -> dict[str, object]:
+        packet = six_user_packet()
+        clips = []
+        for index, clip in enumerate(packet["clips"]):
+            generator_video = self.tmp_path / f"generator_{index}.mp4"
+            full_video = self.tmp_path / f"full_{index}.mp4"
+            generator_video.write_bytes(b"generator")
+            full_video.write_bytes(b"full")
+            clips.append(
+                {
+                    **clip,
+                    "local_video": str(generator_video),
+                    "generator_local_video": str(generator_video),
+                    "full_local_video": str(full_video),
+                    "original_local_video": str(full_video),
+                    "duration_seconds": 10.0,
+                    "is_pruned": index < 3,
+                }
+            )
+        packet["clips"] = clips
+        return packet
+
     def test_six_user_audit_and_metadata_expose_explicit_roles(self) -> None:
         packet = six_user_packet()
         audit = human_audit_packet(packet)
@@ -302,6 +339,151 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         self.assertEqual(len(runner.calls), 2)
         self.assertEqual(len(result["evaluations"]), 2)
         self.assertTrue(result["gate"]["passed"])
+
+    def test_six_user_media_routes_generator_and_judges_in_order(self) -> None:
+        packet = self.media_packet()
+        clips = packet["clips"]
+
+        _images, generator_videos = media_for_clips(
+            clips,
+            backend="transformers-local",
+            allow_openai_video_input=False,
+            media_role="generator",
+        )
+        _images, full_videos = media_for_clips(
+            clips,
+            backend="transformers-local",
+            allow_openai_video_input=False,
+            media_role="full",
+        )
+
+        self.assertEqual(generator_videos, [clip["local_video"] for clip in clips])
+        self.assertEqual(full_videos, [clip["full_local_video"] for clip in clips])
+        self.assertEqual(
+            [row["media_role"] for row in video_evidence_for_packet(packet)],
+            [
+                "speaker_pruned",
+                "anchor_provider_pruned",
+                "anchor_provider_pruned",
+                "additional_provider_full",
+                "additional_provider_full",
+                "additional_provider_full",
+            ],
+        )
+
+        condition_media = condition_media_for_clips(
+            condition={
+                "condition_id": "combined_all_six_users::all",
+                "condition_type": "combined_all_six_users",
+                "users": SIX_USERS,
+            },
+            clips=clips,
+            image_paths=[],
+            video_paths=full_videos,
+            media_role="full",
+        )
+        self.assertEqual(condition_media["total_duration_seconds"], 60.0)
+
+    def test_answerability_uses_one_full_speaker_video_then_six_full_videos(self) -> None:
+        class Runner:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def generate(self, prompt, *, image_paths, video_paths):
+                self.calls.append(
+                    {
+                        "prompt": prompt,
+                        "image_paths": list(image_paths),
+                        "video_paths": list(video_paths),
+                    }
+                )
+                choice = "B" if "speaker-only condition" in prompt else "A"
+                return json.dumps(
+                    {
+                        "choice": choice,
+                        "answer_text": f"Option {choice}",
+                        "evidence_used": "visible evidence",
+                    }
+                )
+
+        packet = self.media_packet()
+        runner = Runner()
+        prompt_rows = []
+        result = run_answerability_eval(
+            qa_item=six_user_qa(correct="A"),
+            packet=packet,
+            runner=runner,
+            media_backend="transformers-local",
+            allow_openai_video_input=False,
+            prompt_rows=prompt_rows,
+        )
+
+        full_videos = [clip["full_local_video"] for clip in packet["clips"]]
+        self.assertEqual(len(runner.calls), 2)
+        self.assertEqual(runner.calls[0]["video_paths"], full_videos[:1])
+        self.assertEqual(runner.calls[1]["video_paths"], full_videos)
+        self.assertEqual(len(prompt_rows), 2)
+        self.assertTrue(all("elapsed_seconds" in row for row in prompt_rows))
+        self.assertTrue(
+            all("elapsed_seconds" in evaluation for evaluation in result["evaluations"])
+        )
+        self.assertEqual(result["gate"]["cross_view_gain"], 1)
+
+    def test_groundedness_prompt_row_uses_all_six_full_videos(self) -> None:
+        packet = self.media_packet()
+        _images, full_videos = media_for_clips(
+            packet["clips"],
+            backend="transformers-local",
+            allow_openai_video_input=False,
+            media_role="full",
+        )
+        prompt_rows = []
+
+        def fake_judge_branch(*, check_name, **kwargs):
+            return {
+                "checks": {
+                    check_name: {"status": "PASS", "reason": "ok", "fix": ""}
+                },
+                "blocking_failures": [],
+                "feedback_to_generator": "",
+                "raw_output": "{}",
+                "elapsed_seconds": 0.01,
+            }
+
+        with (
+            mock.patch.object(
+                video_qa_loop,
+                "run_model_judge_branch",
+                side_effect=fake_judge_branch,
+            ),
+            mock.patch.object(
+                video_qa_loop,
+                "run_answerability_eval",
+                return_value={
+                    "evaluations": [],
+                    "gate": {"passed": True, "reason": "test"},
+                },
+            ),
+        ):
+            _judge, _answerability, trace = run_parallel_review_judges(
+                qa_item=six_user_qa(correct="A"),
+                packet=packet,
+                schema_errors=[],
+                runner=object(),
+                media_backend="transformers-local",
+                allow_openai_video_input=False,
+                prompt_rows=prompt_rows,
+                full_image_paths=[],
+                full_video_paths=full_videos,
+                attempt=1,
+            )
+
+        groundedness_rows = [
+            row for row in prompt_rows if row["stage"] == "evidence_groundedness_judge"
+        ]
+        self.assertEqual(len(groundedness_rows), 1)
+        self.assertEqual(groundedness_rows[0]["video_paths"], full_videos)
+        self.assertEqual(trace["evidence_groundedness"]["elapsed_seconds"], 0.01)
 
     def test_two_user_condition_contract_is_unchanged(self) -> None:
         conditions = build_answerability_conditions(["speaker", "provider"])

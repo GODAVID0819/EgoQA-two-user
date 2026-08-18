@@ -446,6 +446,9 @@ def video_evidence_for_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
                 "full_local_video_exists": bool(existing_path(clip.get("full_local_video"))),
                 "benchmark_media": clip.get("benchmark_media"),
                 "generator_media_mode": clip.get("generator_media_mode"),
+                "generator_local_video": clip.get("generator_local_video"),
+                "media_role": clip.get("media_role"),
+                "is_pruned": clip.get("is_pruned"),
                 "temporal_pruning": clip.get("temporal_pruning"),
                 "temporal_reasoning": clip.get("temporal_reasoning"),
                 "gaze_url": clip.get("gaze_url"),
@@ -670,6 +673,14 @@ def condition_media_for_clips(
     video_paths: list[str],
     media_role: str = "generator",
 ) -> dict[str, Any]:
+    total_duration_seconds = round(
+        sum(
+            float(clip.get("duration_seconds") or 0.0)
+            for clip in clips
+            if isinstance(clip, dict)
+        ),
+        3,
+    )
     return {
         "condition_id": condition.get("condition_id"),
         "condition_type": condition.get("condition_type"),
@@ -677,6 +688,7 @@ def condition_media_for_clips(
         "media_role": media_role,
         "image_paths": image_paths,
         "video_paths": video_paths,
+        "total_duration_seconds": total_duration_seconds,
         "video_evidence": video_evidence_for_packet({"clips": clips}),
     }
 
@@ -1889,6 +1901,7 @@ def run_model_judge_branch(
         judge["format_repair"] = format_repair
 
     if not collect_choice_logits:
+        judge["elapsed_seconds"] = round(time.time() - stage_start, 3)
         return judge
 
     effective_probe_prompt = minimal_verdict_probe_prompt
@@ -1962,6 +1975,7 @@ def run_model_judge_branch(
         f"seconds={time.time() - probe_start:.1f}",
         flush=True,
     )
+    judge["elapsed_seconds"] = round(time.time() - stage_start, 3)
     return judge
 
 
@@ -2619,25 +2633,24 @@ def run_answerability_eval(
             media_role=judge_media_role,
         )
         prompt = build_answerability_prompt(qa_item, condition)
-        prompt_rows.append(
-            {
-                "stage": "answerability",
-                "qa_id": qa_item.get("qa_id"),
-                "generation_mode": qa_item.get("generation_mode"),
-                "condition_id": condition["condition_id"],
-                "prompt": prompt,
-                "image_paths": image_paths,
-                "video_paths": video_paths,
-                "media_role": judge_media_role,
-                "condition_media": condition_media_for_clips(
-                    condition=condition,
-                    clips=clips,
-                    image_paths=image_paths,
-                    video_paths=video_paths,
-                    media_role=judge_media_role,
-                ),
-            }
-        )
+        prompt_row = {
+            "stage": "answerability",
+            "qa_id": qa_item.get("qa_id"),
+            "generation_mode": qa_item.get("generation_mode"),
+            "condition_id": condition["condition_id"],
+            "prompt": prompt,
+            "image_paths": image_paths,
+            "video_paths": video_paths,
+            "media_role": judge_media_role,
+            "condition_media": condition_media_for_clips(
+                condition=condition,
+                clips=clips,
+                image_paths=image_paths,
+                video_paths=video_paths,
+                media_role=judge_media_role,
+            ),
+        }
+        prompt_rows.append(prompt_row)
         stage_start = time.time()
         print(
             "qa_stage_start "
@@ -2652,10 +2665,12 @@ def run_answerability_eval(
         # choice_uncertainty = answerability_uncertainty_from_choice_logits(choice_signal)
         # Production answerability now uses ordinary JSON generation only.
         raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
+        elapsed_seconds = round(time.time() - stage_start, 3)
+        prompt_row["elapsed_seconds"] = elapsed_seconds
         print(
             "qa_stage_done "
             f"stage=answerability qa_id={qa_item.get('qa_id')} "
-            f"condition_id={condition['condition_id']} seconds={time.time() - stage_start:.1f}",
+            f"condition_id={condition['condition_id']} seconds={elapsed_seconds:.1f}",
             flush=True,
         )
         try:
@@ -2671,6 +2686,7 @@ def run_answerability_eval(
                 **condition,
                 **answer,
                 "raw_output": raw,
+                "elapsed_seconds": elapsed_seconds,
                 "condition_media": condition_media_for_clips(
                     condition=condition,
                     clips=clips,
@@ -2976,6 +2992,7 @@ def run_parallel_review_judges(
         "point_scoring": point_scoring_mode,
         "qa_formality": {
             "model_id": getattr(active_qa_formality_runner, "model_id", None),
+            "elapsed_seconds": qa_formality_judge.get("elapsed_seconds"),
             "generator_rationale_included": False,
             "prompt": qa_formality_prompt,
             "entropy_probe_prompt": qa_formality_entropy_probe_prompt,
@@ -2984,6 +3001,7 @@ def run_parallel_review_judges(
         },
         "evidence_groundedness": {
             "model_id": getattr(runner, "model_id", None),
+            "elapsed_seconds": evidence_groundedness_judge.get("elapsed_seconds"),
             "generator_rationale_included": include_generator_rationale,
             "prompt": evidence_groundedness_prompt,
             "entropy_probe_prompt": evidence_groundedness_entropy_probe_prompt,
@@ -3492,14 +3510,16 @@ def generate_video_qa_loop(
                 )
             else:
                 raw_generation = runner.generate(gen_prompt, image_paths=image_paths, video_paths=video_paths)
+            generation_elapsed_seconds = round(time.time() - stage_start, 3)
             print(
                 "qa_stage_done "
                 f"stage=generation evidence_id={packet.get('evidence_id')} "
                 f"question_type={question_type} attempt={attempt} "
-                f"seconds={time.time() - stage_start:.1f}",
+                f"seconds={generation_elapsed_seconds:.1f}",
                 flush=True,
             )
             attempt_trace["generation"]["raw_output"] = raw_generation
+            attempt_trace["generation"]["elapsed_seconds"] = generation_elapsed_seconds
             previous_generation = str(raw_generation)
             try:
                 qa = extract_json_object(raw_generation)
