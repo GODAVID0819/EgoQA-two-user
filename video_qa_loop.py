@@ -465,26 +465,86 @@ def video_evidence_for_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def six_user_role_metadata(
+    packet: dict[str, Any],
+    required_users: list[str],
+) -> dict[str, Any]:
+    """读取并校验六用户 packet 的显式角色合同。"""
+
+    if len(required_users) != 6:
+        return {}
+
+    expected = {
+        "input_users": required_users,
+        "speaker_user": required_users[0],
+        "anchor_provider_users": required_users[1:3],
+        "additional_provider_users": required_users[3:6],
+        "evidence_provider_user": required_users[1],
+        "evidence_provider_users": required_users[1:3],
+    }
+    for field, expected_value in expected.items():
+        actual_value = packet.get(field)
+        if actual_value != expected_value:
+            raise ValueError(
+                f"six-user packet {field} must equal ordered required_users contract: "
+                f"expected {expected_value!r}, got {actual_value!r}"
+            )
+
+    expected_media_roles = {
+        required_users[0]: "speaker_pruned",
+        required_users[1]: "anchor_provider_pruned",
+        required_users[2]: "anchor_provider_pruned",
+        required_users[3]: "additional_provider_full",
+        required_users[4]: "additional_provider_full",
+        required_users[5]: "additional_provider_full",
+    }
+    media_roles = packet.get("media_roles")
+    if media_roles != expected_media_roles:
+        raise ValueError(
+            "six-user packet media_roles must cover the ordered speaker, anchor, and "
+            f"additional-provider roles: expected {expected_media_roles!r}, got {media_roles!r}"
+        )
+
+    return {**expected, "media_roles": dict(expected_media_roles)}
+
+
 def human_audit_packet(packet: dict[str, Any]) -> dict[str, Any]:
     """Compact evidence bundle intended for manual review of one generated question-answer item."""
 
     required_users = list(packet.get("required_users") or [])
     speaker_user = required_users[0] if required_users else None
     evidence_provider_user = required_users[1] if len(required_users) > 1 else None
+    role_metadata = six_user_role_metadata(packet, required_users)
+    review_instructions = [
+        "Open each listed local_video or video_url for the required users.",
+        "Check the referred_timestamps and per_user_evidence_claims against the visible content.",
+    ]
+    if len(required_users) == 6:
+        review_instructions.extend(
+            [
+                "Verify that the speaker cannot select the correct option from the speaker video alone.",
+                "Verify that the six full input videos together support exactly one correct option.",
+                "Do not require every provider to contribute evidence.",
+            ]
+        )
+    else:
+        review_instructions.extend(
+            [
+                "Verify that required_users[0], the asker, cannot answer from their own video alone.",
+                "If required_users[1], the evidence provider, can answer alone, confirm that this is logged in review.answerability.gate.evidence_provider_answerable.",
+            ]
+        )
+
     return {
         "evidence_id": packet.get("evidence_id"),
         "required_users": required_users,
         "speaker_user": speaker_user,
         "evidence_provider_user": evidence_provider_user,
+        **role_metadata,
         "requirement": packet.get("requirement"),
         "source_urls": packet.get("source_urls", {}),
         "video_evidence": video_evidence_for_packet(packet),
-        "review_instructions": [
-            "Open each listed local_video or video_url for the required users.",
-            "Check the referred_timestamps and per_user_evidence_claims against the visible content.",
-            "Verify that required_users[0], the asker, cannot answer from their own video alone.",
-            "If required_users[1], the evidence provider, can answer alone, confirm that this is logged in review.answerability.gate.evidence_provider_answerable.",
-        ],
+        "review_instructions": review_instructions,
     }
 
 
@@ -501,8 +561,10 @@ def complete_generator_metadata(
     qa.pop("category", None)
     qa.pop("category_rationale", None)
     required_users = list(packet.get("required_users") or qa.get("required_users") or [])
+    role_metadata = six_user_role_metadata(packet, required_users)
     qa["question_type"] = question_type
     qa["required_users"] = required_users
+    qa.update(role_metadata)
     qa.setdefault("referred_timestamps", [])
     if not isinstance(qa.get("referred_timestamps"), list):
         qa["referred_timestamps"] = []
@@ -551,22 +613,35 @@ def complete_generator_metadata(
             "in the asker's experience and answered with another user's visual evidence."
         )
     if not qa.get("why_two_users_needed"):
-        qa["why_two_users_needed"] = (
-            "At least two required users are needed because the first required user supplies "
-            "the speaker-side anchor event while the second required user supplies the missing "
-            "visual detail."
-        )
+        if len(required_users) == 6:
+            qa["why_two_users_needed"] = (
+                "The speaker needs at least one external view because the speaker video alone "
+                "does not contain the answer-bearing evidence; the six-video input supplies it."
+            )
+        else:
+            qa["why_two_users_needed"] = (
+                "At least two required users are needed because the first required user supplies "
+                "the speaker-side anchor event while the second required user supplies the missing "
+                "visual detail."
+            )
     claims = qa.get("per_user_evidence_claims")
     if not isinstance(claims, list) or not claims:
         claims = []
-        for user in required_users:
-            claims.append(
-                {
-                    "user": user,
-                    "claim": f"{user}'s own video contributes a necessary visual fact listed in the evidence field.",
-                }
-            )
+        if len(required_users) != 6:
+            for user in required_users:
+                claims.append(
+                    {
+                        "user": user,
+                        "claim": f"{user}'s own video contributes a necessary visual fact listed in the evidence field.",
+                    }
+                )
         qa["per_user_evidence_claims"] = claims
+    if len(required_users) == 6 and not isinstance(qa.get("supporting_user_claims"), list):
+        qa["supporting_user_claims"] = [
+            dict(row)
+            for row in claims
+            if isinstance(row, dict) and row.get("user") != asker_user
+        ]
 
     review = qa.get("review")
     if not isinstance(review, dict):
@@ -578,6 +653,10 @@ def complete_generator_metadata(
     )
     review.setdefault("speaker_user", asker_user)
     review.setdefault("evidence_provider_user", evidence_provider_user)
+    if len(required_users) == 6:
+        review.setdefault("evidence_provider_users", required_users[1:3])
+        review.setdefault("anchor_provider_users", required_users[1:3])
+        review.setdefault("additional_provider_users", required_users[3:6])
     review.setdefault("status", "draft")
     qa["review"] = review
     return qa

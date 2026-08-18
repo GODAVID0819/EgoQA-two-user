@@ -122,6 +122,49 @@ def validate_qa_item(
     elif len(set(required_users)) != len(required_users):
         errors.append("required_users must not contain duplicates")
 
+    if isinstance(required_users, list) and len(required_users) == 6:
+        expected_role_fields = {
+            "input_users": required_users,
+            "speaker_user": required_users[0],
+            "anchor_provider_users": required_users[1:3],
+            "additional_provider_users": required_users[3:6],
+            "evidence_provider_user": required_users[1],
+            "evidence_provider_users": required_users[1:3],
+        }
+        for field, expected_value in expected_role_fields.items():
+            if item.get(field) != expected_value:
+                errors.append(
+                    f"{field} must match the ordered six-user required_users contract"
+                )
+
+        expected_media_roles = {
+            required_users[0]: "speaker_pruned",
+            required_users[1]: "anchor_provider_pruned",
+            required_users[2]: "anchor_provider_pruned",
+            required_users[3]: "additional_provider_full",
+            required_users[4]: "additional_provider_full",
+            required_users[5]: "additional_provider_full",
+        }
+        if item.get("media_roles") != expected_media_roles:
+            errors.append("media_roles must cover all six ordered input users with valid roles")
+
+        supporting_claims = item.get("supporting_user_claims")
+        if not isinstance(supporting_claims, list) or not supporting_claims:
+            errors.append("supporting_user_claims must contain at least one provider claim")
+        else:
+            for claim in supporting_claims:
+                if not isinstance(claim, dict):
+                    errors.append("supporting_user_claims entries must be objects")
+                    continue
+                claim_user = claim.get("user")
+                claim_text = claim.get("claim")
+                if claim_user not in required_users[1:]:
+                    errors.append(
+                        "supporting_user_claims users must be non-speaker input users"
+                    )
+                if not isinstance(claim_text, str) or not claim_text.strip():
+                    errors.append("supporting_user_claims claims must be non-empty strings")
+
     single = item.get("single_user_answerability")
     if not isinstance(single, dict):
         errors.append("single_user_answerability must be an object")
