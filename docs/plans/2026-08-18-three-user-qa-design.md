@@ -1,7 +1,9 @@
 # 1 speaker + 2 providers QA 生成链路设计
 
+> **状态：已被取代。** 2026-08-18 经讨论，目标改为 `1 speaker + 2 anchor providers + 3 additional providers` 的六视频 QA。本文档仅保留决策历史，三用户实现未开始；后续以 `2026-08-18-six-user-qa-design.md` 为准。
+
 日期：2026-08-18
-状态：用户已批准设计，等待实现
+状态：已被六用户设计取代，停止执行
 
 ## 1. 目标
 
