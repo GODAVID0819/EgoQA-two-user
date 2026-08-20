@@ -621,6 +621,142 @@ def clustered_frame_representatives(
     }
 
 
+def clustered_speaker_consensus_pruning(
+    frames_by_video: list[list[dict[str, Any]]],
+    embeddings_by_video: list[list[list[float]]],
+    *,
+    speaker_index: int,
+    start_seconds: float,
+    duration_seconds: float,
+    sample_interval_seconds: float,
+    cluster_count: int = 12,
+    high_similarity_threshold: float = 0.82,
+    min_high_provider_matches: int = 3,
+    min_pruned_video_seconds: float = 8.0,
+) -> dict[str, Any]:
+    """按 speaker cluster 对五个 provider 的 argmax 共识生成裁剪区间。"""
+
+    if len(frames_by_video) != 6 or len(embeddings_by_video) != 6:
+        raise ValueError("speaker consensus pruning requires exactly 6 videos")
+    if speaker_index < 0 or speaker_index >= 6:
+        raise ValueError(f"speaker_index must be between 0 and 5, got {speaker_index}")
+    if duration_seconds <= 0:
+        raise ValueError("duration_seconds must be positive")
+    if sample_interval_seconds <= 0:
+        raise ValueError("sample_interval_seconds must be positive")
+    if min_high_provider_matches < 1 or min_high_provider_matches > 5:
+        raise ValueError("min_high_provider_matches must be between 1 and 5")
+
+    clusters_by_video = [
+        clustered_frame_representatives(frames, embeddings, cluster_count=cluster_count)
+        for frames, embeddings in zip(frames_by_video, embeddings_by_video)
+    ]
+    provider_indices = [index for index in range(6) if index != speaker_index]
+    speaker_clusters = clusters_by_video[speaker_index]
+    matrices = {
+        provider_index: frame_similarity_matrix(
+            speaker_clusters["representative_embeddings"],
+            clusters_by_video[provider_index]["representative_embeddings"],
+        )
+        for provider_index in provider_indices
+    }
+
+    events: list[dict[str, Any]] = []
+    marked_clusters = [set() for _ in range(6)]
+    trigger_events = [set() for _ in range(6)]
+    for speaker_cluster_index in range(int(speaker_clusters["cluster_count"])):
+        provider_matches = []
+        for provider_index in provider_indices:
+            provider_cluster_index, similarity = max(
+                enumerate(matrices[provider_index][speaker_cluster_index]),
+                key=lambda item: float(item[1]),
+            )
+            provider_matches.append(
+                {
+                    "provider_index": provider_index,
+                    "provider_cluster_index": int(provider_cluster_index),
+                    "similarity": round(float(similarity), 6),
+                    "meets_threshold": float(similarity) >= float(high_similarity_threshold),
+                }
+            )
+        high_matches = [match for match in provider_matches if match["meets_threshold"]]
+        if len(high_matches) < min_high_provider_matches:
+            continue
+        event_index = len(events)
+        deleted_clusters = [
+            {"video_index": speaker_index, "cluster_index": speaker_cluster_index}
+        ] + [
+            {
+                "video_index": int(match["provider_index"]),
+                "cluster_index": int(match["provider_cluster_index"]),
+            }
+            for match in high_matches
+        ]
+        events.append(
+            {
+                "event_index": event_index,
+                "speaker_cluster_index": speaker_cluster_index,
+                "provider_matches": provider_matches,
+                "high_provider_count": len(high_matches),
+                "deleted_clusters": deleted_clusters,
+            }
+        )
+        for deleted in deleted_clusters:
+            video_index = int(deleted["video_index"])
+            marked_clusters[video_index].add(int(deleted["cluster_index"]))
+            trigger_events[video_index].add(event_index)
+
+    window_start = float(start_seconds)
+    window_end = round(window_start + float(duration_seconds), 3)
+    video_results = []
+    for video_index, (frames, clusters) in enumerate(zip(frames_by_video, clusters_by_video)):
+        marked_frame_indices: set[int] = set()
+        for marked_cluster_index in marked_clusters[video_index]:
+            marked_frame_indices.update(
+                int(index)
+                for index in clusters["representatives"][marked_cluster_index].get(
+                    "member_indices", []
+                )
+            )
+        remove_intervals = _intervals_for_frame_indices(
+            frames,
+            marked_frame_indices,
+            window_start=window_start,
+            window_end=window_end,
+            sample_interval_seconds=sample_interval_seconds,
+        )
+        keep_intervals = _subtract_intervals((window_start, window_end), remove_intervals)
+        kept_duration = round(sum(end - start for start, end in keep_intervals), 3)
+        removed_duration = round(sum(end - start for start, end in remove_intervals), 3)
+        video_results.append(
+            {
+                "video_index": video_index,
+                "cluster_count": int(clusters["cluster_count"]),
+                "clusters": clusters["representatives"],
+                "marked_cluster_indices": sorted(marked_clusters[video_index]),
+                "marked_frame_indices": sorted(marked_frame_indices),
+                "trigger_event_indices": sorted(trigger_events[video_index]),
+                "remove_intervals": remove_intervals,
+                "keep_intervals": keep_intervals,
+                "kept_duration_seconds": kept_duration,
+                "removed_duration_seconds": removed_duration,
+                "passed": kept_duration >= float(min_pruned_video_seconds),
+            }
+        )
+
+    return {
+        "method": "speaker_cluster_provider_argmax_consensus",
+        "speaker_index": speaker_index,
+        "provider_indices": provider_indices,
+        "cluster_count": cluster_count,
+        "high_similarity_threshold": high_similarity_threshold,
+        "min_high_provider_matches": min_high_provider_matches,
+        "events": events,
+        "videos": video_results,
+        "passed": bool(events) and all(video["passed"] for video in video_results),
+    }
+
+
 def clustered_temporal_similarity_pruning(
     left_frames: list[dict[str, Any]],
     right_frames: list[dict[str, Any]],
@@ -1805,6 +1941,71 @@ def materialize_six_user_role_structure(
     return clips
 
 
+def materialize_six_user_consensus_candidate(
+    rows: list[dict[str, Any]],
+    consensus: dict[str, Any],
+    *,
+    output_dir: str | Path,
+    ffmpeg_binary: str,
+) -> list[dict[str, Any]]:
+    """按 speaker、五个 provider 顺序物化六段 consensus-pruned 视频。"""
+
+    if len(rows) != 6:
+        raise ValueError(f"six-user consensus materialization requires 6 rows, got {len(rows)}")
+    if not consensus.get("passed"):
+        raise ValueError(
+            "speaker consensus pruning did not pass: "
+            f"speaker_index={consensus.get('speaker_index')} events={len(consensus.get('events') or [])}"
+        )
+    speaker_index = int(consensus["speaker_index"])
+    ordered_indices = [speaker_index, *[index for index in range(6) if index != speaker_index]]
+    diagnostics_by_video = {
+        int(video["video_index"]): video for video in consensus.get("videos", [])
+    }
+    if set(diagnostics_by_video) != set(range(6)):
+        raise ValueError("speaker consensus diagnostics must contain all 6 video indices")
+
+    candidate_dir = Path(output_dir) / f"speaker_{speaker_index + 1:02d}"
+    clips = []
+    for position, source_index in enumerate(ordered_indices):
+        diagnostics = diagnostics_by_video[source_index]
+        if not diagnostics.get("passed", True):
+            raise ValueError(
+                "consensus-pruned video is too short: "
+                f"speaker_index={speaker_index} video_index={source_index} "
+                f"kept={diagnostics.get('kept_duration_seconds')}"
+            )
+        clip = _materialize_six_user_clip(
+            rows[source_index]["clip"],
+            media_role=(
+                "speaker_consensus_pruned"
+                if position == 0
+                else "provider_consensus_pruned"
+            ),
+            position=position,
+            output_dir=candidate_dir,
+            keep_intervals=list(diagnostics.get("keep_intervals") or []),
+            remove_intervals=list(diagnostics.get("remove_intervals") or []),
+            source_edges=[],
+            ffmpeg_binary=ffmpeg_binary,
+        )
+        clip["temporal_pruning"].update(
+            {
+                "method": "speaker_cluster_provider_argmax_consensus",
+                "speaker_index": speaker_index,
+                "source_video_index": source_index,
+                "marked_cluster_indices": list(
+                    diagnostics.get("marked_cluster_indices") or []
+                ),
+                "trigger_event_indices": list(
+                    diagnostics.get("trigger_event_indices") or []
+                ),
+            }
+        )
+        clips.append(clip)
+    return clips
+
+
 def analyze_group_relative_similarity(
     group: dict[str, Any],
     *,
@@ -1867,6 +2068,146 @@ def analyze_group_relative_similarity(
         frame_embeddings_by_clip.append(frame_embeddings)
         clip_embeddings.append(mean_embedding(frame_embeddings))
 
+    group_output_dir = Path(output_dir) / (
+        _safe_filename_part(f"{group.get('day')}_{group.get('time_token')}")
+        if selected_count == 6
+        else stable_id(group.get("day"), group.get("time_token"))
+    )
+    if selected_count == 6:
+        speaker_attempts = []
+        speaker_candidates = []
+        for speaker_index in range(6):
+            consensus = clustered_speaker_consensus_pruning(
+                [row["frames"] for row in rows],
+                frame_embeddings_by_clip,
+                speaker_index=speaker_index,
+                start_seconds=start_seconds,
+                duration_seconds=duration_seconds,
+                sample_interval_seconds=sample_interval_seconds,
+                cluster_count=pruning_clusters_per_video,
+                high_similarity_threshold=high_similarity_interval_threshold,
+                min_high_provider_matches=3,
+                min_pruned_video_seconds=min_pruned_video_seconds,
+            )
+            if not consensus.get("passed"):
+                short_videos = [
+                    {
+                        "video_index": video.get("video_index"),
+                        "kept_duration_seconds": video.get("kept_duration_seconds"),
+                    }
+                    for video in consensus.get("videos", [])
+                    if not video.get("passed", False)
+                ]
+                failure_reason = (
+                    "no_speaker_cluster_reached_provider_consensus"
+                    if not consensus.get("events")
+                    else "min_retained_duration_violated"
+                )
+                speaker_attempts.append(
+                    {
+                        "speaker_index": speaker_index,
+                        "speaker_user": rows[speaker_index]["clip"].get("agent_name"),
+                        "status": "failed",
+                        "failure_reason": failure_reason,
+                        "short_videos": short_videos,
+                        "consensus": consensus,
+                    }
+                )
+                continue
+            try:
+                selected_clips = materialize_six_user_consensus_candidate(
+                    rows,
+                    consensus,
+                    output_dir=group_output_dir / "six_user_speaker_consensus",
+                    ffmpeg_binary=ffmpeg_binary,
+                )
+            except Exception as exc:
+                speaker_attempts.append(
+                    {
+                        "speaker_index": speaker_index,
+                        "speaker_user": rows[speaker_index]["clip"].get("agent_name"),
+                        "status": "failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "consensus": consensus,
+                    }
+                )
+                continue
+
+            selection = {
+                "method": "six_user_speaker_consensus",
+                "speaker_index": speaker_index,
+                "speaker_user": selected_clips[0].get("agent_name"),
+                "provider_indices": [index for index in range(6) if index != speaker_index],
+                "provider_users": [clip.get("agent_name") for clip in selected_clips[1:]],
+                "selected_indices": [
+                    speaker_index,
+                    *[index for index in range(6) if index != speaker_index],
+                ],
+                "selected_agents": [clip.get("agent_dir") for clip in selected_clips],
+                "selected_users": [clip.get("agent_name") for clip in selected_clips],
+            }
+            speaker_attempts.append(
+                {
+                    "speaker_index": speaker_index,
+                    "speaker_user": rows[speaker_index]["clip"].get("agent_name"),
+                    "status": "succeeded",
+                    "candidate_index": len(speaker_candidates),
+                    "consensus": consensus,
+                }
+            )
+            speaker_candidates.append(
+                {
+                    "day": group.get("day"),
+                    "time_token": group.get("time_token"),
+                    "clip_clock": group.get("clip_clock"),
+                    "model_id": encoder.model_id,
+                    "window": {
+                        "start_seconds": start_seconds,
+                        "duration_seconds": duration_seconds,
+                        "sample_interval_seconds": sample_interval_seconds,
+                    },
+                    "group_size": original_group_size,
+                    "embedded_clip_count": len(rows),
+                    "selection": selection,
+                    "speaker_consensus_pruning": consensus,
+                    "group_clips": [row["clip"] for row in rows],
+                    "selected_clips": selected_clips,
+                }
+            )
+
+        for candidate in speaker_candidates:
+            candidate["speaker_attempts"] = speaker_attempts
+
+        return {
+            "day": group.get("day"),
+            "time_token": group.get("time_token"),
+            "clip_clock": group.get("clip_clock"),
+            "model_id": encoder.model_id,
+            "window": {
+                "start_seconds": start_seconds,
+                "duration_seconds": duration_seconds,
+                "sample_interval_seconds": sample_interval_seconds,
+            },
+            "group_size": original_group_size,
+            "embedded_clip_count": len(rows),
+            "selection": {
+                "method": "six_user_speaker_consensus_all_speakers",
+                "selected_count": 6,
+                "speaker_order": [0, 1, 2, 3, 4, 5],
+                "original_group_size": original_group_size,
+                "embedded_clip_count": len(rows),
+                "sampled_source_agents": [row["clip"].get("agent_dir") for row in rows],
+                "sampled_source_users": [row["clip"].get("agent_name") for row in rows],
+                "pruning_clusters_per_video": pruning_clusters_per_video,
+                "high_similarity_interval_threshold": high_similarity_interval_threshold,
+                "min_high_provider_matches": 3,
+                "min_pruned_video_seconds": min_pruned_video_seconds,
+            },
+            "speaker_attempts": speaker_attempts,
+            "speaker_candidates": speaker_candidates,
+            "group_clips": [row["clip"] for row in rows],
+        }
+
     scoring = relative_group_scores(rows, clip_embeddings)
     pair_analysis = score_video_pairs(
         rows,
@@ -1888,7 +2229,6 @@ def analyze_group_relative_similarity(
         min_pruned_video_percent=min_pruned_video_percent,
         max_pair_time_difference_seconds=max_pair_time_difference_seconds,
     )
-    group_output_dir = Path(output_dir) / stable_id(group.get("day"), group.get("time_token"))
     surviving_pairs = pair_analysis["surviving_pairs"]
     role_selection: dict[str, Any] | None = None
     if selected_count == 2:
@@ -2048,7 +2388,14 @@ def _write_csv(path: str | Path, rows: list[dict[str, Any]], fieldnames: list[st
 def write_review_bundle(group_result: dict[str, Any], review_root: str | Path) -> Path:
     """Copy all group videos and write comparison traces for manual inspection."""
 
-    bundle_id = stable_id(group_result.get("day"), group_result.get("time_token"))
+    selection_method = group_result.get("selection", {}).get("method")
+    bundle_id = (
+        _safe_filename_part(
+            f"{group_result.get('day')}_{group_result.get('time_token')}_six_user_consensus"
+        )
+        if selection_method == "six_user_speaker_consensus_all_speakers"
+        else stable_id(group_result.get("day"), group_result.get("time_token"))
+    )
     bundle_dir = Path(review_root) / bundle_id
     videos_dir = bundle_dir / "videos"
     traces_dir = bundle_dir / "comparison_traces"
@@ -2239,11 +2586,66 @@ def build_candidate_packet(group_result: dict[str, Any]) -> dict[str, Any]:
             str(clip.get("agent_name")): str(clip.get("media_role"))
             for clip in selected_clips
         }
+        if selection.get("method") == "six_user_speaker_consensus":
+            packet_id = _safe_filename_part(
+                "EGOLIFE6U_CONSENSUS_"
+                f"{group_result.get('day')}_{group_result.get('time_token')}_"
+                f"S{int(selection.get('speaker_index', 0)) + 1}"
+            )
+            return {
+                "evidence_id": packet_id,
+                "candidate_type": "six_user_speaker_consensus",
+                "day": group_result.get("day"),
+                "time_token": group_result.get("time_token"),
+                "clip_clock": group_result.get("clip_clock"),
+                "input_users": required_users,
+                "required_users": required_users,
+                "speaker_user": required_users[0],
+                "provider_users": required_users[1:],
+                "evidence_provider_user": required_users[1],
+                "evidence_provider_users": required_users[1:],
+                "media_roles": media_roles,
+                "speaker_consensus_pruning": group_result.get(
+                    "speaker_consensus_pruning", {}
+                ),
+                "speaker_attempts": list(group_result.get("speaker_attempts") or []),
+                "requirement": (
+                    "Six synchronized input videos are ordered as one speaker and five providers. "
+                    "Generation uses six speaker-consensus-pruned videos. Groundedness uses all "
+                    "six full originals. Answerability uses only the speaker full original and "
+                    "requires the speaker-only condition to choose a valid wrong option; provider "
+                    "answerability is not evaluated."
+                ),
+                "generator_media_mode": "six_pruned_videos",
+                "clips": selected_clips,
+                "source_urls": {
+                    "videos": [clip.get("video_url") for clip in selected_clips],
+                    "gazes": [clip.get("gaze_url") for clip in selected_clips],
+                    "overlays": [
+                        clip.get("overlay_url")
+                        for clip in selected_clips
+                        if clip.get("overlay_url")
+                    ],
+                },
+                "group_relative_clip_similarity": {
+                    key: group_result[key]
+                    for key in [
+                        "model_id",
+                        "window",
+                        "group_size",
+                        "selection",
+                        "speaker_consensus_pruning",
+                        "speaker_attempts",
+                        "review_bundle",
+                    ]
+                    if key in group_result
+                },
+            }
         packet_id = stable_id(
             "EGOLIFE6U_TWO_ANCHOR_MIXED",
             group_result.get("day"),
             group_result.get("time_token"),
-            *[clip.get("agent_id") or clip.get("agent_name") for clip in selected_clips],
+            *required_users,
             selection.get("selected_role_structure", {}).get("candidate_rank"),
         )
         return {
@@ -2454,14 +2856,32 @@ def mine_group_relative_clip_candidates(
                 }
             )
             continue
-        result_path = output_dir / f"{stable_id(group.get('day'), group.get('time_token'))}_group_relative_clip.json"
+        result_stem = (
+            _safe_filename_part(f"{group.get('day')}_{group.get('time_token')}")
+            if selected_count == 6
+            else stable_id(group.get("day"), group.get("time_token"))
+        )
+        result_path = output_dir / f"{result_stem}_group_relative_clip.json"
         bundle_dir = write_review_bundle(result, review_root)
         result["review_bundle"] = str(bundle_dir)
         write_json(result_path, result)
         if selected_count == 6:
-            packet = build_candidate_packet(result)
-            packet["group_relative_clip_similarity"]["result_path"] = str(result_path)
-            candidates.append(packet)
+            if not result.get("speaker_candidates"):
+                skipped.append(
+                    {
+                        "index": index,
+                        "day": group.get("day"),
+                        "time_token": group.get("time_token"),
+                        "error": "no speaker consensus candidate passed",
+                        "speaker_attempts": result.get("speaker_attempts", []),
+                    }
+                )
+                continue
+            for candidate_result in result["speaker_candidates"]:
+                candidate_result["review_bundle"] = str(bundle_dir)
+                packet = build_candidate_packet(candidate_result)
+                packet["group_relative_clip_similarity"]["result_path"] = str(result_path)
+                candidates.append(packet)
         else:
             for pair in result.get("sampled_pairs", []):
                 packet_result = result_for_sampled_pair(

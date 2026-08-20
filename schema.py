@@ -126,10 +126,9 @@ def validate_qa_item(
         expected_role_fields = {
             "input_users": required_users,
             "speaker_user": required_users[0],
-            "anchor_provider_users": required_users[1:3],
-            "additional_provider_users": required_users[3:6],
+            "provider_users": required_users[1:],
             "evidence_provider_user": required_users[1],
-            "evidence_provider_users": required_users[1:3],
+            "evidence_provider_users": required_users[1:],
         }
         for field, expected_value in expected_role_fields.items():
             if item.get(field) != expected_value:
@@ -138,12 +137,12 @@ def validate_qa_item(
                 )
 
         expected_media_roles = {
-            required_users[0]: "speaker_pruned",
-            required_users[1]: "anchor_provider_pruned",
-            required_users[2]: "anchor_provider_pruned",
-            required_users[3]: "additional_provider_full",
-            required_users[4]: "additional_provider_full",
-            required_users[5]: "additional_provider_full",
+            required_users[0]: "speaker_consensus_pruned",
+            required_users[1]: "provider_consensus_pruned",
+            required_users[2]: "provider_consensus_pruned",
+            required_users[3]: "provider_consensus_pruned",
+            required_users[4]: "provider_consensus_pruned",
+            required_users[5]: "provider_consensus_pruned",
         }
         if item.get("media_roles") != expected_media_roles:
             errors.append("media_roles must cover all six ordered input users with valid roles")

@@ -20,6 +20,7 @@ from egolife_two_user_qa.group_relative_clip_sampling import (  # noqa: E402
     analyze_group_relative_similarity,
     build_candidate_packet,
     build_six_user_role_structures,
+    clustered_speaker_consensus_pruning,
     materialize_six_user_role_structure,
     mine_group_relative_clip_candidates,
 )
@@ -42,6 +43,146 @@ def pair_scores(*, kept_keys: set[str]) -> list[dict[str, object]]:
                 }
             )
     return rows
+
+
+class SpeakerConsensusPruningTests(unittest.TestCase):
+    @staticmethod
+    def cluster_result(
+        representative_embeddings: list[list[float]],
+        member_indices: list[list[int]],
+    ) -> dict[str, object]:
+        representatives = []
+        labels = []
+        for cluster_index, members in enumerate(member_indices):
+            labels.extend([cluster_index] * len(members))
+            representatives.append(
+                {
+                    "cluster_index": cluster_index,
+                    "frame_index": members[0],
+                    "timestamp_seconds": float(members[0] + 1),
+                    "path": f"cluster-{cluster_index}.jpg",
+                    "member_indices": members,
+                    "member_timestamps": [float(index + 1) for index in members],
+                    "member_count": len(members),
+                }
+            )
+        return {
+            "cluster_count_requested": 12,
+            "cluster_count": len(representatives),
+            "visual_cluster_count": len(representatives),
+            "labels": labels,
+            "representatives": representatives,
+            "representative_embeddings": representative_embeddings,
+        }
+
+    @staticmethod
+    def frames(count: int = 2) -> list[dict[str, object]]:
+        return [
+            {"timestamp_seconds": float(index + 1), "path": f"frame-{index}.jpg"}
+            for index in range(count)
+        ]
+
+    def run_consensus(self, provider_best_similarities: list[float]) -> dict[str, object]:
+        speaker = self.cluster_result([[1.0, 0.0]], [[0, 1]])
+        providers = []
+        for similarity in provider_best_similarities:
+            orthogonal = max(0.0, 1.0 - similarity**2) ** 0.5
+            providers.append(
+                self.cluster_result(
+                    [
+                        [similarity, orthogonal],
+                        [0.81, max(0.0, 1.0 - 0.81**2) ** 0.5],
+                    ],
+                    [[0], [1]],
+                )
+            )
+        with mock.patch.object(
+            group_relative_clip_sampling,
+            "clustered_frame_representatives",
+            side_effect=[speaker, *providers],
+        ):
+            return clustered_speaker_consensus_pruning(
+                [self.frames() for _ in range(6)],
+                [[[1.0, 0.0], [1.0, 0.0]] for _ in range(6)],
+                speaker_index=0,
+                start_seconds=0.0,
+                duration_seconds=10.0,
+                sample_interval_seconds=1.0,
+                min_pruned_video_seconds=2.0,
+            )
+
+    def test_five_of_five_deletes_speaker_and_all_provider_argmax_clusters(self) -> None:
+        result = self.run_consensus([0.95, 0.94, 0.93, 0.92, 0.91])
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(len(result["events"]), 1)
+        event = result["events"][0]
+        self.assertEqual(event["high_provider_count"], 5)
+        self.assertEqual(
+            event["deleted_clusters"],
+            [
+                {"video_index": 0, "cluster_index": 0},
+                {"video_index": 1, "cluster_index": 0},
+                {"video_index": 2, "cluster_index": 0},
+                {"video_index": 3, "cluster_index": 0},
+                {"video_index": 4, "cluster_index": 0},
+                {"video_index": 5, "cluster_index": 0},
+            ],
+        )
+        self.assertEqual(result["videos"][0]["marked_frame_indices"], [0, 1])
+
+    def test_four_of_five_does_not_delete_below_threshold_provider(self) -> None:
+        result = self.run_consensus([0.95, 0.94, 0.93, 0.82, 0.70])
+
+        event = result["events"][0]
+        self.assertEqual(event["high_provider_count"], 4)
+        self.assertEqual(
+            [row["video_index"] for row in event["deleted_clusters"]],
+            [0, 1, 2, 3, 4],
+        )
+        self.assertEqual(result["videos"][5]["marked_cluster_indices"], [])
+
+    def test_three_of_five_deletes_only_speaker_and_high_provider_clusters(self) -> None:
+        result = self.run_consensus([0.95, 0.94, 0.93, 0.70, 0.69])
+
+        self.assertTrue(result["passed"])
+        event = result["events"][0]
+        self.assertEqual(event["high_provider_count"], 3)
+        self.assertEqual(
+            [row["video_index"] for row in event["deleted_clusters"]],
+            [0, 1, 2, 3],
+        )
+        self.assertEqual(result["videos"][4]["marked_cluster_indices"], [])
+        self.assertEqual(result["videos"][5]["marked_cluster_indices"], [])
+
+    def test_two_of_five_does_not_trigger_consensus_deletion(self) -> None:
+        result = self.run_consensus([0.95, 0.94, 0.70, 0.69, 0.68])
+
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["events"], [])
+        self.assertTrue(all(not video["marked_cluster_indices"] for video in result["videos"]))
+
+    def test_argmax_only_and_duplicate_cluster_deletion_is_deduplicated(self) -> None:
+        speaker = self.cluster_result([[1.0, 0.0], [0.99, 0.01]], [[0], [1]])
+        provider = self.cluster_result([[0.95, 0.0], [0.90, 0.0]], [[0], [1]])
+        with mock.patch.object(
+            group_relative_clip_sampling,
+            "clustered_frame_representatives",
+            side_effect=[speaker, provider, provider, provider, provider, provider],
+        ):
+            result = clustered_speaker_consensus_pruning(
+                [self.frames() for _ in range(6)],
+                [[[1.0, 0.0], [1.0, 0.0]] for _ in range(6)],
+                speaker_index=0,
+                start_seconds=0.0,
+                duration_seconds=10.0,
+                sample_interval_seconds=1.0,
+                min_pruned_video_seconds=2.0,
+            )
+
+        self.assertEqual(len(result["events"]), 2)
+        self.assertEqual(result["videos"][1]["marked_cluster_indices"], [0])
+        self.assertEqual(result["videos"][1]["trigger_event_indices"], [0, 1])
 
 
 class SixUserRoleSelectionTests(unittest.TestCase):
@@ -236,20 +377,10 @@ class SixUserRoleSelectionTests(unittest.TestCase):
                 ffmpeg_binary="ffmpeg",
             )
 
-    def test_six_user_analysis_scores_15_edges_and_retries_role_materialization(self) -> None:
+    def test_six_user_analysis_visits_all_speakers_and_keeps_every_success(self) -> None:
         rows = self.six_rows()
         for index, row in enumerate(rows):
             row["frames"] = [{"path": f"frame-{index}.jpg"}]
-        scores = pair_scores(kept_keys={"0-1", "0-2", "0-3"})
-        for row in scores:
-            row.update({"mean_sim": 0.5, "topk_sim": 0.7})
-        pair_analysis = {
-            "pair_filter": {"pair_count": 15},
-            "pair_scores": scores,
-            "surviving_pairs": [row for row in scores if row["status"] == "kept"],
-            "ranked_pairs": [row for row in scores if row["status"] == "kept"],
-            "rejected_pairs": [row for row in scores if row["status"] == "rejected"],
-        }
 
         class Encoder:
             model_id = "fake/clip"
@@ -262,28 +393,48 @@ class SixUserRoleSelectionTests(unittest.TestCase):
                 return [[1.0, 0.0] for _ in paths]
 
         encoder = Encoder()
-        materialization_attempts = []
+        consensus_attempts = []
+        successful_speakers = {1, 2, 4, 5}
 
-        def fake_materialize(_rows, structure, **kwargs):
-            materialization_attempts.append(structure["candidate_rank"])
-            if len(materialization_attempts) == 1:
-                raise ValueError("synthetic first-role failure")
+        def fake_consensus(_frames, _embeddings, *, speaker_index, **kwargs):
+            consensus_attempts.append(speaker_index)
+            return {
+                "method": "speaker_cluster_provider_argmax_consensus",
+                "speaker_index": speaker_index,
+                "events": [{"event_index": 0}],
+                "videos": [
+                    {
+                        "video_index": index,
+                        "keep_intervals": [(0.0, 9.0)],
+                        "remove_intervals": [(9.0, 10.0)],
+                        "kept_duration_seconds": 9.0,
+                        "removed_duration_seconds": 1.0,
+                        "marked_cluster_indices": [0],
+                    }
+                    for index in range(6)
+                ],
+                "passed": speaker_index in successful_speakers,
+            }
+
+        def fake_materialize(_rows, consensus, **kwargs):
+            speaker_index = consensus["speaker_index"]
+            if not consensus["passed"]:
+                raise ValueError(f"synthetic speaker {speaker_index} failure")
             ordered_indices = [
-                structure["speaker_index"],
-                *structure["anchor_indices"],
-                *structure["additional_indices"],
-            ]
-            roles = [
-                "speaker_pruned",
-                "anchor_provider_pruned",
-                "anchor_provider_pruned",
-                "additional_provider_full",
-                "additional_provider_full",
-                "additional_provider_full",
+                speaker_index,
+                *[index for index in range(6) if index != speaker_index],
             ]
             return [
-                {**dict(_rows[index]["clip"]), "media_role": role}
-                for index, role in zip(ordered_indices, roles)
+                {
+                    **dict(_rows[index]["clip"]),
+                    "media_role": (
+                        "speaker_consensus_pruned"
+                        if position == 0
+                        else "provider_consensus_pruned"
+                    ),
+                    "is_pruned": True,
+                }
+                for position, index in enumerate(ordered_indices)
             ]
 
         group = {
@@ -298,14 +449,19 @@ class SixUserRoleSelectionTests(unittest.TestCase):
                 "group_clip_frames",
                 return_value=rows,
             ),
+            mock.patch.object(group_relative_clip_sampling, "score_video_pairs") as score_mock,
             mock.patch.object(
                 group_relative_clip_sampling,
-                "score_video_pairs",
-                return_value=pair_analysis,
-            ) as score_mock,
+                "relative_group_scores",
+            ) as relative_scores_mock,
             mock.patch.object(
                 group_relative_clip_sampling,
-                "materialize_six_user_role_structure",
+                "clustered_speaker_consensus_pruning",
+                side_effect=fake_consensus,
+            ),
+            mock.patch.object(
+                group_relative_clip_sampling,
+                "materialize_six_user_consensus_candidate",
                 side_effect=fake_materialize,
             ),
         ):
@@ -319,26 +475,35 @@ class SixUserRoleSelectionTests(unittest.TestCase):
             )
 
         self.assertEqual(len(encoder.calls), 6)
-        self.assertEqual(len(score_mock.call_args.args[0]), 6)
-        self.assertEqual(len(result["pair_scores"]), 15)
-        self.assertEqual(len(materialization_attempts), 2)
-        self.assertEqual(len(result["selection"]["role_materialization_attempts"]), 2)
+        score_mock.assert_not_called()
+        relative_scores_mock.assert_not_called()
+        self.assertEqual(consensus_attempts, [0, 1, 2, 3, 4, 5])
+        self.assertEqual(len(result["speaker_attempts"]), 6)
+        self.assertEqual([row["status"] for row in result["speaker_attempts"]], [
+            "failed", "succeeded", "succeeded", "failed", "succeeded", "succeeded"
+        ])
+        self.assertEqual(len(result["speaker_candidates"]), 4)
+        self.assertEqual(
+            [row["selection"]["speaker_index"] for row in result["speaker_candidates"]],
+            [1, 2, 4, 5],
+        )
         self.assertEqual(result["selection"]["selected_count"], 6)
-        self.assertEqual(result["selection"]["method"], "six_user_two_anchor_star")
-        self.assertEqual(len(result["selected_clips"]), 6)
+        self.assertEqual(result["selection"]["method"], "six_user_speaker_consensus_all_speakers")
 
-        packet = build_candidate_packet(result)
-        users = [clip["agent_name"] for clip in result["selected_clips"]]
-        self.assertEqual(packet["candidate_type"], "six_user_two_anchor_mixed_media")
+        packet = build_candidate_packet(result["speaker_candidates"][0])
+        users = [clip["agent_name"] for clip in result["speaker_candidates"][0]["selected_clips"]]
+        self.assertEqual(packet["candidate_type"], "six_user_speaker_consensus")
         self.assertEqual(packet["input_users"], users)
         self.assertEqual(packet["required_users"], users)
         self.assertEqual(packet["speaker_user"], users[0])
-        self.assertEqual(packet["anchor_provider_users"], users[1:3])
-        self.assertEqual(packet["additional_provider_users"], users[3:6])
+        self.assertEqual(packet["provider_users"], users[1:])
         self.assertEqual(packet["evidence_provider_user"], users[1])
-        self.assertEqual(packet["evidence_provider_users"], users[1:3])
-        self.assertEqual(len(packet["selected_anchor_edges"]), 2)
-        self.assertEqual(len(packet["diagnostic_pair_edges"]), 15)
+        self.assertEqual(packet["evidence_provider_users"], users[1:])
+        self.assertEqual(packet["generator_media_mode"], "six_pruned_videos")
+        self.assertIn("speaker-only", packet["requirement"])
+        self.assertNotIn("all-six condition", packet["requirement"])
+        self.assertNotIn("anchor_provider_users", packet)
+        self.assertNotIn("selected_anchor_edges", packet)
         self.assertEqual(set(packet["media_roles"]), set(users))
 
     def test_invalid_selected_count_fails_before_encoder_initialization(self) -> None:

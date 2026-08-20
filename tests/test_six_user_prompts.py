@@ -21,7 +21,7 @@ from egolife_two_user_qa.prompts import (  # noqa: E402
 )
 
 
-USERS = ["speaker", "anchor_one", "anchor_two", "context_one", "context_two", "context_three"]
+USERS = ["speaker", "provider_one", "provider_two", "provider_three", "provider_four", "provider_five"]
 
 
 def six_user_packet() -> dict[str, object]:
@@ -30,8 +30,7 @@ def six_user_packet() -> dict[str, object]:
         "required_users": list(USERS),
         "input_users": list(USERS),
         "speaker_user": USERS[0],
-        "anchor_provider_users": USERS[1:3],
-        "additional_provider_users": USERS[3:],
+        "provider_users": USERS[1:],
         "clips": [
             {"agent_name": user, "local_video": f"{user}.mp4"}
             for user in USERS
@@ -65,17 +64,16 @@ class SixUserPromptTests(unittest.TestCase):
         brief = video_packet_brief(six_user_packet())
 
         self.assertIn('"speaker_user": "speaker"', brief)
-        self.assertIn('"anchor_provider_users": [', brief)
-        self.assertIn('"additional_provider_users": [', brief)
-        self.assertIn("required_users[1] and required_users[2] are anchor providers", brief)
-        self.assertIn("required_users[3] through required_users[5] are additional providers", brief)
+        self.assertIn('"provider_users": [', brief)
+        self.assertNotIn('"anchor_provider_users"', brief)
+        self.assertNotIn('"additional_provider_users"', brief)
+        self.assertIn("required_users[1] through required_users[5] are providers", brief)
 
     def test_generation_prompt_requires_cross_view_but_not_every_provider(self) -> None:
         prompt = build_video_generation_prompt(six_user_packet(), "neutral")
 
         self.assertIn("required_users[0] is the speaker", prompt)
-        self.assertIn("required_users[1] and required_users[2] are the two anchor providers", prompt)
-        self.assertIn("required_users[3] through required_users[5] are additional providers", prompt)
+        self.assertIn("required_users[1] through required_users[5] are providers", prompt)
         self.assertIn("speaker's video alone must remain insufficient", prompt)
         self.assertIn("the six-video input must support exactly one correct option", prompt)
         self.assertIn("One or more provider views may supply the answer", prompt)

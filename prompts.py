@@ -917,13 +917,8 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
     evidence_provider_users = required_users[1:]
     evidence_provider_user = evidence_provider_users[0] if evidence_provider_users else None
     six_user_mode = len(required_users) == 6
-    anchor_provider_users = (
-        list(packet.get("anchor_provider_users") or required_users[1:3])
-        if six_user_mode
-        else []
-    )
-    additional_provider_users = (
-        list(packet.get("additional_provider_users") or required_users[3:6])
+    provider_users = (
+        list(packet.get("provider_users") or required_users[1:])
         if six_user_mode
         else []
     )
@@ -1007,9 +1002,8 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
 
     if six_user_mode:
         required_users_order = (
-            "required_users[0] is the speaker. required_users[1] and required_users[2] "
-            "are anchor providers. required_users[3] through required_users[5] are "
-            "additional providers. The speaker view alone must be insufficient, while "
+            "required_users[0] is the speaker. required_users[1] through required_users[5] "
+            "are providers. The speaker view alone must be insufficient, while "
             "the six-video input must support one unique answer. One or more provider "
             "views may support the answer; an unused provider does not invalidate the item."
         )
@@ -1030,8 +1024,7 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
             "speaker_user": speaker_user,
             "evidence_provider_user": evidence_provider_user,
             "evidence_provider_users": evidence_provider_users,
-            "anchor_provider_users": anchor_provider_users,
-            "additional_provider_users": additional_provider_users,
+            "provider_users": provider_users,
             "required_users_order": required_users_order,
         },
         "prompt_requirement": (
@@ -1333,10 +1326,10 @@ Input: raw videos from multiple people during the same time interval. They may b
 
     dependency_lines = (
         [
-            "required_users[0] is the speaker, required_users[1] and required_users[2] are the two anchor providers, and required_users[3] through required_users[5] are additional providers.",
+            "required_users[0] is the speaker, and required_users[1] through required_users[5] are providers.",
             "The speaker's video alone must remain insufficient, while the six-video input must support exactly one correct option.",
             "One or more provider views may supply the answer or the cross-view relation needed to identify it.",
-            "Do not require every provider to contribute, and do not reject a natural question merely because some additional provider views are irrelevant.",
+            "Do not require every provider to contribute, and do not reject a natural question merely because some provider views are irrelevant.",
         ]
         if six_user_mode
         else [
@@ -1354,19 +1347,19 @@ Input: raw videos from multiple people during the same time interval. They may b
             **VIDEO_GENERATION_SCHEMA,
             "required_users": [
                 "speaker user first",
-                "first anchor provider second",
-                "second anchor provider third",
-                "first additional provider fourth",
-                "second additional provider fifth",
-                "third additional provider sixth",
+                "first provider second",
+                "second provider third",
+                "third provider fourth",
+                "fourth provider fifth",
+                "fifth provider sixth",
             ],
             "single_user_answerability": {
                 "Speaker": "insufficient because the speaker alone only provides ...",
-                "AnchorOne": "sufficient/insufficient based only on this provider view ...",
-                "AnchorTwo": "sufficient/insufficient based only on this provider view ...",
-                "AdditionalOne": "sufficient/insufficient based only on this provider view ...",
-                "AdditionalTwo": "sufficient/insufficient based only on this provider view ...",
-                "AdditionalThree": "sufficient/insufficient based only on this provider view ...",
+                "ProviderOne": "sufficient/insufficient based only on this provider view ...",
+                "ProviderTwo": "sufficient/insufficient based only on this provider view ...",
+                "ProviderThree": "sufficient/insufficient based only on this provider view ...",
+                "ProviderFour": "sufficient/insufficient based only on this provider view ...",
+                "ProviderFive": "sufficient/insufficient based only on this provider view ...",
             },
             "combined_answerability": (
                 "sufficient because the six-video input supports exactly one option"
@@ -1636,9 +1629,8 @@ def build_evidence_groundedness_judge_prompt(
     six_user_mode = len(packet.get("required_users") or []) == 6
     question_scope = "six-user" if six_user_mode else "two-user"
     role_grounding_rule = (
-        "- Treat required_users[0] as the speaker, required_users[1] and "
-        "required_users[2] as anchor providers, and required_users[3] through "
-        "required_users[5] as additional providers. Verify that at least one external "
+        "- Treat required_users[0] as the speaker and required_users[1] through "
+        "required_users[5] as providers. Verify that at least one external "
         "provider view or provider combination supplies the answer-bearing evidence "
         "missing from the speaker view. Do not fail merely because an input provider is unused."
         if six_user_mode

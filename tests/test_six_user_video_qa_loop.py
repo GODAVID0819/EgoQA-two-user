@@ -23,6 +23,7 @@ from egolife_two_user_qa.video_qa_loop import (  # noqa: E402
     condition_media_for_clips,
     human_audit_packet,
     media_for_clips,
+    merge_parallel_judges,
     run_parallel_review_judges,
     run_answerability_eval,
     video_evidence_for_packet,
@@ -31,7 +32,7 @@ from egolife_two_user_qa import video_qa_loop  # noqa: E402
 from egolife_two_user_qa.schema import validate_qa_item  # noqa: E402
 
 
-SIX_USERS = ["speaker", "anchor_one", "anchor_two", "context_one", "context_two", "context_three"]
+SIX_USERS = ["speaker", "provider_one", "provider_two", "provider_three", "provider_four", "provider_five"]
 
 
 def six_user_qa(*, correct: str = "A") -> dict[str, object]:
@@ -59,17 +60,16 @@ def six_user_packet() -> dict[str, object]:
         "required_users": list(SIX_USERS),
         "input_users": list(SIX_USERS),
         "speaker_user": SIX_USERS[0],
-        "anchor_provider_users": SIX_USERS[1:3],
-        "additional_provider_users": SIX_USERS[3:],
+        "provider_users": SIX_USERS[1:],
         "evidence_provider_user": SIX_USERS[1],
-        "evidence_provider_users": SIX_USERS[1:3],
+        "evidence_provider_users": SIX_USERS[1:],
         "media_roles": {
-            SIX_USERS[0]: "speaker_pruned",
-            SIX_USERS[1]: "anchor_provider_pruned",
-            SIX_USERS[2]: "anchor_provider_pruned",
-            SIX_USERS[3]: "additional_provider_full",
-            SIX_USERS[4]: "additional_provider_full",
-            SIX_USERS[5]: "additional_provider_full",
+            SIX_USERS[0]: "speaker_consensus_pruned",
+            SIX_USERS[1]: "provider_consensus_pruned",
+            SIX_USERS[2]: "provider_consensus_pruned",
+            SIX_USERS[3]: "provider_consensus_pruned",
+            SIX_USERS[4]: "provider_consensus_pruned",
+            SIX_USERS[5]: "provider_consensus_pruned",
         },
         "clips": [
             {
@@ -79,19 +79,19 @@ def six_user_packet() -> dict[str, object]:
                 "media_role": role,
             }
             for user, role in (
-                (SIX_USERS[0], "speaker_pruned"),
-                (SIX_USERS[1], "anchor_provider_pruned"),
-                (SIX_USERS[2], "anchor_provider_pruned"),
-                (SIX_USERS[3], "additional_provider_full"),
-                (SIX_USERS[4], "additional_provider_full"),
-                (SIX_USERS[5], "additional_provider_full"),
+                (SIX_USERS[0], "speaker_consensus_pruned"),
+                (SIX_USERS[1], "provider_consensus_pruned"),
+                (SIX_USERS[2], "provider_consensus_pruned"),
+                (SIX_USERS[3], "provider_consensus_pruned"),
+                (SIX_USERS[4], "provider_consensus_pruned"),
+                (SIX_USERS[5], "provider_consensus_pruned"),
             )
         ],
         "source_urls": {},
     }
 
 
-def qa_for_metadata(*, supporting_user: str = "anchor_one") -> dict[str, object]:
+def qa_for_metadata(*, supporting_user: str = "provider_one") -> dict[str, object]:
     return {
         **six_user_qa(correct="A"),
         "answer": "Option A",
@@ -152,15 +152,13 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         for output in (audit, qa):
             self.assertEqual(output["input_users"], SIX_USERS)
             self.assertEqual(output["speaker_user"], "speaker")
-            self.assertEqual(output["anchor_provider_users"], ["anchor_one", "anchor_two"])
-            self.assertEqual(
-                output["additional_provider_users"],
-                ["context_one", "context_two", "context_three"],
-            )
-            self.assertEqual(output["evidence_provider_user"], "anchor_one")
+            self.assertEqual(output["provider_users"], SIX_USERS[1:])
+            self.assertNotIn("anchor_provider_users", output)
+            self.assertNotIn("additional_provider_users", output)
+            self.assertEqual(output["evidence_provider_user"], "provider_one")
             self.assertEqual(
                 output["evidence_provider_users"],
-                ["anchor_one", "anchor_two"],
+                SIX_USERS[1:],
             )
             self.assertEqual(set(output["media_roles"]), set(SIX_USERS))
 
@@ -168,12 +166,12 @@ class SixUserAnswerabilityTests(unittest.TestCase):
             qa["supporting_user_claims"],
             [
                 {
-                    "user": "anchor_one",
+                    "user": "provider_one",
                     "claim": "This provider view shows the answer-bearing item.",
                 }
             ],
         )
-        self.assertNotIn("context_one", {row["user"] for row in qa["supporting_user_claims"]})
+        self.assertNotIn("provider_two", {row["user"] for row in qa["supporting_user_claims"]})
         self.assertEqual(validate_qa_item(qa), [])
 
     def test_six_user_schema_rejects_supporting_claim_outside_input_users(self) -> None:
@@ -186,9 +184,9 @@ class SixUserAnswerabilityTests(unittest.TestCase):
 
     def test_six_user_packet_rejects_role_order_mismatch(self) -> None:
         packet = six_user_packet()
-        packet["anchor_provider_users"] = ["anchor_two", "anchor_one"]
+        packet["provider_users"] = list(reversed(SIX_USERS[1:]))
 
-        with self.assertRaisesRegex(ValueError, "anchor_provider_users"):
+        with self.assertRaisesRegex(ValueError, "provider_users"):
             human_audit_packet(packet)
 
     def test_two_user_metadata_remains_valid_without_six_user_fields(self) -> None:
@@ -225,7 +223,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         self.assertNotIn("supporting_user_claims", qa)
         self.assertEqual(validate_qa_item(qa), [])
 
-    def test_six_users_build_exactly_two_conditions(self) -> None:
+    def test_six_users_build_only_speaker_condition(self) -> None:
         conditions = build_answerability_conditions(SIX_USERS)
 
         self.assertEqual(
@@ -236,78 +234,53 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                     "condition_type": "speaker_only",
                     "users": ["speaker"],
                 },
-                {
-                    "condition_id": "combined_all_six_users::" + "+".join(SIX_USERS),
-                    "condition_type": "combined_all_six_users",
-                    "users": SIX_USERS,
-                },
             ],
         )
 
-    def test_six_user_gate_passes_only_for_cross_view_gain(self) -> None:
+    def test_six_user_gate_passes_when_speaker_selects_wrong_option(self) -> None:
         qa = six_user_qa(correct="A")
         conditions = build_answerability_conditions(SIX_USERS)
         gate = answerability_gate(
             qa,
-            [evaluation(conditions[0], "B"), evaluation(conditions[1], "A")],
+            [evaluation(conditions[0], "B")],
         )
 
         self.assertTrue(gate["passed"])
         self.assertFalse(gate["speaker_only_correct"])
-        self.assertTrue(gate["all_six_correct"])
         self.assertEqual(gate["speaker_only_choice"], "B")
-        self.assertEqual(gate["all_six_choice"], "A")
-        self.assertEqual(gate["cross_view_gain"], 1)
-        self.assertEqual(gate["answerability_evaluated_condition_count"], 2)
+        self.assertEqual(gate["answerability_evaluated_condition_count"], 1)
+        self.assertNotIn("all_six_correct", gate)
+        self.assertNotIn("cross_view_gain", gate)
 
     def test_speaker_only_correct_is_blocking(self) -> None:
         qa = six_user_qa(correct="A")
         conditions = build_answerability_conditions(SIX_USERS)
         gate = answerability_gate(
             qa,
-            [evaluation(conditions[0], "A"), evaluation(conditions[1], "A")],
+            [evaluation(conditions[0], "A")],
         )
 
         self.assertFalse(gate["passed"])
         self.assertTrue(gate["speaker_only_correct"])
         self.assertIn("speaker-only", gate["reason"])
 
-    def test_all_six_wrong_is_blocking_without_noise_claim(self) -> None:
-        qa = six_user_qa(correct="A")
-        conditions = build_answerability_conditions(SIX_USERS)
-        gate = answerability_gate(
-            qa,
-            [evaluation(conditions[0], "B"), evaluation(conditions[1], "C")],
-        )
-
-        self.assertFalse(gate["passed"])
-        self.assertFalse(gate["all_six_correct"])
-        self.assertEqual(gate["failure_label"], "all_six_wrong")
-        self.assertNotIn("noise", gate["reason"].lower())
-
-    def test_unparsed_speaker_or_all_six_choice_is_blocking(self) -> None:
+    def test_unparsed_speaker_choice_is_blocking(self) -> None:
         qa = six_user_qa(correct="A")
         conditions = build_answerability_conditions(SIX_USERS)
 
         speaker_invalid = answerability_gate(
             qa,
-            [evaluation(conditions[0], None), evaluation(conditions[1], "A")],
-        )
-        all_six_invalid = answerability_gate(
-            qa,
-            [evaluation(conditions[0], "B"), evaluation(conditions[1], None)],
+            [evaluation(conditions[0], None)],
         )
 
         self.assertFalse(speaker_invalid["passed"])
         self.assertEqual(speaker_invalid["failure_label"], "speaker_only_unparsed")
-        self.assertFalse(all_six_invalid["passed"])
-        self.assertEqual(all_six_invalid["failure_label"], "all_six_unparsed")
 
-    def test_run_eval_calls_runner_exactly_twice_for_six_users(self) -> None:
+    def test_run_eval_calls_runner_once_for_six_users(self) -> None:
         class Runner:
             def __init__(self) -> None:
                 self.calls: list[dict[str, object]] = []
-                self.choices = iter(("B", "A"))
+                self.choices = iter(("B",))
 
             def generate(self, prompt, *, image_paths, video_paths):
                 choice = next(self.choices)
@@ -336,8 +309,8 @@ class SixUserAnswerabilityTests(unittest.TestCase):
             prompt_rows=[],
         )
 
-        self.assertEqual(len(runner.calls), 2)
-        self.assertEqual(len(result["evaluations"]), 2)
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(len(result["evaluations"]), 1)
         self.assertTrue(result["gate"]["passed"])
 
     def test_six_user_media_routes_generator_and_judges_in_order(self) -> None:
@@ -362,12 +335,12 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         self.assertEqual(
             [row["media_role"] for row in video_evidence_for_packet(packet)],
             [
-                "speaker_pruned",
-                "anchor_provider_pruned",
-                "anchor_provider_pruned",
-                "additional_provider_full",
-                "additional_provider_full",
-                "additional_provider_full",
+                "speaker_consensus_pruned",
+                "provider_consensus_pruned",
+                "provider_consensus_pruned",
+                "provider_consensus_pruned",
+                "provider_consensus_pruned",
+                "provider_consensus_pruned",
             ],
         )
 
@@ -384,7 +357,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         )
         self.assertEqual(condition_media["total_duration_seconds"], 60.0)
 
-    def test_answerability_uses_one_full_speaker_video_then_six_full_videos(self) -> None:
+    def test_answerability_uses_only_one_full_speaker_video(self) -> None:
         class Runner:
             def __init__(self) -> None:
                 self.calls = []
@@ -397,7 +370,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                         "video_paths": list(video_paths),
                     }
                 )
-                choice = "B" if "speaker-only condition" in prompt else "A"
+                choice = "B"
                 return json.dumps(
                     {
                         "choice": choice,
@@ -419,15 +392,43 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         )
 
         full_videos = [clip["full_local_video"] for clip in packet["clips"]]
-        self.assertEqual(len(runner.calls), 2)
+        self.assertEqual(len(runner.calls), 1)
         self.assertEqual(runner.calls[0]["video_paths"], full_videos[:1])
-        self.assertEqual(runner.calls[1]["video_paths"], full_videos)
-        self.assertEqual(len(prompt_rows), 2)
+        self.assertEqual(len(prompt_rows), 1)
         self.assertTrue(all("elapsed_seconds" in row for row in prompt_rows))
         self.assertTrue(
             all("elapsed_seconds" in evaluation for evaluation in result["evaluations"])
         )
-        self.assertEqual(result["gate"]["cross_view_gain"], 1)
+        self.assertFalse(result["gate"]["speaker_only_correct"])
+        self.assertNotIn("all_six_correct", result["gate"])
+
+    def test_qa_formality_failure_remains_blocking_for_six_users(self) -> None:
+        merged = merge_parallel_judges(
+            qa_formality_judge={
+                "checks": {
+                    "qa_formality": {
+                        "status": "FAIL",
+                        "reason": "synthetic formality failure",
+                        "fix": "rewrite the question",
+                    }
+                }
+            },
+            evidence_groundedness_judge={
+                "checks": {
+                    "evidence_groundedness": {
+                        "status": "PASS",
+                        "reason": "grounded",
+                        "fix": "",
+                    }
+                }
+            },
+            answerability={"gate": {"passed": True, "reason": "speaker chose wrong"}},
+            schema_errors=[],
+            qa_item=six_user_qa(),
+        )
+
+        self.assertFalse(merged["review_passed"])
+        self.assertIn("qa_formality", merged["blocking_failures"])
 
     def test_groundedness_prompt_row_uses_all_six_full_videos(self) -> None:
         packet = self.media_packet()

@@ -7,7 +7,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "hpc" / "qa" / "smoke" / "run_six_user_qa_runtime_probe.sbatch"
-PILOT = ROOT / "hpc" / "qa" / "experiments" / "run_six_user_qa_pilot_5.sbatch"
+PILOT = ROOT / "hpc" / "qa" / "experiments" / "run_six_user_qa_pilot_40.sbatch"
+OLD_PILOT = ROOT / "hpc" / "qa" / "experiments" / "run_six_user_qa_pilot_5.sbatch"
+RUNBOOK = ROOT / "docs" / "SIX_USER_QA_TORCH_RUNBOOK_CN.md"
 
 
 class SixUserTorchJobContractTests(unittest.TestCase):
@@ -24,6 +26,7 @@ class SixUserTorchJobContractTests(unittest.TestCase):
     def assert_common_contract(self, text: str) -> None:
         self.assertIn("#SBATCH --account=torch_pr_674_tandon_advanced", text)
         self.assertIn("#SBATCH --constraint=h100", text)
+        self.assertIn("#SBATCH --mem=64G", text)
         self.assertIn('OUTDIR="${OUTPUT_ROOT}/${RUN_MODE}_${SLURM_JOB_ID}"', text)
         self.assertIn('JOB_SCRATCH_ROOT="/scratch/${USER}/job_scratch/', text)
         for variable in (
@@ -49,16 +52,28 @@ class SixUserTorchJobContractTests(unittest.TestCase):
         self.assertIn("six_user_qa_result.json", text)
         self.assertIn("--selected-count 6", text)
         self.assertIn("--min-group-size 6", text)
-        self.assertIn("three_pruned_three_full_videos", text)
+        self.assertIn("six_pruned_videos", text)
+        self.assertIn("six_user_speaker_consensus", text)
+        self.assertIn("speaker_attempts", text)
         self.assertIn("speaker_only_correct", text)
-        self.assertIn("all_six_correct", text)
-        self.assertIn("cross_view_gain", text)
         self.assertIn("answerability_evaluated_condition_count", text)
-        self.assertIn("all_six_wrong_count", text)
-        self.assertIn("all_six_wrong_rate", text)
         self.assertIn("generator_video_count", text)
         self.assertIn("groundedness_video_count", text)
         self.assertIn("answerability_call_count", text)
+        self.assertIn('"answerability_call_count": answerability_call_count', text)
+        self.assertIn('"answerability_evaluated_condition_count": 1', text)
+        self.assertIn('row.get("stage") == "qa_formality_judge"', text)
+        self.assertIn('formality_check.get("status") != "PASS"', text)
+        self.assertIn('accepted_answerability_call_counts', text)
+        self.assertIn('rows = by_qa_attempt.get((qa_id, attempt), [])', text)
+        self.assertIn('answerability_row.get("media_role") != "full"', text)
+        self.assertIn('answerability_row.get("video_paths") != [speaker_full_video]', text)
+        self.assertNotIn('"all_six_correct"', text)
+        self.assertNotIn('"cross_view_gain"', text)
+        self.assertNotIn('"all_six_wrong_count"', text)
+        self.assertNotIn('"all_six_wrong_rate"', text)
+        self.assertIn("SIX_USER_QA_JOB_FINISHED", text)
+        self.assertNotIn("SIX_USER_QA_RUNTIME_PROBE_PASSED", text)
         self.assertIn("branch", text)
         self.assertIn("dirty_state", text)
         self.assertNotIn("latest_", text)
@@ -67,26 +82,62 @@ class SixUserTorchJobContractTests(unittest.TestCase):
         library_export = text.index(
             'export LD_LIBRARY_PATH="${FFMPEG_ENV}/lib:${LD_LIBRARY_PATH:-}"'
         )
-        decoder_import = text.index("from torchcodec.decoders import VideoDecoder")
+        self.assertIn('export FORCE_QWENVL_VIDEO_READER="decord"', text)
+        self.assertIn('export QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS="3136"', text)
+        self.assertIn('if python -m pip check > "${OUTDIR}/pip_check.txt" 2>&1; then', text)
+        self.assertIn("known_decord_platform_metadata_warning", text)
+        self.assertIn("from qwen_vl_utils.vision_process import get_video_reader_backend", text)
+        self.assertIn("from qwen_vl_utils import process_vision_info", text)
+        self.assertIn("six_user_video_preflight_passed", text)
+        self.assertIn('"min_pixels": 3136', text)
+        self.assertIn('"max_pixels": 65536', text)
+        self.assertIn("--max-image-pixels 65536", text)
+        self.assertIn('if video_backend != "decord":', text)
+        self.assertNotIn("from torchcodec", text)
+
+        decoder_import = text.index("import decord")
         storage_preflight = text.index("python -m training.torch_storage_preflight")
+        job_manifest = text.index('python - "${OUTDIR}/job_manifest.json"')
+        pip_check = text.index('if python -m pip check > "${OUTDIR}/pip_check.txt" 2>&1; then')
+        video_preflight = text.index("six_user_video_preflight_passed")
         model_command = text.index("generate_video_qa_loop")
         self.assertLess(path_export, decoder_import)
         self.assertLess(library_export, decoder_import)
         self.assertLess(storage_preflight, model_command)
+        self.assertLess(job_manifest, pip_check)
+        self.assertLess(video_preflight, model_command)
 
     def test_runtime_probe_contract(self) -> None:
         text = self.effective_text(PROBE)
         self.assert_common_contract(text)
+        self.assertIn("#SBATCH --time=01:30:00", text)
         self.assertIn("six_user_qa_runtime_probe", text)
         self.assertIn("ACCEPTED_TARGET:-1", text)
-        self.assertIn("EVIDENCE_TARGET:-8", text)
+        self.assertIn("EVIDENCE_TARGET:-1", text)
+        self.assertIn("MAX_GROUPS:-16", text)
+        self.assertIn("MAX_ATTEMPTS:-1", text)
+
+    def test_runbook_requires_a_passed_probe_before_pilot_submission(self) -> None:
+        text = self.read(RUNBOOK)
+        self.assertIn('if [[ "${PROBE_OK}" -eq 1 ]]; then', text)
+        self.assertIn('echo "STOP: runtime probe', text)
+        self.assertNotIn('# if [[ "${PROBE_OK}" -eq 1 ]]; then', text)
+        self.assertNotIn('PROBE_TASK_MANIFEST=TASK_MANIFEST=', text)
 
     def test_pilot_contract(self) -> None:
         text = self.effective_text(PILOT)
         self.assert_common_contract(text)
-        self.assertIn('RUN_MODE="six_user_qa_pilot_5"', text)
-        self.assertIn('ACCEPTED_TARGET="5"', text)
-        self.assertIn('EVIDENCE_TARGET="30"', text)
+        self.assertFalse(OLD_PILOT.is_file(), OLD_PILOT)
+        self.assertIn("#SBATCH --time=24:00:00", text)
+        self.assertIn('RUN_MODE="six_user_qa_pilot_40"', text)
+        self.assertIn('ACCEPTED_TARGET="40"', text)
+        self.assertIn('EVIDENCE_TARGET="40"', text)
+        self.assertIn('MAX_GROUPS="320"', text)
+        self.assertIn('MAX_ATTEMPTS="1"', text)
+        self.assertIn('ALLOW_PARTIAL="1"', text)
+        self.assertIn('--max-attempts "${MAX_ATTEMPTS}"', text)
+        self.assertIn('status = "partial"', text)
+        self.assertIn('if status == "failed":', text)
 
     def test_jobs_do_not_modify_training_contracts(self) -> None:
         for path in (PROBE, PILOT):
