@@ -99,6 +99,7 @@ def test_memory_safe_runner_has_long_context_guards_by_default(monkeypatch) -> N
         captured.update(kwargs)
         self.model_id = model_id
         self.max_image_pixels = kwargs["max_image_pixels"]
+        self.min_video_pixels = kwargs.get("min_video_pixels")
         self.video_fps = kwargs["video_fps"]
         self.max_input_tokens = kwargs["max_input_tokens"]
         self.min_free_gib = kwargs["min_free_gib"]
@@ -109,6 +110,7 @@ def test_memory_safe_runner_has_long_context_guards_by_default(monkeypatch) -> N
 
     for name in (
         "QWEN_MEMORY_SAFE_VIDEO_FPS",
+        "QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS",
         "QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS",
         "QWEN_MEMORY_SAFE_GPU_RESERVE_GIB",
         "QWEN_MEMORY_SAFE_MIN_FREE_GIB",
@@ -126,11 +128,41 @@ def test_memory_safe_runner_has_long_context_guards_by_default(monkeypatch) -> N
 
     assert runner.model_id == "Qwen/Qwen3.6-27B"
     assert captured["video_fps"] == MEMORY_SAFE_DEFAULT_VIDEO_FPS
+    assert captured["min_video_pixels"] is None
     assert captured["max_input_tokens"] == MEMORY_SAFE_DEFAULT_MAX_INPUT_TOKENS
     assert captured["min_free_gib"] == MEMORY_SAFE_DEFAULT_MIN_FREE_GIB
     assert captured["kv_bytes_per_token"] == MEMORY_SAFE_DEFAULT_KV_BYTES_PER_TOKEN
     assert captured["min_available_ram_gib"] == MEMORY_SAFE_DEFAULT_MIN_AVAILABLE_RAM_GIB
     assert captured["attn_implementation"] == MEMORY_SAFE_DEFAULT_ATTN_IMPLEMENTATION
+
+
+def test_memory_safe_runner_passes_explicit_video_minimum(monkeypatch) -> None:
+    captured = {}
+
+    def fake_base_init(self, model_id, **kwargs):
+        captured.update(kwargs)
+        self.model_id = model_id
+        self.max_image_pixels = kwargs["max_image_pixels"]
+        self.min_video_pixels = kwargs.get("min_video_pixels")
+        self.video_fps = kwargs["video_fps"]
+        self.max_input_tokens = kwargs["max_input_tokens"]
+        self.min_free_gib = kwargs["min_free_gib"]
+        self.kv_bytes_per_token = kwargs["kv_bytes_per_token"]
+        self.min_available_ram_gib = kwargs["min_available_ram_gib"]
+        self.attn_implementation = kwargs["attn_implementation"]
+        self.torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+
+    monkeypatch.setenv("QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS", "3136")
+    monkeypatch.setattr(Qwen3VLTransformersRunner, "__init__", fake_base_init)
+
+    runner = Qwen3VLMemorySafeTransformersRunner(
+        "Qwen/Qwen3.6-27B",
+        max_image_pixels=65_536,
+    )
+
+    assert runner.min_video_pixels == 3_136
+    assert captured["min_video_pixels"] == 3_136
+    assert captured["max_image_pixels"] == 65_536
 
 
 def test_memory_safe_runner_serializes_complete_generate_calls(monkeypatch) -> None:

@@ -901,6 +901,8 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
         video_fps = float(
             os.getenv("QWEN_MEMORY_SAFE_VIDEO_FPS", str(MEMORY_SAFE_DEFAULT_VIDEO_FPS))
         )
+        raw_min_video_pixels = os.getenv("QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS")
+        min_video_pixels = int(raw_min_video_pixels) if raw_min_video_pixels else None
         max_input_tokens = int(
             os.getenv(
                 "QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS",
@@ -955,6 +957,7 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
             model_id,
             max_new_tokens=max_new_tokens,
             max_image_pixels=max_image_pixels,
+            min_video_pixels=min_video_pixels,
             dtype=dtype,
             allow_cpu=allow_cpu,
             disable_thinking=disable_thinking,
@@ -970,6 +973,7 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
             "qwen_memory_safe_config "
             f"model_id={self.model_id} video_fps={self.video_fps:g} "
             f"max_image_pixels={self.max_image_pixels} "
+            f"min_video_pixels={self.min_video_pixels} "
             f"max_input_tokens={self.max_input_tokens} "
             f"gpu_workspace_reserve_gib={self.min_free_gib:g} "
             f"kv_bytes_per_token={self.kv_bytes_per_token} "
