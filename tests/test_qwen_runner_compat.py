@@ -221,7 +221,12 @@ def test_memory_safe_runner_caps_explicit_multimodal_video_budget(monkeypatch) -
     )
 
     assert result["content"] == [
-        {"type": "video", "video": "one.mp4", "fps": 0.5, "max_pixels": 131_072},
+        {
+            "type": "video",
+            "video": str(Path("one.mp4").resolve()),
+            "fps": 0.5,
+            "max_pixels": 131_072,
+        },
         {"type": "text", "text": "Question"},
     ]
 
