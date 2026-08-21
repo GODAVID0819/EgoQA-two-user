@@ -41,7 +41,13 @@ from .qwen3vl_runner import (
     OPENROUTER_REASONING_EFFORTS,
     make_runner,
 )
-from .schema import OPTION_LETTERS, extract_json_object, normalize_correct, validate_qa_item
+from .schema import (
+    OPTION_LETTERS,
+    extract_json_object,
+    normalize_correct,
+    six_user_media_role_contracts,
+    validate_qa_item,
+)
 
 
 class StreamingJsonlRows(list[dict[str, Any]]):
@@ -492,24 +498,8 @@ def six_user_role_metadata(
                 f"expected {expected_value!r}, got {actual_value!r}"
             )
 
-    legacy_consensus_roles = {
-        required_users[0]: "speaker_consensus_pruned",
-        required_users[1]: "provider_consensus_pruned",
-        required_users[2]: "provider_consensus_pruned",
-        required_users[3]: "provider_consensus_pruned",
-        required_users[4]: "provider_consensus_pruned",
-        required_users[5]: "provider_consensus_pruned",
-    }
-    provider_only_similarity_roles = {
-        required_users[0]: "speaker_reference_unpruned",
-        required_users[1]: "provider_similarity_pruned",
-        required_users[2]: "provider_similarity_pruned",
-        required_users[3]: "provider_similarity_pruned",
-        required_users[4]: "provider_similarity_pruned",
-        required_users[5]: "provider_similarity_pruned",
-    }
     media_roles = packet.get("media_roles")
-    if media_roles not in (legacy_consensus_roles, provider_only_similarity_roles):
+    if media_roles not in six_user_media_role_contracts(required_users):
         raise ValueError(
             "six-user packet media_roles must cover the ordered speaker and provider "
             "roles for either the legacy consensus mode or provider-only similarity "

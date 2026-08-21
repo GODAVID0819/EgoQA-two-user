@@ -29,6 +29,10 @@ from egolife_two_user_qa.video_qa_loop import (  # noqa: E402
     video_evidence_for_packet,
 )
 from egolife_two_user_qa import video_qa_loop  # noqa: E402
+from egolife_two_user_qa.prompts import (  # noqa: E402
+    build_evidence_groundedness_judge_prompt,
+    build_qa_formality_judge_prompt,
+)
 from egolife_two_user_qa.schema import validate_qa_item  # noqa: E402
 
 
@@ -89,6 +93,21 @@ def six_user_packet() -> dict[str, object]:
         ],
         "source_urls": {},
     }
+
+
+def provider_only_similarity_packet() -> dict[str, object]:
+    packet = six_user_packet()
+    media_roles = {
+        SIX_USERS[0]: "speaker_reference_unpruned",
+        **{user: "provider_similarity_pruned" for user in SIX_USERS[1:]},
+    }
+    packet["media_roles"] = media_roles
+    packet["generator_media_mode"] = "speaker_full_five_provider_pruned_videos"
+    packet["clips"] = [
+        {**clip, "media_role": media_roles[str(clip["agent_name"])]}
+        for clip in packet["clips"]
+    ]
+    return packet
 
 
 def qa_for_metadata(*, supporting_user: str = "provider_one") -> dict[str, object]:
@@ -175,18 +194,35 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         self.assertEqual(validate_qa_item(qa), [])
 
     def test_six_user_audit_accepts_provider_only_similarity_pruning_roles(self) -> None:
-        packet = six_user_packet()
-        packet["media_roles"] = {
-            SIX_USERS[0]: "speaker_reference_unpruned",
-            **{
-                user: "provider_similarity_pruned"
-                for user in SIX_USERS[1:]
-            },
-        }
+        packet = provider_only_similarity_packet()
 
         audit = human_audit_packet(packet)
 
         self.assertEqual(audit["media_roles"], packet["media_roles"])
+
+    def test_provider_only_packet_crosses_zero_gpu_qa_contract_pipeline(self) -> None:
+        packet = provider_only_similarity_packet()
+        qa = qa_for_metadata()
+
+        audit = human_audit_packet(packet)
+        complete_generator_metadata(qa, packet=packet, question_type="neutral")
+        schema_errors = validate_qa_item(qa)
+        formality_prompt = build_qa_formality_judge_prompt(
+            qa,
+            packet,
+            schema_errors=schema_errors,
+        )
+        groundedness_prompt = build_evidence_groundedness_judge_prompt(qa, packet)
+        answerability_conditions = build_answerability_conditions(SIX_USERS)
+
+        self.assertEqual(audit["media_roles"], packet["media_roles"])
+        self.assertEqual(schema_errors, [])
+        self.assertIn("six-user", formality_prompt)
+        self.assertIn("six-user", groundedness_prompt)
+        self.assertEqual(
+            [condition["condition_type"] for condition in answerability_conditions],
+            ["speaker_only", "combined_all_six_users"],
+        )
 
     def test_six_user_schema_rejects_supporting_claim_outside_input_users(self) -> None:
         qa = qa_for_metadata(supporting_user="outsider")

@@ -12,6 +12,33 @@ from .io_utils import iter_jsonl
 
 
 OPTION_LETTERS = ("A", "B", "C", "D", "E")
+
+
+def six_user_media_role_contracts(
+    required_users: list[str],
+) -> tuple[dict[str, str], ...]:
+    """返回当前与备份六用户剪枝模式共享的角色合同。"""
+
+    if len(required_users) != 6:
+        return ()
+    return (
+        {
+            required_users[0]: "speaker_reference_unpruned",
+            **{
+                user: "provider_similarity_pruned"
+                for user in required_users[1:]
+            },
+        },
+        {
+            required_users[0]: "speaker_consensus_pruned",
+            **{
+                user: "provider_consensus_pruned"
+                for user in required_users[1:]
+            },
+        },
+    )
+
+
 REQUIRED_QA_FIELDS = {
     "qa_id",
     "question",
@@ -136,15 +163,7 @@ def validate_qa_item(
                     f"{field} must match the ordered six-user required_users contract"
                 )
 
-        expected_media_roles = {
-            required_users[0]: "speaker_consensus_pruned",
-            required_users[1]: "provider_consensus_pruned",
-            required_users[2]: "provider_consensus_pruned",
-            required_users[3]: "provider_consensus_pruned",
-            required_users[4]: "provider_consensus_pruned",
-            required_users[5]: "provider_consensus_pruned",
-        }
-        if item.get("media_roles") != expected_media_roles:
+        if item.get("media_roles") not in six_user_media_role_contracts(required_users):
             errors.append("media_roles must cover all six ordered input users with valid roles")
 
         supporting_claims = item.get("supporting_user_claims")
