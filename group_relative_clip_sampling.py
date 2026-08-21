@@ -757,6 +757,134 @@ def clustered_speaker_consensus_pruning(
     }
 
 
+def clustered_speaker_provider_all_pairs_pruning(
+    frames_by_video: list[list[dict[str, Any]]],
+    embeddings_by_video: list[list[list[float]]],
+    *,
+    speaker_index: int,
+    start_seconds: float,
+    duration_seconds: float,
+    sample_interval_seconds: float,
+    cluster_count: int = 12,
+    high_similarity_threshold: float = 0.82,
+    min_pruned_video_seconds: float = 8.0,
+) -> dict[str, Any]:
+    """比较全部 speaker-provider cluster 对，仅裁剪过阈值的 provider cluster。"""
+
+    if len(frames_by_video) != 6 or len(embeddings_by_video) != 6:
+        raise ValueError("speaker provider pruning requires exactly 6 videos")
+    if speaker_index < 0 or speaker_index >= 6:
+        raise ValueError(f"speaker_index must be between 0 and 5, got {speaker_index}")
+    if duration_seconds <= 0:
+        raise ValueError("duration_seconds must be positive")
+    if sample_interval_seconds <= 0:
+        raise ValueError("sample_interval_seconds must be positive")
+
+    clusters_by_video = [
+        clustered_frame_representatives(frames, embeddings, cluster_count=cluster_count)
+        for frames, embeddings in zip(frames_by_video, embeddings_by_video)
+    ]
+    provider_indices = [index for index in range(6) if index != speaker_index]
+    speaker_clusters = clusters_by_video[speaker_index]
+    matrices = {
+        provider_index: frame_similarity_matrix(
+            speaker_clusters["representative_embeddings"],
+            clusters_by_video[provider_index]["representative_embeddings"],
+        )
+        for provider_index in provider_indices
+    }
+
+    events: list[dict[str, Any]] = []
+    marked_clusters = [set() for _ in range(6)]
+    trigger_events = [set() for _ in range(6)]
+    pairwise_comparison_count = 0
+    for provider_index in provider_indices:
+        matrix = matrices[provider_index]
+        pairwise_comparison_count += sum(len(row) for row in matrix)
+        provider_cluster_count = int(clusters_by_video[provider_index]["cluster_count"])
+        for provider_cluster_index in range(provider_cluster_count):
+            speaker_matches = [
+                {
+                    "speaker_cluster_index": speaker_cluster_index,
+                    "similarity": round(float(row[provider_cluster_index]), 6),
+                }
+                for speaker_cluster_index, row in enumerate(matrix)
+                if float(row[provider_cluster_index]) >= float(high_similarity_threshold)
+            ]
+            if not speaker_matches:
+                continue
+            event_index = len(events)
+            events.append(
+                {
+                    "event_index": event_index,
+                    "provider_index": provider_index,
+                    "provider_cluster_index": provider_cluster_index,
+                    "speaker_matches": speaker_matches,
+                    "max_similarity": max(
+                        float(match["similarity"]) for match in speaker_matches
+                    ),
+                    "deleted_clusters": [
+                        {
+                            "video_index": provider_index,
+                            "cluster_index": provider_cluster_index,
+                        }
+                    ],
+                }
+            )
+            marked_clusters[provider_index].add(provider_cluster_index)
+            trigger_events[provider_index].add(event_index)
+
+    window_start = float(start_seconds)
+    window_end = round(window_start + float(duration_seconds), 3)
+    video_results = []
+    for video_index, (frames, clusters) in enumerate(zip(frames_by_video, clusters_by_video)):
+        marked_frame_indices: set[int] = set()
+        for marked_cluster_index in marked_clusters[video_index]:
+            marked_frame_indices.update(
+                int(index)
+                for index in clusters["representatives"][marked_cluster_index].get(
+                    "member_indices", []
+                )
+            )
+        remove_intervals = _intervals_for_frame_indices(
+            frames,
+            marked_frame_indices,
+            window_start=window_start,
+            window_end=window_end,
+            sample_interval_seconds=sample_interval_seconds,
+        )
+        keep_intervals = _subtract_intervals((window_start, window_end), remove_intervals)
+        kept_duration = round(sum(end - start for start, end in keep_intervals), 3)
+        removed_duration = round(sum(end - start for start, end in remove_intervals), 3)
+        video_results.append(
+            {
+                "video_index": video_index,
+                "cluster_count": int(clusters["cluster_count"]),
+                "clusters": clusters["representatives"],
+                "marked_cluster_indices": sorted(marked_clusters[video_index]),
+                "marked_frame_indices": sorted(marked_frame_indices),
+                "trigger_event_indices": sorted(trigger_events[video_index]),
+                "remove_intervals": remove_intervals,
+                "keep_intervals": keep_intervals,
+                "kept_duration_seconds": kept_duration,
+                "removed_duration_seconds": removed_duration,
+                "passed": kept_duration >= float(min_pruned_video_seconds),
+            }
+        )
+
+    return {
+        "method": "speaker_provider_all_pairs_provider_only",
+        "speaker_index": speaker_index,
+        "provider_indices": provider_indices,
+        "cluster_count": cluster_count,
+        "high_similarity_threshold": high_similarity_threshold,
+        "pairwise_comparison_count": pairwise_comparison_count,
+        "events": events,
+        "videos": video_results,
+        "passed": bool(events) and all(video["passed"] for video in video_results),
+    }
+
+
 def clustered_temporal_similarity_pruning(
     left_frames: list[dict[str, Any]],
     right_frames: list[dict[str, Any]],
@@ -1978,20 +2106,24 @@ def materialize_six_user_consensus_candidate(
         clip = _materialize_six_user_clip(
             rows[source_index]["clip"],
             media_role=(
-                "speaker_consensus_pruned"
+                "speaker_reference_unpruned"
                 if position == 0
-                else "provider_consensus_pruned"
+                else "provider_similarity_pruned"
             ),
             position=position,
             output_dir=candidate_dir,
-            keep_intervals=list(diagnostics.get("keep_intervals") or []),
+            keep_intervals=(
+                None
+                if position == 0
+                else list(diagnostics.get("keep_intervals") or [])
+            ),
             remove_intervals=list(diagnostics.get("remove_intervals") or []),
             source_edges=[],
             ffmpeg_binary=ffmpeg_binary,
         )
-        clip["temporal_pruning"].update(
+        clip.setdefault("temporal_pruning", {}).update(
             {
-                "method": "speaker_cluster_provider_argmax_consensus",
+                "method": consensus.get("method"),
                 "speaker_index": speaker_index,
                 "source_video_index": source_index,
                 "marked_cluster_indices": list(
@@ -2077,7 +2209,7 @@ def analyze_group_relative_similarity(
         speaker_attempts = []
         speaker_candidates = []
         for speaker_index in range(6):
-            consensus = clustered_speaker_consensus_pruning(
+            consensus = clustered_speaker_provider_all_pairs_pruning(
                 [row["frames"] for row in rows],
                 frame_embeddings_by_clip,
                 speaker_index=speaker_index,
@@ -2086,7 +2218,6 @@ def analyze_group_relative_similarity(
                 sample_interval_seconds=sample_interval_seconds,
                 cluster_count=pruning_clusters_per_video,
                 high_similarity_threshold=high_similarity_interval_threshold,
-                min_high_provider_matches=3,
                 min_pruned_video_seconds=min_pruned_video_seconds,
             )
             if not consensus.get("passed"):
@@ -2099,7 +2230,7 @@ def analyze_group_relative_similarity(
                     if not video.get("passed", False)
                 ]
                 failure_reason = (
-                    "no_speaker_cluster_reached_provider_consensus"
+                    "no_provider_cluster_reached_similarity_threshold"
                     if not consensus.get("events")
                     else "min_retained_duration_violated"
                 )
@@ -2200,7 +2331,6 @@ def analyze_group_relative_similarity(
                 "sampled_source_users": [row["clip"].get("agent_name") for row in rows],
                 "pruning_clusters_per_video": pruning_clusters_per_video,
                 "high_similarity_interval_threshold": high_similarity_interval_threshold,
-                "min_high_provider_matches": 3,
                 "min_pruned_video_seconds": min_pruned_video_seconds,
             },
             "speaker_attempts": speaker_attempts,
@@ -2611,12 +2741,12 @@ def build_candidate_packet(group_result: dict[str, Any]) -> dict[str, Any]:
                 "speaker_attempts": list(group_result.get("speaker_attempts") or []),
                 "requirement": (
                     "Six synchronized input videos are ordered as one speaker and five providers. "
-                    "Generation uses six speaker-consensus-pruned videos. Groundedness uses all "
-                    "six full originals. Answerability uses only the speaker full original and "
-                    "requires the speaker-only condition to choose a valid wrong option; provider "
-                    "answerability is not evaluated."
+                    "Generation uses the full speaker video and five provider-only similarity-pruned "
+                    "videos. Groundedness uses all six full originals. Answerability requires the "
+                    "speaker-only condition to choose a valid wrong option and the all-six condition "
+                    "to choose the declared correct option."
                 ),
-                "generator_media_mode": "six_pruned_videos",
+                "generator_media_mode": "speaker_full_five_provider_pruned_videos",
                 "clips": selected_clips,
                 "source_urls": {
                     "videos": [clip.get("video_url") for clip in selected_clips],

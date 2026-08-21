@@ -225,19 +225,19 @@ rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines
 if not rows:
     raise SystemExit("no six-user candidate was materialized")
 expected_roles = [
-    "speaker_consensus_pruned",
-    "provider_consensus_pruned",
-    "provider_consensus_pruned",
-    "provider_consensus_pruned",
-    "provider_consensus_pruned",
-    "provider_consensus_pruned",
+    "speaker_reference_unpruned",
+    "provider_similarity_pruned",
+    "provider_similarity_pruned",
+    "provider_similarity_pruned",
+    "provider_similarity_pruned",
+    "provider_similarity_pruned",
 ]
 for row in rows:
     users = row.get("input_users")
     clips = row.get("clips")
     if row.get("candidate_type") != "six_user_speaker_consensus":
         raise SystemExit("candidate_type mismatch")
-    if row.get("generator_media_mode") != "six_pruned_videos":
+    if row.get("generator_media_mode") != "speaker_full_five_provider_pruned_videos":
         raise SystemExit("generator media contract mismatch")
     if not isinstance(users, list) or len(users) != 6 or row.get("required_users") != users:
         raise SystemExit("ordered six-user contract mismatch")
@@ -368,19 +368,28 @@ for row in accepted:
     attempt = row.get("attempt_count")
     rows = by_qa_attempt.get((qa_id, attempt), [])
     accepted_answerability_call_counts.append(len(rows))
-    if len(rows) != 1:
+    if len(rows) != 2:
         raise SystemExit(
-            f"accepted QA must have exactly 1 answerability call: qa_id={qa_id} "
+            f"accepted QA must have exactly 2 answerability calls: qa_id={qa_id} "
             f"attempt={attempt} count={len(rows)}"
         )
-    answerability_row = rows[0]
+    answerability_rows = {
+        str(item.get("condition_id") or "").split("::", 1)[0]: item
+        for item in rows
+    }
+    speaker_answerability = answerability_rows.get("speaker_only")
+    all_six_answerability = answerability_rows.get("combined_all_six_users")
+    if speaker_answerability is None or all_six_answerability is None:
+        raise SystemExit(f"accepted QA is missing an answerability condition: {qa_id}")
     speaker_user = str(row.get("speaker_user") or "")
     if not speaker_user:
         raise SystemExit(f"accepted row is missing speaker_user: {qa_id}")
-    if answerability_row.get("condition_id") != f"speaker_only::{speaker_user}":
+    if speaker_answerability.get("condition_id") != f"speaker_only::{speaker_user}":
         raise SystemExit(f"answerability condition does not match speaker: {qa_id}")
-    if answerability_row.get("media_role") != "full":
+    if speaker_answerability.get("media_role") != "full":
         raise SystemExit(f"speaker-only answerability must use full media: {qa_id}")
+    if all_six_answerability.get("media_role") != "full":
+        raise SystemExit(f"all-six answerability must use full media: {qa_id}")
     speaker_evidence = [
         item
         for item in (row.get("video_evidence") or [])
@@ -391,12 +400,21 @@ for row in accepted:
     speaker_full_video = str(speaker_evidence[0].get("full_local_video") or "")
     if not speaker_full_video:
         raise SystemExit(f"accepted row speaker full video is missing: {qa_id}")
-    if answerability_row.get("video_paths") != [speaker_full_video]:
+    if speaker_answerability.get("video_paths") != [speaker_full_video]:
         raise SystemExit(f"answerability video does not match speaker full video: {qa_id}")
+    full_videos = [
+        str(item.get("full_local_video") or "")
+        for item in (row.get("video_evidence") or [])
+    ]
+    if len(full_videos) != 6 or not all(full_videos):
+        raise SystemExit(f"accepted row must identify six full videos: {qa_id}")
+    if all_six_answerability.get("video_paths") != full_videos:
+        raise SystemExit(f"all-six answerability videos do not match full videos: {qa_id}")
     gate = (((row.get("review") or {}).get("answerability") or {}).get("gate") or {})
     required = {
         "speaker_only_correct": False,
-        "answerability_evaluated_condition_count": 1,
+        "all_six_correct": True,
+        "answerability_evaluated_condition_count": 2,
     }
     for key, expected in required.items():
         if gate.get(key) != expected:
@@ -436,7 +454,8 @@ result = {
     "groundedness_video_count": 6,
     "answerability_call_count": answerability_call_count,
     "speaker_only_correct": False if accepted else None,
-    "answerability_evaluated_condition_count": 1,
+    "all_six_correct": True if accepted else None,
+    "answerability_evaluated_condition_count": 2,
 }
 (output_dir / "six_user_qa_result.json").write_text(
     json.dumps(result, ensure_ascii=False, indent=2) + "\n",

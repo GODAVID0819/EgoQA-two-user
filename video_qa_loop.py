@@ -774,6 +774,11 @@ def build_answerability_conditions(required_users: list[str]) -> list[dict[str, 
                 "condition_type": "speaker_only",
                 "users": [users[0]],
             },
+            {
+                "condition_id": "combined_all_six_users::" + "+".join(users),
+                "condition_type": "combined_all_six_users",
+                "users": users,
+            },
         ]
     conditions = [
         {
@@ -822,6 +827,11 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
         speaker_rows = [
             row for row in evaluations if row.get("condition_type") == "speaker_only"
         ]
+        all_six_rows = [
+            row
+            for row in evaluations
+            if row.get("condition_type") == "combined_all_six_users"
+        ]
         base = {"answerability_evaluated_condition_count": len(evaluations)}
         if not speaker_rows:
             return {
@@ -854,11 +864,44 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "failure_label": "speaker_only_correct",
                 **metrics,
             }
+        if not all_six_rows:
+            return {
+                "passed": False,
+                "reason": "missing all-six evaluation",
+                "failure_label": "all_six_missing",
+                **metrics,
+            }
+        all_six_choice, all_six_invalid = parsed_choice(all_six_rows[-1].get("choice"))
+        if all_six_invalid:
+            return {
+                "passed": False,
+                "reason": "all-six evaluation did not select exactly one A-E answer",
+                "failure_label": "all_six_unparsed",
+                "all_six_choice": None,
+                "all_six_correct": False,
+                **metrics,
+            }
+        all_six_correct = all_six_choice == correct
+        combined_metrics = {
+            "all_six_choice": all_six_choice,
+            "all_six_correct": all_six_correct,
+            **metrics,
+        }
+        if not all_six_correct:
+            return {
+                "passed": False,
+                "reason": f"all-six condition did not select correct answer {correct}",
+                "failure_label": "all_six_wrong",
+                **combined_metrics,
+            }
         return {
             "passed": True,
-            "reason": "speaker-only condition selected a valid option other than the declared correct answer",
+            "reason": (
+                "speaker-only condition selected a wrong option and all-six condition "
+                "selected the declared correct answer"
+            ),
             "failure_label": None,
-            **metrics,
+            **combined_metrics,
         }
 
     combined = [row for row in evaluations if row.get("condition_type") == "combined_all_users"]
