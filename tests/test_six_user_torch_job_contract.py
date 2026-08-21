@@ -113,6 +113,11 @@ class SixUserTorchJobContractTests(unittest.TestCase):
     def test_runtime_probe_contract(self) -> None:
         text = self.effective_text(PROBE)
         self.assert_common_contract(text)
+        self.assertIn('export QWEN_MEMORY_SAFE_ATTN_IMPLEMENTATION="sdpa"', text)
+        self.assertNotIn(
+            'export QWEN_MEMORY_SAFE_ATTN_IMPLEMENTATION="flash_attention_2"',
+            text,
+        )
         self.assertIn("#SBATCH --time=01:30:00", text)
         self.assertIn("six_user_qa_runtime_probe", text)
         self.assertIn("ACCEPTED_TARGET:-1", text)
