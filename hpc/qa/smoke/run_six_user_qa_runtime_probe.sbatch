@@ -18,7 +18,7 @@ ACCEPTED_TARGET="${ACCEPTED_TARGET:-1}"
 EVIDENCE_TARGET="${EVIDENCE_TARGET:-1}"
 MAX_GROUPS="${MAX_GROUPS:-16}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-1}"
-ALLOW_PARTIAL="${ALLOW_PARTIAL:-0}"
+ALLOW_PARTIAL="${ALLOW_PARTIAL:-1}"
 
 PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/outputs/six_user_qa}"
@@ -430,14 +430,30 @@ for row in accepted:
         raise SystemExit(f"accepted row has non-passing qa_formality gate: {row.get('qa_id')}")
 
 attempted_count = len(accepted) + len(rejected)
+completed_review_count = 0
+for row in [*accepted, *rejected]:
+    review = row.get("review") or {}
+    checks = ((review.get("judger") or {}).get("checks") or {})
+    evaluations = ((review.get("answerability") or {}).get("evaluations") or [])
+    condition_types = {
+        str(item.get("condition_type") or "")
+        for item in evaluations
+    }
+    if (
+        (checks.get("qa_formality") or {}).get("status") in {"PASS", "FAIL"}
+        and (checks.get("evidence_groundedness") or {}).get("status") in {"PASS", "FAIL"}
+        and (checks.get("answerability") or {}).get("status") in {"PASS", "FAIL"}
+        and condition_types == {"speaker_only", "combined_all_six_users"}
+    ):
+        completed_review_count += 1
 answerability_call_count = (
     accepted_answerability_call_counts[0]
     if accepted_answerability_call_counts
-    else 0
+    else (2 if completed_review_count else 0)
 )
 if len(accepted) >= accepted_target:
     status = "passed"
-elif allow_partial and accepted:
+elif allow_partial and completed_review_count > 0:
     status = "partial"
 else:
     status = "failed"
@@ -453,6 +469,7 @@ result = {
     "generator_video_count": 6,
     "groundedness_video_count": 6,
     "answerability_call_count": answerability_call_count,
+    "runtime_completed_review_count": completed_review_count,
     "speaker_only_correct": False if accepted else None,
     "all_six_correct": True if accepted else None,
     "answerability_evaluated_condition_count": 2,
@@ -474,15 +491,19 @@ if status == "failed":
     )
 PY
 
-python -m egolife_two_user_qa validate_outputs \
-  --qa "${OUTDIR}/qa_mcq.jsonl" \
-  --csv-output "${OUTDIR}/qa_mcq.csv" \
-  --human-review-output "${OUTDIR}/human_review_sheet.md" \
-  --report "${OUTDIR}/generation_report.md" \
-  --strict-review
+if [[ -s "${OUTDIR}/qa_mcq.jsonl" ]]; then
+  python -m egolife_two_user_qa validate_outputs \
+    --qa "${OUTDIR}/qa_mcq.jsonl" \
+    --csv-output "${OUTDIR}/qa_mcq.csv" \
+    --human-review-output "${OUTDIR}/human_review_sheet.md" \
+    --report "${OUTDIR}/generation_report.md" \
+    --strict-review
 
-python -m egolife_two_user_qa materialize_review_videos \
-  --qa "${OUTDIR}/qa_mcq.jsonl" \
-  --output-dir "${OUTDIR}/review_videos"
+  python -m egolife_two_user_qa materialize_review_videos \
+    --qa "${OUTDIR}/qa_mcq.jsonl" \
+    --output-dir "${OUTDIR}/review_videos"
+else
+  echo "No accepted QA rows; semantic rejections remain recorded for pilot analysis."
+fi
 
 echo "SIX_USER_QA_JOB_FINISHED run_mode=${RUN_MODE} result=${OUTDIR}/six_user_qa_result.json"

@@ -124,6 +124,11 @@ class SixUserTorchJobContractTests(unittest.TestCase):
         self.assertIn("EVIDENCE_TARGET:-1", text)
         self.assertIn("MAX_GROUPS:-16", text)
         self.assertIn("MAX_ATTEMPTS:-1", text)
+        self.assertIn("ALLOW_PARTIAL=\"${ALLOW_PARTIAL:-1}\"", text)
+        self.assertIn("completed_review_count", text)
+        self.assertIn("allow_partial and completed_review_count > 0", text)
+        self.assertIn('"runtime_completed_review_count": completed_review_count', text)
+        self.assertIn('if [[ -s "${OUTDIR}/qa_mcq.jsonl" ]]; then', text)
 
     def test_runbook_requires_a_passed_probe_before_pilot_submission(self) -> None:
         text = self.read(RUNBOOK)
