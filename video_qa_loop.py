@@ -492,7 +492,7 @@ def six_user_role_metadata(
                 f"expected {expected_value!r}, got {actual_value!r}"
             )
 
-    expected_media_roles = {
+    legacy_consensus_roles = {
         required_users[0]: "speaker_consensus_pruned",
         required_users[1]: "provider_consensus_pruned",
         required_users[2]: "provider_consensus_pruned",
@@ -500,14 +500,23 @@ def six_user_role_metadata(
         required_users[4]: "provider_consensus_pruned",
         required_users[5]: "provider_consensus_pruned",
     }
+    provider_only_similarity_roles = {
+        required_users[0]: "speaker_reference_unpruned",
+        required_users[1]: "provider_similarity_pruned",
+        required_users[2]: "provider_similarity_pruned",
+        required_users[3]: "provider_similarity_pruned",
+        required_users[4]: "provider_similarity_pruned",
+        required_users[5]: "provider_similarity_pruned",
+    }
     media_roles = packet.get("media_roles")
-    if media_roles != expected_media_roles:
+    if media_roles not in (legacy_consensus_roles, provider_only_similarity_roles):
         raise ValueError(
             "six-user packet media_roles must cover the ordered speaker and provider "
-            f"roles: expected {expected_media_roles!r}, got {media_roles!r}"
+            "roles for either the legacy consensus mode or provider-only similarity "
+            f"mode: got {media_roles!r}"
         )
 
-    return {**expected, "media_roles": dict(expected_media_roles)}
+    return {**expected, "media_roles": dict(media_roles)}
 
 
 def human_audit_packet(packet: dict[str, Any]) -> dict[str, Any]:

@@ -174,6 +174,20 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         self.assertNotIn("provider_two", {row["user"] for row in qa["supporting_user_claims"]})
         self.assertEqual(validate_qa_item(qa), [])
 
+    def test_six_user_audit_accepts_provider_only_similarity_pruning_roles(self) -> None:
+        packet = six_user_packet()
+        packet["media_roles"] = {
+            SIX_USERS[0]: "speaker_reference_unpruned",
+            **{
+                user: "provider_similarity_pruned"
+                for user in SIX_USERS[1:]
+            },
+        }
+
+        audit = human_audit_packet(packet)
+
+        self.assertEqual(audit["media_roles"], packet["media_roles"])
+
     def test_six_user_schema_rejects_supporting_claim_outside_input_users(self) -> None:
         qa = qa_for_metadata(supporting_user="outsider")
         complete_generator_metadata(qa, packet=six_user_packet(), question_type="neutral")
