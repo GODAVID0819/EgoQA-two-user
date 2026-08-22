@@ -221,7 +221,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         self.assertIn("six-user", groundedness_prompt)
         self.assertEqual(
             [condition["condition_type"] for condition in answerability_conditions],
-            ["speaker_only", "combined_all_six_users"],
+            ["speaker_only"],
         )
 
     def test_six_user_schema_rejects_supporting_claim_outside_input_users(self) -> None:
@@ -273,7 +273,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         self.assertNotIn("supporting_user_claims", qa)
         self.assertEqual(validate_qa_item(qa), [])
 
-    def test_six_users_build_speaker_and_all_six_conditions(self) -> None:
+    def test_six_users_suspend_all_six_condition_by_default(self) -> None:
         conditions = build_answerability_conditions(SIX_USERS)
 
         self.assertEqual(
@@ -284,35 +284,42 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                     "condition_type": "speaker_only",
                     "users": ["speaker"],
                 },
-                {
-                    "condition_id": "combined_all_six_users::" + "+".join(SIX_USERS),
-                    "condition_type": "combined_all_six_users",
-                    "users": SIX_USERS,
-                },
             ],
         )
 
-    def test_six_user_gate_passes_when_speaker_is_wrong_and_all_six_is_correct(self) -> None:
+    def test_feature_flag_restores_all_six_condition(self) -> None:
+        with mock.patch.object(
+            video_qa_loop,
+            "ENABLE_COMBINED_ALL_SIX_ANSWERABILITY",
+            True,
+        ):
+            conditions = build_answerability_conditions(SIX_USERS)
+
+        self.assertEqual(
+            [condition["condition_type"] for condition in conditions],
+            ["speaker_only", "combined_all_six_users"],
+        )
+
+    def test_six_user_gate_passes_when_speaker_is_wrong(self) -> None:
         qa = six_user_qa(correct="A")
         conditions = build_answerability_conditions(SIX_USERS)
         gate = answerability_gate(
             qa,
-            [evaluation(conditions[0], "B"), evaluation(conditions[1], "A")],
+            [evaluation(conditions[0], "B")],
         )
 
         self.assertTrue(gate["passed"])
         self.assertFalse(gate["speaker_only_correct"])
         self.assertEqual(gate["speaker_only_choice"], "B")
-        self.assertTrue(gate["all_six_correct"])
-        self.assertEqual(gate["all_six_choice"], "A")
-        self.assertEqual(gate["answerability_evaluated_condition_count"], 2)
+        self.assertNotIn("all_six_correct", gate)
+        self.assertEqual(gate["answerability_evaluated_condition_count"], 1)
 
     def test_speaker_only_correct_is_blocking(self) -> None:
         qa = six_user_qa(correct="A")
         conditions = build_answerability_conditions(SIX_USERS)
         gate = answerability_gate(
             qa,
-            [evaluation(conditions[0], "A"), evaluation(conditions[1], "A")],
+            [evaluation(conditions[0], "A")],
         )
 
         self.assertFalse(gate["passed"])
@@ -325,35 +332,40 @@ class SixUserAnswerabilityTests(unittest.TestCase):
 
         speaker_invalid = answerability_gate(
             qa,
-            [evaluation(conditions[0], None), evaluation(conditions[1], "A")],
+            [evaluation(conditions[0], None)],
         )
 
         self.assertFalse(speaker_invalid["passed"])
         self.assertEqual(speaker_invalid["failure_label"], "speaker_only_unparsed")
 
-    def test_all_six_wrong_missing_or_unparsed_is_blocking(self) -> None:
+    def test_restored_all_six_condition_keeps_legacy_gate_contract(self) -> None:
         qa = six_user_qa(correct="A")
-        conditions = build_answerability_conditions(SIX_USERS)
+        with mock.patch.object(
+            video_qa_loop,
+            "ENABLE_COMBINED_ALL_SIX_ANSWERABILITY",
+            True,
+        ):
+            conditions = build_answerability_conditions(SIX_USERS)
 
-        wrong = answerability_gate(
-            qa,
-            [evaluation(conditions[0], "B"), evaluation(conditions[1], "C")],
-        )
-        missing = answerability_gate(qa, [evaluation(conditions[0], "B")])
-        unparsed = answerability_gate(
-            qa,
-            [evaluation(conditions[0], "B"), evaluation(conditions[1], None)],
-        )
+            wrong = answerability_gate(
+                qa,
+                [evaluation(conditions[0], "B"), evaluation(conditions[1], "C")],
+            )
+            missing = answerability_gate(qa, [evaluation(conditions[0], "B")])
+            unparsed = answerability_gate(
+                qa,
+                [evaluation(conditions[0], "B"), evaluation(conditions[1], None)],
+            )
 
         self.assertEqual(wrong["failure_label"], "all_six_wrong")
         self.assertEqual(missing["failure_label"], "all_six_missing")
         self.assertEqual(unparsed["failure_label"], "all_six_unparsed")
 
-    def test_run_eval_calls_runner_twice_for_six_users(self) -> None:
+    def test_run_eval_calls_runner_once_for_six_users(self) -> None:
         class Runner:
             def __init__(self) -> None:
                 self.calls: list[dict[str, object]] = []
-                self.choices = iter(("B", "A"))
+                self.choices = iter(("B",))
 
             def generate(self, prompt, *, image_paths, video_paths):
                 choice = next(self.choices)
@@ -382,8 +394,8 @@ class SixUserAnswerabilityTests(unittest.TestCase):
             prompt_rows=[],
         )
 
-        self.assertEqual(len(runner.calls), 2)
-        self.assertEqual(len(result["evaluations"]), 2)
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(len(result["evaluations"]), 1)
         self.assertTrue(result["gate"]["passed"])
 
     def test_six_user_media_routes_generator_and_judges_in_order(self) -> None:
@@ -430,7 +442,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         )
         self.assertEqual(condition_media["total_duration_seconds"], 60.0)
 
-    def test_answerability_uses_full_speaker_then_all_six_full_videos(self) -> None:
+    def test_answerability_uses_only_full_speaker_video_while_all_six_is_suspended(self) -> None:
         class Runner:
             def __init__(self) -> None:
                 self.calls = []
@@ -443,7 +455,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                         "video_paths": list(video_paths),
                     }
                 )
-                choice = "B" if len(self.calls) == 1 else "A"
+                choice = "B"
                 return json.dumps(
                     {
                         "choice": choice,
@@ -465,16 +477,15 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         )
 
         full_videos = [clip["full_local_video"] for clip in packet["clips"]]
-        self.assertEqual(len(runner.calls), 2)
+        self.assertEqual(len(runner.calls), 1)
         self.assertEqual(runner.calls[0]["video_paths"], full_videos[:1])
-        self.assertEqual(runner.calls[1]["video_paths"], full_videos)
-        self.assertEqual(len(prompt_rows), 2)
+        self.assertEqual(len(prompt_rows), 1)
         self.assertTrue(all("elapsed_seconds" in row for row in prompt_rows))
         self.assertTrue(
             all("elapsed_seconds" in evaluation for evaluation in result["evaluations"])
         )
         self.assertFalse(result["gate"]["speaker_only_correct"])
-        self.assertTrue(result["gate"]["all_six_correct"])
+        self.assertNotIn("all_six_correct", result["gate"])
 
     def test_qa_formality_failure_remains_blocking_for_six_users(self) -> None:
         merged = merge_parallel_judges(

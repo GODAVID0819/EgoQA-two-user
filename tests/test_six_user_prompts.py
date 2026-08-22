@@ -81,15 +81,18 @@ class SixUserPromptTests(unittest.TestCase):
         self.assertNotIn("Only all three required users", prompt)
         self.assertNotIn("omitting either evidence provider", prompt)
 
-    def test_groundedness_prompt_allows_unused_providers(self) -> None:
+    def test_groundedness_prompt_does_not_duplicate_answerability_requirement(self) -> None:
         prompt = build_evidence_groundedness_judge_prompt(
             six_user_qa(),
             six_user_packet(),
         )
 
         self.assertIn("six-user", prompt)
-        self.assertIn("at least one external provider view or provider combination", prompt)
-        self.assertIn("Do not fail merely because an input provider is unused", prompt)
+        self.assertNotIn("at least one external provider view or provider combination", prompt)
+        self.assertNotIn("Do not fail merely because an input provider is unused", prompt)
+        self.assertNotIn("answer-bearing evidence missing from the speaker view", prompt)
+        self.assertNotIn("One or more provider views may support the answer", prompt)
+        self.assertNotIn("unused provider does not invalidate the item", prompt)
         self.assertNotIn("distinct answer-bearing contribution from each", prompt)
 
     def test_answerability_prompts_describe_only_two_conditions(self) -> None:
@@ -121,6 +124,8 @@ class SixUserPromptTests(unittest.TestCase):
 
         self.assertIn("qa_formality judge for a six-user multiple-choice question", prompt)
         self.assertNotIn("three-user multiple-choice question", prompt)
+        self.assertNotIn("other_person_activity_query", prompt)
+        self.assertNotIn("concurrent activity report", prompt)
 
     def test_two_user_generation_prompt_keeps_legacy_dependency(self) -> None:
         prompt = build_video_generation_prompt(two_user_packet(), "neutral")

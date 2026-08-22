@@ -245,7 +245,6 @@ def test_production_judge_does_not_request_or_attach_pass_fail_logprobs() -> Non
                                 for name in (
                                     "first_person_perspective",
                                     "naturalness_and_clarity",
-                                    "other_person_activity_query",
                                     "direct_name_leakage",
                                     "timestamp_citation",
                                 )
@@ -330,7 +329,6 @@ def test_parallel_review_routes_formality_to_qwen_and_visual_checks_to_openroute
                                 for name in (
                                     "first_person_perspective",
                                     "naturalness_and_clarity",
-                                    "other_person_activity_query",
                                     "direct_name_leakage",
                                     "timestamp_citation",
                                 )

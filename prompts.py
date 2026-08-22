@@ -612,14 +612,6 @@ QA_FORMALITY_CHECK_SCHEMA = {
                 "clear, mutually exclusive, parallel options"
             ),
         },
-        "other_person_activity_query": {
-            "status": "PASS/FAIL",
-            "reason": (
-                "whether the question asks what one person was doing concurrently with another "
-                "event instead of asking for a concrete missing object, state, location, outcome, "
-                "consequence, explanation, interaction result, or follow-up"
-            ),
-        },
         "direct_name_leakage": {
             "status": "PASS/FAIL",
             "reason": (
@@ -1003,9 +995,7 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
     if six_user_mode:
         required_users_order = (
             "required_users[0] is the speaker. required_users[1] through required_users[5] "
-            "are providers. The speaker view alone must be insufficient, while "
-            "the six-video input must support one unique answer. One or more provider "
-            "views may support the answer; an unused provider does not invalidate the item."
+            "are providers."
         )
     else:
         required_users_order = (
@@ -1563,26 +1553,18 @@ Run every semantic subcheck explicitly:
 - FAIL vague references, incompatible option types, dataset language such as video/clip/frame/camera/evidence provider, or wording that would be unnatural for someone recalling their experience.
 - Judge semantic form only, not whether the described facts are true.
 
-3. other_person_activity_query
-- FAIL when the question asks what one person was doing while or when another person was doing something else, and the answer is that person's concurrent activity.
-- Apply this restriction in either direction: reject both an asker-side event used to query the provider's activity and a provider-side event used to query the asker's activity.
-- FAIL pair-matching questions whose options encode two concurrent activities.
-- The question still FAILS when the anchor event is concrete, the wording is natural, or the temporal overlap could be verified from synchronized videos.
-- PASS linked task outcomes, interactions, and post-handoff follow-ups only when the answer target is a concrete object, identity, state, location, placement, outcome, consequence, explanation, interaction result, or follow-up rather than a concurrent activity report.
-- Do not judge whether the described facts are visually grounded, whether a clip was cropped, or whether one view is sufficient.
-
-4. direct_name_leakage
+3. direct_name_leakage
 - FAIL when the question or any option directly names a required user or another participant. PASS otherwise.
 - Natural descriptive references such as "the person in the dark jacket beside the television" are allowed.
 - Required-user names below are provided only for this text comparison.
 
-5. timestamp_citation
+4. timestamp_citation
 - FAIL when the question or any option cites a clock time, timestamp, timecode, frame number, seconds-from-start, minute mark, or similar dataset-like temporal coordinate.
 - Examples that FAIL include "around 12:53", "at 00:42", "at timestamp 35.2", "during the first 15 seconds", and "near frame 200".
 - Natural relative wording such as while, when, before, after, later, at the same time, or a few minutes later is allowed.
 - Internal evidence timeframes are outside this judge's scope and are not shown.
 
-6. ambiguous_reference
+5. ambiguous_reference
 - FAIL when the question contains ambiguous references to people, places or other visual details.
 - FAIL when the question is asked in a second-person perspective, for example "what were you doing".
 - Examples that FAIL include "the other room", "the other person", "the cup", etc.
@@ -1630,9 +1612,7 @@ def build_evidence_groundedness_judge_prompt(
     question_scope = "six-user" if six_user_mode else "two-user"
     role_grounding_rule = (
         "- Treat required_users[0] as the speaker and required_users[1] through "
-        "required_users[5] as providers. Verify that at least one external "
-        "provider view or provider combination supplies the answer-bearing evidence "
-        "missing from the speaker view. Do not fail merely because an input provider is unused."
+        "required_users[5] as providers when interpreting the video-set metadata."
         if six_user_mode
         else (
             "- Treat required_users[0] as the asker and required_users[1] as the evidence "

@@ -95,6 +95,8 @@ MINIMAL_VERDICT_ENTROPY_VERSION = "independent_minimal_verdict_v1"
 FIRST_VERDICT_FIELD = "verdict"
 FIRST_VERDICT_CHOICES = ("pass", "fail")
 TEMPORAL_REASONING_MODE = "temporal_reasoning"
+# 暂停六用户 all-six answerability 条件；设为 True 可完整恢复旧合同。
+ENABLE_COMBINED_ALL_SIX_ANSWERABILITY = False
 
 
 def verify_first_verdict_tokenization(runner: Any) -> dict[str, Any]:
@@ -767,18 +769,20 @@ def choose_question_type(
 def build_answerability_conditions(required_users: list[str]) -> list[dict[str, Any]]:
     users = list(required_users)
     if len(users) == 6:
-        return [
+        conditions = [
             {
                 "condition_id": f"speaker_only::{users[0]}",
                 "condition_type": "speaker_only",
                 "users": [users[0]],
-            },
-            {
+            }
+        ]
+        if ENABLE_COMBINED_ALL_SIX_ANSWERABILITY:
+            conditions.append({
                 "condition_id": "combined_all_six_users::" + "+".join(users),
                 "condition_type": "combined_all_six_users",
                 "users": users,
-            },
-        ]
+            })
+        return conditions
     conditions = [
         {
             "condition_id": f"single_user::{user}",
@@ -861,6 +865,13 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "passed": False,
                 "reason": "speaker-only condition selected the declared correct answer",
                 "failure_label": "speaker_only_correct",
+                **metrics,
+            }
+        if not ENABLE_COMBINED_ALL_SIX_ANSWERABILITY:
+            return {
+                "passed": True,
+                "reason": "speaker-only condition selected a wrong option",
+                "failure_label": None,
                 **metrics,
             }
         if not all_six_rows:
@@ -2072,8 +2083,8 @@ def merge_parallel_judges(
         )
         qa_formality_check["fix"] = (
             "Repair every failed or missing formality subcheck: use natural first-person or "
-            "shared-memory wording, clarify references and options, express a concrete activity "
-            "relation, and remove participant names and timestamp citations."
+            "shared-memory wording, clarify references and options, and remove participant "
+            "names and timestamp citations."
         )
     if schema_branch["status"] != "PASS":
         qa_formality_check["status"] = "FAIL"
