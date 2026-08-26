@@ -1,5 +1,8 @@
 # 六用户 provider-only 剪枝与双重回答性验证设计
 
+> 历史合同：本设计中的 provider-only 剪枝已被
+> `2026-08-27-six-user-zip-temporal-pruning-design.md` 取代。回答性完整原视频合同继续有效。
+
 ## 目标
 
 对当前六用户 QA 路径做两项调整：
