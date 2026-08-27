@@ -13,22 +13,24 @@
 - answerability：只调用两次 VLM；第一次只看 speaker 完整视频，第二次看 6 个完整视频。
 - 接受条件：`speaker_only_correct=false` 且 `all_six_correct=true`。
 - `all_six_wrong` 只记为中性失败，不自动归因为噪声。
-- runtime probe：目标接受 1 条 QA，候选目标 8 条，只用于首次 H100、Qwen、FFmpeg、TorchCodec 和完整六视频链路验证。
-- pilot：目标接受 5 条 QA，候选目标 30 条，是本轮实际小规模效果实验，不是第二次 smoke。
+- runtime probe：目标接受 1 条 QA，候选目标 1 条，最多检查 16 个同步组，只用于首次 H100、Qwen、已固定的 decord 后端和完整六视频链路验证。
+- pilot：最多尝试 40 个候选，每个候选只运行 1 个完整 loop；目标接受 40 条 QA，但接受数为 1–39 时以 `partial` 正常保留全部结果，不是第二次 smoke。
 
 当前本地已验证：
 
 - 分支：`feature/multi-user-six-video-qa`。
-- 工作树：生成本手册前为 clean。
-- 六用户定向测试、Torch 作业合同测试和 Bash 语法检查已通过。
-- 作业脚本固定为 1 张 H100、8 CPU、160 GB 内存；probe 最长 8 小时，pilot 最长 24 小时。
+- Job `15959693` 的失败已固化为 Torch 作业合同回归测试：六用户作业固定 `FORCE_QWENVL_VIDEO_READER=decord`，不再要求未被应用选择的 TorchCodec。
+- Torch 登录节点已用真实 MP4 验证 `qwen-vl-utils` 选择 decord，且 decord 成功解码 600 帧视频中的首、中、末帧。
+- 随后的零 GPU Qwen 预处理暴露 `max_pixels=65536` 小于隐藏默认 `min_pixels`；当前合同改为显式传入 `min_pixels=3136`、`max_pixels=65536`，不再读取隐藏默认常量。
+- 作业脚本固定为 1 张 H100、8 CPU、160 GB 内存；probe 时限 1.5 小时，pilot 时限 4 小时。
+- 时限依据：已有同链路 100 个完整 loop 约 8 小时，即每个 loop 约 4.8 分钟；40 个 loop 线性估计为 3.2 小时，剩余约 0.8 小时覆盖模型加载、候选准备、媒体预处理和运行波动。
 
 当前尚未验证：
 
-- 尚未上传到 Torch。
-- 尚未查询本次登录对应的实时 account、partition 和 QOS。
-- 尚未分配 H100，也未验证远端模型、环境、FFmpeg、TorchCodec、媒体下载和实际显存占用。
-- 尚无 JobID、远端日志、结果文件或人工质量结论。
+- 修复后的脚本尚未上传到 Torch，也尚未产生新的 JobID。
+- 失败 provenance：Job `15959693` 获得 1 张 H100 后在 24 秒内因 `pip check` 的 decord 平台元数据提示退出；`storage_preflight.json` 为 `passed`，未进入模型加载或六视频推理。
+- 尚未验证修复后的 H100 模型加载、六视频 Qwen 预处理、媒体下载和实际显存占用。
+- 尚无通过的 `six_user_qa_result.json` 或人工质量结论。
 
 三份强制依据均位于工作区公共文档目录：
 
@@ -36,7 +38,7 @@
 - `C:\Users\20661\Desktop\Research\AR\multiuser\docs\TORCH_EXPERIMENT_META_RULES_CN.md`
 - `C:\Users\20661\Desktop\Research\AR\multiuser\docs\TORCH_RUNBOOK_TEMPLATE_CN.md`
 
-模板引用的补充文件 `TORCHCODEC_FFMPEG_RUNTIME_RULES_CN.md` 当前不存在；它不是上述三份强制依据之一。本手册已按元规则和仓库 `training/grpo_v3/REMOTE_EXECUTION_GUARDRAILS_CN.md` 固定 FFmpeg 环境优先级、`LD_LIBRARY_PATH` 和 TorchCodec 导入顺序。
+模板引用的补充文件 `TORCHCODEC_FFMPEG_RUNTIME_RULES_CN.md` 当前不存在；它不是上述三份强制依据之一。本手册已按元规则和仓库 `training/grpo_v3/REMOTE_EXECUTION_GUARDRAILS_CN.md` 固定 FFmpeg 环境优先级、`LD_LIBRARY_PATH` 和实际 Qwen 视频后端 decord。
 
 ## 1. 固定路径与资源
 
@@ -76,7 +78,7 @@ git status --short
 git diff --check
 ```
 
-期望：分支为 `feature/multi-user-six-video-qa`，`git status --short` 无输出，定向测试通过，`git diff --check` 无输出。若任一条件不满足，先打印并处理本地问题，不上传。
+期望：分支为 `feature/multi-user-six-video-qa`；定向测试和 `git diff --check` 通过；未提交修改只包含 `AGENTS.md`、本手册、runtime probe、`qwen3vl_runner.py`、对应合同/runner 测试和远程运行约束。若出现其他文件，先核对来源，不上传。
 
 ## 3. Torch 登录节点：实时 account、partition、QOS 与路径审计
 
@@ -166,25 +168,21 @@ fi
 sftp xl6775@login.torch.hpc.nyu.edu
 lcd C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user-multi-user-prompt
 cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean
-put prompts.py
-put schema.py
-put video_qa_loop.py
-put group_relative_clip_sampling.py
+put AGENTS.md
 put qwen3vl_runner.py
-put six_video_qa_tester.py
-put six_view_packet_prep.py
 lcd C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user-multi-user-prompt/tests
 cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/tests
-put test_six_user_prompts.py
-put test_six_user_group_relative_sampling.py
-put test_six_user_video_qa_loop.py
 put test_six_user_torch_job_contract.py
+put test_qwen_runner_compat.py
 lcd C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user-multi-user-prompt/hpc/qa/smoke
 cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/hpc/qa/smoke
 put run_six_user_qa_runtime_probe.sbatch
 lcd C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user-multi-user-prompt/hpc/qa/experiments
 cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/hpc/qa/experiments
-put run_six_user_qa_pilot_5.sbatch
+put run_six_user_qa_pilot_40.sbatch
+lcd C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user-multi-user-prompt/training/grpo_v3
+cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/training/grpo_v3
+put REMOTE_EXECUTION_GUARDRAILS_CN.md
 lcd C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user-multi-user-prompt/docs
 cd /scratch/xl6775/projects/EgoQA-two-user-grpo-clean/docs
 put SIX_USER_QA_TORCH_RUNBOOK_CN.md
@@ -200,6 +198,7 @@ PROJECT_ROOT=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean
 TRAIN_ENV=/scratch/xl6775/conda/envs/qwen3vl-smoke
 MISSING_COUNT=0
 REQUIRED_FILES=(
+  AGENTS.md
   prompts.py
   schema.py
   video_qa_loop.py
@@ -211,8 +210,10 @@ REQUIRED_FILES=(
   tests/test_six_user_group_relative_sampling.py
   tests/test_six_user_video_qa_loop.py
   tests/test_six_user_torch_job_contract.py
+  tests/test_qwen_runner_compat.py
   hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch
-  hpc/qa/experiments/run_six_user_qa_pilot_5.sbatch
+  hpc/qa/experiments/run_six_user_qa_pilot_40.sbatch
+  training/grpo_v3/REMOTE_EXECUTION_GUARDRAILS_CN.md
   training/torch_storage_preflight.py
 )
 
@@ -229,29 +230,166 @@ if [[ "${MISSING_COUNT}" -eq 0 && -x "${TRAIN_ENV}/bin/python" ]]; then
   cd "${PROJECT_ROOT}"
   source /share/apps/anaconda3/2025.06/etc/profile.d/conda.sh
   conda activate "${TRAIN_ENV}"
-  "${TRAIN_ENV}/bin/python" -m compileall -q \
+  STATIC_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+  STATIC_ALIAS_ROOT=/scratch/${USER}/job_scratch/six_user_qa_login_static_${STATIC_STAMP}/pythonpath
+  mkdir -p "${STATIC_ALIAS_ROOT}"
+  ln -s "${PROJECT_ROOT}" "${STATIC_ALIAS_ROOT}/egolife_two_user_qa"
+  export PYTHONPATH="${STATIC_ALIAS_ROOT}:${PROJECT_ROOT}:${PYTHONPATH:-}"
+  STATIC_OK=1
+  if bash -n \
+    hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch \
+    hpc/qa/experiments/run_six_user_qa_pilot_40.sbatch; then
+    echo "PASSED: Bash 语法检查。"
+  else
+    echo "STOP: Bash 语法检查失败。"
+    STATIC_OK=0
+  fi
+  if "${TRAIN_ENV}/bin/python" -m compileall -q \
     prompts.py schema.py video_qa_loop.py group_relative_clip_sampling.py \
-    qwen3vl_runner.py six_video_qa_tester.py six_view_packet_prep.py
-  "${TRAIN_ENV}/bin/python" -m pytest \
+    qwen3vl_runner.py six_video_qa_tester.py six_view_packet_prep.py; then
+    echo "PASSED: Python 语法检查。"
+  else
+    echo "STOP: Python 语法检查失败。"
+    STATIC_OK=0
+  fi
+  if "${TRAIN_ENV}/bin/python" -m pytest \
     tests/test_six_user_prompts.py \
     tests/test_six_user_group_relative_sampling.py \
     tests/test_six_user_video_qa_loop.py \
-    tests/test_six_user_torch_job_contract.py -q
+    tests/test_six_user_torch_job_contract.py \
+    tests/test_qwen_runner_compat.py::test_memory_safe_runner_has_long_context_guards_by_default \
+    tests/test_qwen_runner_compat.py::test_memory_safe_runner_passes_explicit_video_minimum -q; then
+    echo "PASSED: 六用户定向测试。"
+  else
+    echo "STOP: 六用户定向测试失败。"
+    STATIC_OK=0
+  fi
+  if [[ "${STATIC_OK}" -eq 1 ]]; then
+    echo "REMOTE_STATIC_CHECK_PASSED"
+  fi
 else
   echo "STOP: 接收检查或 Python 环境失败，跳过静态测试。"
 fi
 ```
 
-这一步只证明远端文件能被目标 Python 解析且定向测试通过，不证明 CUDA、TorchCodec、Qwen 模型或视频链路可运行。
+这一步只证明远端文件能被目标 Python 解析且定向测试通过，不证明 CUDA、Qwen 模型或六视频推理可运行。
+
+## 6.1 Torch 登录节点：零 GPU 视频后端与 Qwen 预处理检查
+
+运行位置：Torch SSH 登录 shell。必须在提交 GPU probe 前执行；只读取一个已有视频，不加载模型、不申请 GPU，也不会关闭登录会话。
+
+```bash
+PROJECT_ROOT=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean
+TRAIN_ENV=/scratch/xl6775/conda/envs/qwen3vl-smoke
+FFMPEG_ENV=/scratch/xl6775/envs/egoqa-ffmpeg-runtime
+OUTPUT_ROOT=${PROJECT_ROOT}/outputs/six_user_qa
+AUDIT_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+AUDIT_DIR=${OUTPUT_ROOT}/login_audits
+PIP_CHECK_FILE=${AUDIT_DIR}/pip_check_${AUDIT_STAMP}.txt
+PYTHON=${TRAIN_ENV}/bin/python
+
+mkdir -p "${AUDIT_DIR}"
+export PATH="${FFMPEG_ENV}/bin:${PATH}"
+export LD_LIBRARY_PATH="${FFMPEG_ENV}/lib:${LD_LIBRARY_PATH:-}"
+export FORCE_QWENVL_VIDEO_READER=decord
+export QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS=3136
+
+PRECHECK_OK=1
+if "${PYTHON}" -m pip check > "${PIP_CHECK_FILE}" 2>&1; then
+  echo "pip_check_status=passed"
+else
+  UNEXPECTED_PIP_CHECK="$(
+    grep -Ev '^decord [^[:space:]]+ is not supported on this platform$' \
+      "${PIP_CHECK_FILE}" || true
+  )"
+  if [[ -n "${UNEXPECTED_PIP_CHECK}" ]]; then
+    echo "STOP: pip check 发现 decord 平台元数据提示之外的依赖错误。"
+    printf '%s\n' "${UNEXPECTED_PIP_CHECK}"
+    PRECHECK_OK=0
+  else
+    echo "pip_check_status=known_decord_platform_metadata_warning"
+  fi
+fi
+cat "${PIP_CHECK_FILE}"
+
+VIDEO_PATH=$(
+  find "${PROJECT_ROOT}/outputs" -maxdepth 8 -type f \
+    \( -iname '*.mp4' -o -iname '*.mov' -o -iname '*.mkv' \) \
+    -print -quit 2>/dev/null
+)
+
+if [[ "${PRECHECK_OK}" -eq 1 && -n "${VIDEO_PATH}" && -f "${VIDEO_PATH}" ]]; then
+  "${PYTHON}" - "${VIDEO_PATH}" <<'PY'
+import sys
+
+import decord
+from qwen_vl_utils import process_vision_info
+from qwen_vl_utils.vision_process import get_video_reader_backend
+
+video_path = sys.argv[1]
+backend = get_video_reader_backend()
+if backend != "decord":
+    raise SystemExit(f"unexpected Qwen video backend: {backend}")
+
+reader = decord.VideoReader(video_path)
+frame_count = len(reader)
+if frame_count <= 0:
+    raise SystemExit("video frame count is zero")
+indices = sorted({0, frame_count // 2, frame_count - 1})
+frames = reader.get_batch(indices).asnumpy()
+
+messages = [{
+    "role": "user",
+    "content": [
+        {
+            "type": "video",
+            "video": video_path,
+            "min_pixels": 3136,
+            "max_pixels": 65536,
+            "fps": 1.0,
+        },
+        {"type": "text", "text": "zero-GPU runtime preflight"},
+    ],
+}]
+try:
+    _, video_inputs, _ = process_vision_info(
+        messages,
+        return_video_kwargs=True,
+        return_video_metadata=True,
+    )
+except TypeError:
+    try:
+        _, video_inputs, _ = process_vision_info(messages, return_video_kwargs=True)
+    except TypeError:
+        _, video_inputs = process_vision_info(messages)
+if video_inputs is None or len(video_inputs) != 1:
+    raise SystemExit("Qwen video preprocessing did not return exactly one video")
+
+print(f"video_path={video_path}")
+print(f"video_backend={backend}")
+print(f"frame_count={frame_count}")
+print(f"decoded_shape={frames.shape}")
+print("ZERO_GPU_RUNTIME_PREFLIGHT_PASSED")
+PY
+  PRECHECK_RC=$?
+  if [[ "${PRECHECK_RC}" -ne 0 ]]; then
+    echo "STOP: 零 GPU 视频后端或 Qwen 预处理检查失败，不提交 GPU probe。"
+  fi
+else
+  echo "STOP: 依赖检查失败或没有找到真实视频，不提交 GPU probe。"
+fi
+```
+
+只有出现 `ZERO_GPU_RUNTIME_PREFLIGHT_PASSED` 才提交 runtime probe。该结果证明当前环境可用 decord 和显式像素区间 `3136 <= pixels <= 65536` 走真实 Qwen 视频预处理，但不证明 CUDA、27B 模型或六视频推理可运行。
 
 ## 7. 阶段与唯一 smoke
 
 | 阶段 | 脚本 | 输入 | 资源 | 通过条件 | 失败证据 |
 |---|---|---|---|---|---|
-| runtime probe | `hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch` | EgoLife 在线 manifest、8 个候选目标 | 1×H100、8 CPU、160 GB | 作业成功且 `six_user_qa_result.json` 为 `passed`，接受数至少 1；生成/groundedness/answerability 视频数分别为 6/6/两次调用 | `.out`、`.err`、`storage_preflight.json`、`job_manifest.json`、候选、接受、拒绝和 intermediate JSONL |
-| pilot | `hpc/qa/experiments/run_six_user_qa_pilot_5.sbatch` | 同一合同、30 个候选目标 | 1×H100、8 CPU、160 GB | probe 先通过；pilot 作业成功且结果为 `passed`，接受数至少 5 | 同上，另加人工复核表和 review videos |
+| runtime probe | `hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch` | EgoLife 在线 manifest、目标 1 个候选、最多检查 16 个同步组、每候选 1 次 | 1×H100、8 CPU、160 GB、1.5 小时 | 作业成功且 `six_user_qa_result.json` 为 `passed`，接受数至少 1；模型加载前完成 6 段真实视频 Qwen 预处理，生成/groundedness/answerability 视频数分别为 6/6/两次调用 | `.out`、`.err`、`storage_preflight.json`、`pip_check.txt`、`job_manifest.json`、候选、接受、拒绝和 intermediate JSONL |
+| pilot | `hpc/qa/experiments/run_six_user_qa_pilot_40.sbatch` | 同一合同、最多 40 个候选、每候选 1 次 | 1×H100、8 CPU、160 GB、4 小时 | probe 先通过；接受 40 条时结果为 `passed`；接受 1–39 条时结果为 `partial` 并正常保留产物；0 条仍失败 | 同上，另加人工复核表和 review videos |
 
-probe 是本流程唯一 smoke。probe 通过后直接运行 pilot，不再增加其他规模的 smoke。
+probe 是本流程唯一 smoke。probe 通过后直接运行 pilot，不再增加其他规模的 smoke。`job_manifest.json` 在 `pip check` 之前以 `preflight` 状态落盘；前置检查通过后更新为 `running`，因此前置失败也保留可定位的任务身份和环境合同。
 
 ## 8. 提交 runtime probe
 
@@ -267,8 +405,8 @@ TORCH_ACCOUNT=torch_pr_674_tandon_advanced
 SCRIPT=${PROJECT_ROOT}/hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch
 MANIFEST_ROOT=${OUTPUT_ROOT}/submission_manifests
 
-ACCOUNT_OK=0
-H100_OK=0
+ACCOUNT_OK=1
+H100_OK=1
 FILES_OK=1
 if sacctmgr -nP show assoc where user="${USER}" account="${TORCH_ACCOUNT}" format=Account | grep -q '^torch_pr_674_tandon_advanced|'; then ACCOUNT_OK=1; fi
 if sinfo -h -o '%a|%G|%f' | grep -i 'up' | grep -qi 'h100'; then H100_OK=1; fi
@@ -321,6 +459,7 @@ fi
 ```
 
 必须保存命令打印的 `TASK_MANIFEST` 路径。后续所有监控、Gate、pilot 和下载都从该文件读取 JobID，不要求手工记忆 JobID。
+baocun:TASK_MANIFEST=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean/outputs/six_user_qa/submission_manifests/runtime_probe_20260819T132419Z_16021016.env
 
 ## 9. 从任务 manifest 监控任一作业
 
@@ -405,7 +544,7 @@ TRAIN_ENV=/scratch/xl6775/conda/envs/qwen3vl-smoke
 FFMPEG_ENV=/scratch/xl6775/envs/egoqa-ffmpeg-runtime
 MODEL_DIR=/scratch/xl6775/models/Qwen3.6-27B
 TORCH_ACCOUNT=torch_pr_674_tandon_advanced
-SCRIPT=${PROJECT_ROOT}/hpc/qa/experiments/run_six_user_qa_pilot_5.sbatch
+SCRIPT=${PROJECT_ROOT}/hpc/qa/experiments/run_six_user_qa_pilot_40.sbatch
 MANIFEST_ROOT=${OUTPUT_ROOT}/submission_manifests
 PROBE_OK=0
 
@@ -441,15 +580,15 @@ if [[ "${PROBE_OK}" -eq 1 ]]; then
     SUBMIT_RC=$?
     JOB_ID=${RAW_JOB_ID%%;*}
     if [[ "${SUBMIT_RC}" -eq 0 && "${JOB_ID}" =~ ^[0-9]+$ ]]; then
-      TASK_MANIFEST=${MANIFEST_ROOT}/pilot_5_${SUBMIT_STAMP}_${JOB_ID}.env
+      TASK_MANIFEST=${MANIFEST_ROOT}/pilot_40_${SUBMIT_STAMP}_${JOB_ID}.env
       {
-        printf 'RUN_KIND=%q\n' pilot_5
+        printf 'RUN_KIND=%q\n' pilot_40
         printf 'JOB_ID=%q\n' "${JOB_ID}"
         printf 'SBATCH_RESPONSE=%q\n' "${RAW_JOB_ID}"
         printf 'SCRIPT=%q\n' "${SCRIPT}"
-        printf 'OUTPUT_DIR=%q\n' "${OUTPUT_ROOT}/six_user_qa_pilot_5_${JOB_ID}"
-        printf 'STDOUT=%q\n' "${PROJECT_ROOT}/hpc/logs/egoqa_6u_pilot5_${JOB_ID}.out"
-        printf 'STDERR=%q\n' "${PROJECT_ROOT}/hpc/logs/egoqa_6u_pilot5_${JOB_ID}.err"
+        printf 'OUTPUT_DIR=%q\n' "${OUTPUT_ROOT}/six_user_qa_pilot_40_${JOB_ID}"
+        printf 'STDOUT=%q\n' "${PROJECT_ROOT}/hpc/logs/egoqa_6u_pilot40_${JOB_ID}.out"
+        printf 'STDERR=%q\n' "${PROJECT_ROOT}/hpc/logs/egoqa_6u_pilot40_${JOB_ID}.err"
         printf 'PROBE_TASK_MANIFEST=%q\n' "${PROBE_TASK_MANIFEST}"
         printf 'SUBMITTED_AT=%q\n' "${SUBMIT_STAMP}"
       } > "${TASK_MANIFEST}"
@@ -473,7 +612,7 @@ fi
 ```bash
 read -r -p '粘贴 pilot 的 TASK_MANIFEST 绝对路径: ' TASK_MANIFEST
 EXPECTED_ROOT=/scratch/xl6775/projects/EgoQA-two-user-grpo-clean/outputs/six_user_qa/submission_manifests
-if [[ -f "${TASK_MANIFEST}" && "${TASK_MANIFEST}" == "${EXPECTED_ROOT}/"pilot_5_*.env ]]; then
+if [[ -f "${TASK_MANIFEST}" && "${TASK_MANIFEST}" == "${EXPECTED_ROOT}/"pilot_40_*.env ]]; then
   . "${TASK_MANIFEST}"
   RESULT_FILE=${OUTPUT_DIR}/six_user_qa_result.json
   if [[ -f "${RESULT_FILE}" ]]; then
@@ -484,7 +623,6 @@ from pathlib import Path
 
 result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected = {
-    "status": "passed",
     "generator_video_count": 6,
     "groundedness_video_count": 6,
     "answerability_call_count": 2,
@@ -494,11 +632,19 @@ expected = {
     "answerability_evaluated_condition_count": 2,
 }
 errors = [f"{key}={result.get(key)!r}" for key, value in expected.items() if result.get(key) != value]
-if int(result.get("accepted_count", 0)) < 5:
+status = result.get("status")
+accepted_count = int(result.get("accepted_count", 0))
+if status not in {"passed", "partial"}:
+    errors.append(f"status={status!r}")
+if accepted_count < 1:
     errors.append(f"accepted_count={result.get('accepted_count')!r}")
+if status == "passed" and accepted_count < 40:
+    errors.append(f"passed_without_40={accepted_count}")
+if status == "partial" and accepted_count >= 40:
+    errors.append(f"partial_with_40={accepted_count}")
 if errors:
     raise SystemExit("PILOT_GATE_FAILED: " + ", ".join(errors))
-print("PILOT_GATE_PASSED")
+print("PILOT_RESULT_ACCEPTED")
 print(json.dumps(result, ensure_ascii=False, indent=2))
 PY
     for REQUIRED_FILE in qa_mcq.jsonl qa_mcq.csv human_review_sheet.md generation_report.md job_manifest.json storage_preflight.json; do
@@ -517,7 +663,7 @@ else
 fi
 ```
 
-人工检查 5 条已接受 QA：
+人工检查本次全部已接受 QA（最多 40 条）：
 
 1. question 是否必须结合非 speaker 视角，而不是从 speaker 单独推断。
 2. 6 个视频中的无关信息是否诱导了错误答案或含糊措辞。
@@ -525,7 +671,7 @@ fi
 4. distractor 是否合理但能被六视频证据排除。
 5. `all_six_wrong` 样本只作为失败案例单独查看，不直接标记为噪声数据。
 
-pilot 只提供 5 条小样本的能力与失败模式观察，不能证明总体质量提升或统计显著性。
+pilot 只提供最多 40 条样本的能力与失败模式观察，不能证明总体质量提升或统计显著性。`partial` 表示候选用尽后得到 1–39 条有效 QA，不表示达到 40 条目标。
 
 ## 13. 通用失败证据收集
 
@@ -544,7 +690,7 @@ if [[ -f "${TASK_MANIFEST}" && "${TASK_MANIFEST}" == "${EXPECTED_ROOT}/"*.env ]]
   if [[ -f "${STDERR}" ]]; then tail -n 200 "${STDERR}"; else echo "MISSING: ${STDERR}"; fi
   echo "--- output files ---"
   if [[ -d "${OUTPUT_DIR}" ]]; then find "${OUTPUT_DIR}" -maxdepth 2 -type f -printf '%p|%s bytes\n' | sort; else echo "MISSING: ${OUTPUT_DIR}"; fi
-  for EVIDENCE_FILE in storage_preflight.json job_manifest.json six_user_qa_result.json; do
+  for EVIDENCE_FILE in storage_preflight.json pip_check.txt job_manifest.json six_user_qa_result.json; do
     if [[ -f "${OUTPUT_DIR}/${EVIDENCE_FILE}" ]]; then
       echo "--- ${EVIDENCE_FILE} ---"
       cat "${OUTPUT_DIR}/${EVIDENCE_FILE}"
@@ -579,6 +725,7 @@ if [[ -f "${TASK_MANIFEST}" && "${TASK_MANIFEST}" == "${EXPECTED_ROOT}/"*.env ]]
     "get six_user_qa_result.json six_user_qa_result_${JOB_ID}.json" \
     "get job_manifest.json job_manifest_${JOB_ID}.json" \
     "get storage_preflight.json storage_preflight_${JOB_ID}.json" \
+    "get pip_check.txt pip_check_${JOB_ID}.txt" \
     "get qa_mcq.jsonl qa_mcq_${JOB_ID}.jsonl" \
     "get qa_mcq.csv qa_mcq_${JOB_ID}.csv" \
     "get human_review_sheet.md human_review_sheet_${JOB_ID}.md" \
@@ -602,6 +749,9 @@ JobID：从任务 manifest 读取
 Slurm State / ExitCode：
 输出目录：从任务 manifest 读取
 结果 status：
+accepted_target：
+target_reached：
+allow_partial：
 candidate_count：
 attempted_count：
 accepted_count：
@@ -629,7 +779,10 @@ all_six_wrong_rate：
 - 两次实际提交都使用 `sbatch --parsable`，兼容 cluster 后缀，并把 JobID 写入时间戳任务 manifest。
 - 监控、Gate、pilot 依赖与下载都从任务 manifest 派生 JobID 和输出目录。
 - 正式作业在模型加载前封闭 HOME、cache、临时目录并运行存储预检。
-- FFmpeg 的 `PATH`、`LD_LIBRARY_PATH` 在 TorchCodec 导入之前设置。
-- runtime probe 是唯一 smoke；pilot 是 5 条已接受 QA 的实际小规模实验。
+- FFmpeg 的 `PATH`、`LD_LIBRARY_PATH` 在 decord 与 Qwen 视频后端预检之前设置。
+- 六用户 memory-safe 路径显式记录 `min_video_pixels=3136`、`max_image_pixels=65536`，不读取 `qwen-vl-utils` 隐藏默认下界。
+- GPU 提交前先完成零 GPU 的真实视频解码和 Qwen `process_vision_info` 检查。
+- runtime probe 是唯一 smoke；pilot 最多执行 40 个完整 loop，接受 1–39 条时显式记录为 `partial`。
+- Job `16021016` 在 1 小时内仍停留于 8 候选挖掘阶段；probe 已缩为实际只消费的 1 个候选，并按失败实测的 1.5 倍把时限调整为 1.5 小时。pilot 仍为 4 小时；该调整不改变六用户媒体、判定或接受合同。
 - 本地静态验证、登录节点检查、GPU runtime、作业完成、产物 Gate 和人工质量判断均明确分开。
 - 未授权也未执行推送、上传、Slurm 提交、远端清理或扩大实验范围。

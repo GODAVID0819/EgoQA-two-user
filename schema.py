@@ -36,6 +36,13 @@ def six_user_media_role_contracts(
                 for user in required_users[1:]
             },
         },
+        {
+            required_users[0]: "speaker_all_clustering_frames",
+            **{
+                user: "provider_retained_cluster_frames"
+                for user in required_users[1:]
+            },
+        },
     )
 
 

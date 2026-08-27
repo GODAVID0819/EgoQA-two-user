@@ -21,7 +21,7 @@
   - 在模型加载前运行 `training.torch_storage_preflight`；
   - 将全部缓存和临时目录固定到 job-specific scratch；
   - 为原生视频任务同时设置 FFmpeg runtime 的 `PATH` 与 `LD_LIBRARY_PATH`；
-  - 预检 `torchcodec.decoders.VideoDecoder`；
+  - 显式固定并预检任务实际使用的视频后端；视频像素上、下界必须成对显式传入，不依赖第三方包隐藏默认值；不得把未被应用选择的 decoder 设为硬依赖；
   - 从真实 `${SLURM_JOB_ID}` 派生产物路径，不用 `latest_*` 作为结论依据。
 - reviewer HTTP 200 只证明服务可访问，不证明 schema、奖励语义或训练正确。至少检查真实调用形状、reward trace、梯度/参数变化、checkpoint 和 adapter reload。
 - 汇报实验时必须明确：

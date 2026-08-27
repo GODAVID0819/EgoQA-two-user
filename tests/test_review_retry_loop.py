@@ -146,3 +146,96 @@ def test_item_is_rejected_only_after_all_three_attempts_fail(tmp_path: Path) -> 
     assert len(rejected) == 1
     assert len(rejected[0]["attempts"]) == 3
     assert rejected[0]["review"]["accepted"] is False
+
+
+def test_review_summary_counts_each_gate_by_attempt() -> None:
+    def trace(attempt: int, statuses: dict[str, str] | None):
+        merged = (
+            {"checks": {name: {"status": status} for name, status in statuses.items()}}
+            if statuses is not None
+            else {}
+        )
+        return {"attempt": attempt, "judge": {"merged": merged}}
+
+    accepted = [
+        {
+            "attempt_count": 2,
+            "generation_trace": [
+                trace(
+                    1,
+                    {
+                        "qa_formality": "FAIL",
+                        "evidence_groundedness": "PASS",
+                        "answerability": "PASS",
+                    },
+                ),
+                trace(
+                    2,
+                    {
+                        "qa_formality": "PASS",
+                        "evidence_groundedness": "PASS",
+                        "answerability": "PASS",
+                    },
+                ),
+            ],
+        }
+    ]
+    rejected = [
+        {
+            "generation_trace": [
+                trace(
+                    1,
+                    {
+                        "qa_formality": "FAIL",
+                        "evidence_groundedness": "FAIL",
+                        "answerability": "FAIL",
+                    },
+                ),
+                trace(
+                    2,
+                    {
+                        "qa_formality": "PASS",
+                        "evidence_groundedness": "FAIL",
+                        "answerability": "PASS",
+                    },
+                ),
+                trace(3, None),
+            ]
+        }
+    ]
+
+    summary = video_qa_loop.summarize_review_gate_attempts(
+        accepted,
+        rejected,
+        max_attempts=3,
+    )
+
+    assert summary["attempted_group_count"] == 2
+    assert summary["accepted_count"] == 1
+    assert summary["rejected_count"] == 1
+    assert summary["acceptance_rate"] == 0.5
+    assert summary["generator_attempt_count"] == 5
+    assert summary["accepted_by_attempt"] == {"1": 0, "2": 1, "3": 0}
+    assert summary["rejected_after_max_attempts"] == 1
+    assert summary["gate_review_by_attempt"]["1"]["qa_formality"] == {
+        "pass_count": 0,
+        "reject_count": 2,
+        "not_run_count": 0,
+        "reviewed_count": 2,
+        "pass_rate": 0.0,
+        "reject_rate": 1.0,
+    }
+    assert summary["gate_review_by_attempt"]["2"]["evidence_groundedness"][
+        "reject_count"
+    ] == 1
+    assert summary["gate_review_by_attempt"]["3"]["answerability"][
+        "not_run_count"
+    ] == 1
+    assert summary["gate_review_overall"]["answerability"] == {
+        "pass_count": 3,
+        "reject_count": 1,
+        "not_run_count": 1,
+        "reviewed_count": 4,
+        "pass_rate": 0.75,
+        "reject_rate": 0.25,
+    }

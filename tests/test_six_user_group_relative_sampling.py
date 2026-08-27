@@ -20,7 +20,6 @@ from egolife_two_user_qa.group_relative_clip_sampling import (  # noqa: E402
     analyze_group_relative_similarity,
     build_candidate_packet,
     build_six_user_role_structures,
-    clustered_speaker_consensus_pruning,
     materialize_six_user_role_structure,
     mine_group_relative_clip_candidates,
 )
@@ -45,7 +44,7 @@ def pair_scores(*, kept_keys: set[str]) -> list[dict[str, object]]:
     return rows
 
 
-class SpeakerConsensusPruningTests(unittest.TestCase):
+class SpeakerProviderAllPairsPruningTests(unittest.TestCase):
     @staticmethod
     def cluster_result(
         representative_embeddings: list[list[float]],
@@ -82,110 +81,6 @@ class SpeakerConsensusPruningTests(unittest.TestCase):
             for index in range(count)
         ]
 
-    def run_consensus(self, provider_best_similarities: list[float]) -> dict[str, object]:
-        speaker = self.cluster_result([[1.0, 0.0]], [[0, 1]])
-        providers = []
-        for similarity in provider_best_similarities:
-            orthogonal = max(0.0, 1.0 - similarity**2) ** 0.5
-            providers.append(
-                self.cluster_result(
-                    [
-                        [similarity, orthogonal],
-                        [0.81, max(0.0, 1.0 - 0.81**2) ** 0.5],
-                    ],
-                    [[0], [1]],
-                )
-            )
-        with mock.patch.object(
-            group_relative_clip_sampling,
-            "clustered_frame_representatives",
-            side_effect=[speaker, *providers],
-        ):
-            return clustered_speaker_consensus_pruning(
-                [self.frames() for _ in range(6)],
-                [[[1.0, 0.0], [1.0, 0.0]] for _ in range(6)],
-                speaker_index=0,
-                start_seconds=0.0,
-                duration_seconds=10.0,
-                sample_interval_seconds=1.0,
-                min_pruned_video_seconds=2.0,
-            )
-
-    def test_five_of_five_deletes_speaker_and_all_provider_argmax_clusters(self) -> None:
-        result = self.run_consensus([0.95, 0.94, 0.93, 0.92, 0.91])
-
-        self.assertTrue(result["passed"])
-        self.assertEqual(len(result["events"]), 1)
-        event = result["events"][0]
-        self.assertEqual(event["high_provider_count"], 5)
-        self.assertEqual(
-            event["deleted_clusters"],
-            [
-                {"video_index": 0, "cluster_index": 0},
-                {"video_index": 1, "cluster_index": 0},
-                {"video_index": 2, "cluster_index": 0},
-                {"video_index": 3, "cluster_index": 0},
-                {"video_index": 4, "cluster_index": 0},
-                {"video_index": 5, "cluster_index": 0},
-            ],
-        )
-        self.assertEqual(result["videos"][0]["marked_frame_indices"], [0, 1])
-
-    def test_four_of_five_does_not_delete_below_threshold_provider(self) -> None:
-        result = self.run_consensus([0.95, 0.94, 0.93, 0.82, 0.70])
-
-        event = result["events"][0]
-        self.assertEqual(event["high_provider_count"], 4)
-        self.assertEqual(
-            [row["video_index"] for row in event["deleted_clusters"]],
-            [0, 1, 2, 3, 4],
-        )
-        self.assertEqual(result["videos"][5]["marked_cluster_indices"], [])
-
-    def test_three_of_five_deletes_only_speaker_and_high_provider_clusters(self) -> None:
-        result = self.run_consensus([0.95, 0.94, 0.93, 0.70, 0.69])
-
-        self.assertTrue(result["passed"])
-        event = result["events"][0]
-        self.assertEqual(event["high_provider_count"], 3)
-        self.assertEqual(
-            [row["video_index"] for row in event["deleted_clusters"]],
-            [0, 1, 2, 3],
-        )
-        self.assertEqual(result["videos"][4]["marked_cluster_indices"], [])
-        self.assertEqual(result["videos"][5]["marked_cluster_indices"], [])
-
-    def test_two_of_five_does_not_trigger_consensus_deletion(self) -> None:
-        result = self.run_consensus([0.95, 0.94, 0.70, 0.69, 0.68])
-
-        self.assertFalse(result["passed"])
-        self.assertEqual(result["events"], [])
-        self.assertTrue(all(not video["marked_cluster_indices"] for video in result["videos"]))
-
-    def test_argmax_only_and_duplicate_cluster_deletion_is_deduplicated(self) -> None:
-        speaker = self.cluster_result([[1.0, 0.0], [0.99, 0.01]], [[0], [1]])
-        provider = self.cluster_result([[0.95, 0.0], [0.90, 0.0]], [[0], [1]])
-        with mock.patch.object(
-            group_relative_clip_sampling,
-            "clustered_frame_representatives",
-            side_effect=[speaker, provider, provider, provider, provider, provider],
-        ):
-            result = clustered_speaker_consensus_pruning(
-                [self.frames() for _ in range(6)],
-                [[[1.0, 0.0], [1.0, 0.0]] for _ in range(6)],
-                speaker_index=0,
-                start_seconds=0.0,
-                duration_seconds=10.0,
-                sample_interval_seconds=1.0,
-                min_pruned_video_seconds=2.0,
-            )
-
-        self.assertEqual(len(result["events"]), 2)
-        self.assertEqual(result["videos"][1]["marked_cluster_indices"], [0])
-        self.assertEqual(result["videos"][1]["trigger_event_indices"], [0, 1])
-
-    def test_provider_only_all_pairs_deletes_non_argmax_at_threshold_and_keeps_speaker(self) -> None:
-        speaker = self.cluster_result([[1.0, 0.0], [0.0, 1.0]], [[0], [1]])
         provider = self.cluster_result(
             [[1.0, 0.0], [0.82, 0.5723635209], [0.0, 1.0]],
             [[0], [1], [2]],
@@ -241,6 +136,96 @@ class SpeakerConsensusPruningTests(unittest.TestCase):
             [0, 1],
         )
 
+    def test_zip_temporal_pruning_builds_five_pairs_and_keeps_full_speaker(self) -> None:
+        frames = [self.frames(3) for _ in range(6)]
+        embeddings = [[[1.0, 0.0]] * 3 for _ in range(6)]
+        clusters = self.cluster_result([[1.0, 0.0]], [[0, 1, 2]])
+        clusters["clustering"] = {
+            "time_weight": 0.1,
+            "temporal_unit_seconds": 30.0,
+        }
+
+        def pair_result(*_args, **_kwargs):
+            return {
+                "passed": True,
+                "high_similarity_representative_pairs": [
+                    {
+                        "left_cluster_index": 0,
+                        "right_cluster_index": 0,
+                        "similarity": 0.9,
+                    }
+                ],
+                "high_similarity_representative_pair_count": 1,
+                "left_marked_frame_indices": [0],
+                "right_marked_frame_indices": [1],
+                "left_remove_intervals": [[0.5, 1.5]],
+                "right_remove_intervals": [[1.5, 2.5]],
+                "left_keep_intervals": [[0.0, 0.5], [1.5, 30.0]],
+                "right_keep_intervals": [[0.0, 1.5], [2.5, 30.0]],
+                "left_kept_duration_seconds": 29.0,
+                "right_kept_duration_seconds": 29.0,
+                "left_removed_duration_seconds": 1.0,
+                "right_removed_duration_seconds": 1.0,
+            }
+
+        with (
+            mock.patch(
+                "egolife_two_user_qa.temporal_kmeans_grid_sidecar."
+                "time_aware_clustered_frame_representatives",
+                return_value=clusters,
+            ) as cluster,
+            mock.patch(
+                "egolife_two_user_qa.temporal_kmeans_grid_sidecar."
+                "prune_time_aware_cluster_pair",
+                side_effect=pair_result,
+            ) as prune,
+        ):
+            result = (
+                group_relative_clip_sampling.clustered_six_user_zip_temporal_pruning(
+                    frames,
+                    embeddings,
+                    speaker_index=0,
+                    start_seconds=0.0,
+                    duration_seconds=30.0,
+                    sample_interval_seconds=1.0,
+                )
+            )
+
+        self.assertEqual(cluster.call_count, 6)
+        self.assertEqual(prune.call_count, 5)
+        self.assertTrue(
+            all(
+                call.kwargs["min_pruned_video_percent"] == 20.0
+                and call.kwargs["cross_gap_mode"] == "center"
+                and call.kwargs["max_cross_gap_seconds"] == 10.0
+                for call in prune.call_args_list
+            )
+        )
+        self.assertEqual(len(result["pair_results"]), 5)
+        self.assertEqual(result["cluster_count"], 12)
+        self.assertEqual(result["videos"][0]["keep_intervals"], [[0.0, 30.0]])
+        self.assertEqual(result["videos"][1]["remove_intervals"], [[1.5, 2.5]])
+        self.assertTrue(result["passed"])
+
+    def test_zip_temporal_pruning_runs_real_pair_kernel(self) -> None:
+        result = group_relative_clip_sampling.clustered_six_user_zip_temporal_pruning(
+            [self.frames(3) for _ in range(6)],
+            [[[1.0, 0.0]] * 3 for _ in range(6)],
+            speaker_index=0,
+            start_seconds=0.0,
+            duration_seconds=10.0,
+            sample_interval_seconds=1.0,
+        )
+
+        self.assertEqual(result["cluster_count"], 4)
+        self.assertEqual(len(result["pair_results"]), 5)
+        self.assertTrue(result["passed"])
+        self.assertTrue(
+            result["pair_results"][0]["pruning"]["left_remove_intervals"]
+        )
+        self.assertEqual(result["videos"][0]["remove_intervals"], [])
+        self.assertTrue(result["videos"][1]["remove_intervals"])
+
 
 class SixUserRoleSelectionTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -268,6 +253,68 @@ class SixUserRoleSelectionTests(unittest.TestCase):
                 }
             )
         return rows
+
+    def test_materializer_ignores_speaker_pair_pruning_and_uses_original_video(
+        self,
+    ) -> None:
+        rows = self.six_rows()
+        consensus = {
+            "method": "zip_temporal_kmeans_center_gate_pair_pruning_v1",
+            "speaker_index": 0,
+            "pair_results": [
+                {
+                    "speaker_index": 0,
+                    "provider_index": 1,
+                    "pruning": {"left_remove_intervals": [[0.5, 1.5]]},
+                }
+            ],
+            "videos": [
+                {
+                    "video_index": index,
+                    "keep_intervals": (
+                        [[0.0, 30.0]]
+                        if index == 0
+                        else [[0.0, 1.5], [2.5, 30.0]]
+                    ),
+                    "remove_intervals": [] if index == 0 else [[1.5, 2.5]],
+                    "marked_cluster_indices": [],
+                    "trigger_event_indices": [],
+                    "kept_duration_seconds": 30.0 if index == 0 else 29.0,
+                    "passed": True,
+                }
+                for index in range(6)
+            ],
+            "passed": True,
+        }
+
+        def fake_materialize(clip, *, media_role, keep_intervals, **_kwargs):
+            return {
+                **clip,
+                "media_role": media_role,
+                "is_pruned": keep_intervals is not None,
+                "received_keep_intervals": keep_intervals,
+            }
+
+        with mock.patch.object(
+            group_relative_clip_sampling,
+            "_materialize_six_user_clip",
+            side_effect=fake_materialize,
+        ):
+            clips = group_relative_clip_sampling.materialize_six_user_consensus_candidate(
+                rows,
+                consensus,
+                output_dir=self.tmp_path / "zip_temporal",
+                ffmpeg_binary="ffmpeg",
+            )
+
+        self.assertEqual(
+            clips[0]["local_video"],
+            rows[0]["clip"]["local_video"],
+        )
+        self.assertEqual(clips[0]["media_role"], "speaker_reference_unpruned")
+        self.assertFalse(clips[0]["is_pruned"])
+        self.assertIsNone(clips[0]["received_keep_intervals"])
+        self.assertTrue(all(clip["is_pruned"] for clip in clips[1:]))
 
     @staticmethod
     def anchor_edge(anchor_index: int, *, speaker_remove: list[list[float]]) -> dict[str, object]:
@@ -513,7 +560,7 @@ class SixUserRoleSelectionTests(unittest.TestCase):
             ) as relative_scores_mock,
             mock.patch.object(
                 group_relative_clip_sampling,
-                "clustered_speaker_provider_all_pairs_pruning",
+                "clustered_six_user_zip_temporal_pruning",
                 side_effect=fake_provider_pruning,
             ),
             mock.patch.object(
@@ -562,6 +609,8 @@ class SixUserRoleSelectionTests(unittest.TestCase):
         )
         self.assertIn("speaker-only", packet["requirement"])
         self.assertIn("all-six condition", packet["requirement"])
+        self.assertIn("w=0.1", packet["requirement"])
+        self.assertIn("10.0-second center-gap gate", packet["requirement"])
         self.assertNotIn("anchor_provider_users", packet)
         self.assertNotIn("selected_anchor_edges", packet)
         self.assertEqual(set(packet["media_roles"]), set(users))

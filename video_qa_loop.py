@@ -11,10 +11,17 @@ import math
 import re
 import statistics
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
 
 from .io_utils import append_jsonl, iter_jsonl, write_json, write_jsonl
+from .evidence_chunk_review import (
+    evidence_segment_specs,
+    materialize_evidence_segment_paths,
+    validate_segment_observation,
+)
+from .qa_generation_schedule import deadline_reached, round_robin_generation_slots
 from .prompts import (
     DEFAULT_QUALITY_QUOTA,
     GENERATION_MODES,
@@ -23,6 +30,8 @@ from .prompts import (
     build_answerability_prompt,
     build_judge_minimal_verdict_probe_prompt,
     build_evidence_groundedness_judge_prompt,
+    build_evidence_observation_aggregation_prompt,
+    build_evidence_segment_observation_prompt,
     build_judge_json_repair_prompt,
     build_qa_formality_judge_prompt,
     build_video_generation_prompt,
@@ -95,8 +104,70 @@ MINIMAL_VERDICT_ENTROPY_VERSION = "independent_minimal_verdict_v1"
 FIRST_VERDICT_FIELD = "verdict"
 FIRST_VERDICT_CHOICES = ("pass", "fail")
 TEMPORAL_REASONING_MODE = "temporal_reasoning"
-# 暂停六用户 all-six answerability 条件；设为 True 可完整恢复旧合同。
-ENABLE_COMBINED_ALL_SIX_ANSWERABILITY = False
+
+
+def prompt_rows_by_generation_identity(
+    prompt_rows: list[dict[str, Any]],
+    *,
+    stage: str,
+) -> dict[tuple[str, str, int], list[dict[str, Any]]]:
+    """Index prompt rows without conflating reused model-generated QA IDs."""
+
+    indexed: dict[tuple[str, str, int], list[dict[str, Any]]] = {}
+    for row in prompt_rows:
+        if row.get("stage") != stage:
+            continue
+        slot_id = str(row.get("generation_slot_id") or "")
+        qa_id = str(row.get("qa_id") or "")
+        attempt = row.get("attempt")
+        if not slot_id or not qa_id or not isinstance(attempt, int):
+            continue
+        indexed.setdefault((slot_id, qa_id, attempt), []).append(row)
+    return indexed
+
+
+def normalize_question_for_duplicate(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    without_punctuation = "".join(
+        " " if unicodedata.category(character).startswith("P") else character
+        for character in text
+    )
+    return " ".join(without_punctuation.split())
+
+
+def rotate_qa_options(qa_item: dict[str, Any], *, offset: int) -> dict[str, Any]:
+    options = list(qa_item.get("options") or [])
+    if len(options) != len(OPTION_LETTERS):
+        return {
+            "applied": False,
+            "rotation_offset": 0,
+            "reason": "options must contain exactly five entries",
+        }
+    try:
+        original_correct = normalize_correct(qa_item.get("correct"))
+    except ValueError:
+        return {
+            "applied": False,
+            "rotation_offset": 0,
+            "reason": "correct must be one of A-E",
+        }
+    normalized_offset = int(offset) % len(options)
+    if normalized_offset:
+        rotated = options[-normalized_offset:] + options[:-normalized_offset]
+    else:
+        rotated = options
+    original_index = OPTION_LETTERS.index(original_correct)
+    new_index = (original_index + normalized_offset) % len(options)
+    final_correct = OPTION_LETTERS[new_index]
+    qa_item["options"] = rotated
+    qa_item["correct"] = final_correct
+    qa_item["answer"] = rotated[new_index]
+    return {
+        "applied": True,
+        "rotation_offset": normalized_offset,
+        "original_correct": original_correct,
+        "final_correct": final_correct,
+    }
 
 
 def verify_first_verdict_tokenization(runner: Any) -> dict[str, Any]:
@@ -500,11 +571,18 @@ def six_user_role_metadata(
                 f"expected {expected_value!r}, got {actual_value!r}"
             )
 
+    expected_sampled_media_roles = {
+        required_users[0]: "speaker_all_clustering_frames",
+        **{
+            user: "provider_retained_cluster_frames"
+            for user in required_users[1:]
+        },
+    }
     media_roles = packet.get("media_roles")
-    if media_roles not in six_user_media_role_contracts(required_users):
+    if media_roles not in six_user_media_role_contracts(required_users) and media_roles != expected_sampled_media_roles:
         raise ValueError(
             "six-user packet media_roles must cover the ordered speaker and provider "
-            "roles for either the legacy consensus mode or provider-only similarity "
+            "roles for the legacy, provider-only similarity, or sampled-frame "
             f"mode: got {media_roles!r}"
         )
 
@@ -519,14 +597,15 @@ def human_audit_packet(packet: dict[str, Any]) -> dict[str, Any]:
     evidence_provider_user = required_users[1] if len(required_users) > 1 else None
     role_metadata = six_user_role_metadata(packet, required_users)
     review_instructions = [
-        "Open each listed local_video or video_url for the required users.",
+        "Open each listed full_local_video, local_video, or video_url for the required users.",
         "Check the referred_timestamps and per_user_evidence_claims against the visible content.",
     ]
     if len(required_users) == 6:
         review_instructions.extend(
             [
-                "Verify that the speaker cannot select the correct option from the speaker video alone.",
-                "Verify that the six full input videos together support exactly one correct option.",
+                "Verify that the speaker video alone lacks enough visible evidence to answer the question.",
+                "Verify that the six full input videos together contain enough visible evidence to answer the question.",
+                "Assess evidence sufficiency without asking the answerability judge to select an option.",
                 "Do not require every provider to contribute evidence.",
             ]
         )
@@ -596,23 +675,36 @@ def complete_generator_metadata(
                 "the missing visual detail from the evidence provider"
             )
         elif index > 0 and not text:
-            single[user] = (
-                "may be sufficient because this user is the evidence provider; "
-                "answerability is logged by the evaluator"
-            )
+            if len(required_users) == 6:
+                single[user] = (
+                    "not preclassified; assess only this provider's view and report truthfully "
+                    "whether it independently supports the answer"
+                )
+            else:
+                single[user] = (
+                    "may be sufficient because this user is the evidence provider; "
+                    "answerability is logged by the evaluator"
+                )
     qa["single_user_answerability"] = single
 
     combined = str(qa.get("combined_answerability", "")).strip()
     if "sufficient" not in combined.lower() and "support" not in combined.lower():
         qa["combined_answerability"] = (
-            "sufficient because combining the required users' videos provides "
+            "sufficient because the six-video input combines the speaker-side reason to ask "
+            "with answer-bearing evidence from one or more provider views"
+            if len(required_users) == 6
+            else "sufficient because combining the required users' videos provides "
             "the speaker-side anchor event plus the missing visual detail needed "
             "to select exactly one option"
         )
 
     if not qa.get("generator_rationale"):
         qa["generator_rationale"] = (
-            "The question is framed as a natural first-person memory gap anchored "
+            "The question is a natural first-person information need grounded in the full "
+            "speaker experience, while one or more provider views supply evidence the speaker "
+            "does not have."
+            if len(required_users) == 6
+            else "The question is framed as a natural first-person memory gap anchored "
             "in the asker's experience and answered with another user's visual evidence."
         )
     if not qa.get("why_two_users_needed"):
@@ -651,8 +743,14 @@ def complete_generator_metadata(
         review = {}
     review.setdefault(
         "generator_self_check",
-        "This draft should be unanswerable from the first required user's video alone; "
-        "the second required user's video may contain the answer as evidence-provider context.",
+        (
+            "This draft should express a question the speaker would naturally want to ask after "
+            "their own experience. The full speaker video should motivate the question without "
+            "revealing the answer; one or more provider views should supply the missing evidence."
+            if len(required_users) == 6
+            else "This draft should be unanswerable from the first required user's video alone; "
+            "the second required user's video may contain the answer as evidence-provider context."
+        ),
     )
     review.setdefault("speaker_user", asker_user)
     review.setdefault("evidence_provider_user", evidence_provider_user)
@@ -766,23 +864,118 @@ def choose_question_type(
     return sorted(remaining.items(), key=lambda item: (-item[1], item[0]))[0][0]
 
 
+def summarize_review_gate_attempts(
+    accepted_rows: list[dict[str, Any]],
+    rejected_rows: list[dict[str, Any]],
+    *,
+    max_attempts: int,
+) -> dict[str, Any]:
+    """按评审轮次汇总三个生产 Gate 的 PASS、拒绝与未运行数量。"""
+
+    gate_names = ("qa_formality", "evidence_groundedness", "answerability")
+
+    def empty_counts() -> dict[str, int]:
+        return {"pass_count": 0, "reject_count": 0, "not_run_count": 0}
+
+    by_attempt = {
+        str(attempt): {gate_name: empty_counts() for gate_name in gate_names}
+        for attempt in range(1, max_attempts + 1)
+    }
+    overall = {gate_name: empty_counts() for gate_name in gate_names}
+    generator_attempt_count = 0
+
+    for row in [*accepted_rows, *rejected_rows]:
+        for trace in row.get("generation_trace") or []:
+            attempt = trace.get("attempt")
+            if not isinstance(attempt, int) or not 1 <= attempt <= max_attempts:
+                continue
+            generator_attempt_count += 1
+            checks = (
+                ((((trace.get("judge") or {}).get("merged") or {}).get("checks")) or {})
+            )
+            for gate_name in gate_names:
+                status = str((checks.get(gate_name) or {}).get("status") or "").upper()
+                counter_name = (
+                    "pass_count"
+                    if status == "PASS"
+                    else "reject_count"
+                    if status == "FAIL"
+                    else "not_run_count"
+                )
+                by_attempt[str(attempt)][gate_name][counter_name] += 1
+                overall[gate_name][counter_name] += 1
+
+    def finalize(counts: dict[str, int]) -> dict[str, int | float]:
+        reviewed_count = counts["pass_count"] + counts["reject_count"]
+        return {
+            **counts,
+            "reviewed_count": reviewed_count,
+            "pass_rate": (
+                round(counts["pass_count"] / reviewed_count, 6)
+                if reviewed_count
+                else 0.0
+            ),
+            "reject_rate": (
+                round(counts["reject_count"] / reviewed_count, 6)
+                if reviewed_count
+                else 0.0
+            ),
+        }
+
+    accepted_by_attempt = {str(attempt): 0 for attempt in range(1, max_attempts + 1)}
+    for row in accepted_rows:
+        attempt = row.get("attempt_count")
+        if isinstance(attempt, int) and 1 <= attempt <= max_attempts:
+            accepted_by_attempt[str(attempt)] += 1
+
+    attempted_group_count = len(accepted_rows) + len(rejected_rows)
+    return {
+        "attempted_group_count": attempted_group_count,
+        "accepted_count": len(accepted_rows),
+        "rejected_count": len(rejected_rows),
+        "acceptance_rate": (
+            round(len(accepted_rows) / attempted_group_count, 6)
+            if attempted_group_count
+            else 0.0
+        ),
+        "generator_attempt_count": generator_attempt_count,
+        "accepted_by_attempt": accepted_by_attempt,
+        "rejected_after_max_attempts": sum(
+            1
+            for row in rejected_rows
+            if any(
+                trace.get("attempt") == max_attempts
+                for trace in (row.get("generation_trace") or [])
+            )
+        ),
+        "gate_review_by_attempt": {
+            attempt: {
+                gate_name: finalize(counts)
+                for gate_name, counts in gate_counts.items()
+            }
+            for attempt, gate_counts in by_attempt.items()
+        },
+        "gate_review_overall": {
+            gate_name: finalize(counts) for gate_name, counts in overall.items()
+        },
+    }
+
+
 def build_answerability_conditions(required_users: list[str]) -> list[dict[str, Any]]:
     users = list(required_users)
     if len(users) == 6:
-        conditions = [
+        return [
             {
                 "condition_id": f"speaker_only::{users[0]}",
                 "condition_type": "speaker_only",
                 "users": [users[0]],
-            }
-        ]
-        if ENABLE_COMBINED_ALL_SIX_ANSWERABILITY:
-            conditions.append({
+            },
+            {
                 "condition_id": "combined_all_six_users::" + "+".join(users),
                 "condition_type": "combined_all_six_users",
                 "users": users,
-            })
-        return conditions
+            },
+        ]
     conditions = [
         {
             "condition_id": f"single_user::{user}",
@@ -819,12 +1012,80 @@ def parsed_choice(value: Any) -> tuple[str | None, bool]:
     return None, True
 
 
-def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]]) -> dict[str, Any]:
-    try:
-        correct = normalize_correct(qa_item.get("correct"))
-    except ValueError as exc:
-        return {"passed": False, "reason": str(exc)}
+def parsed_answerability_sufficiency(
+    evaluation: dict[str, Any],
+) -> tuple[bool | None, str | None]:
+    """Derive sufficiency from a complete per-fact visibility audit."""
 
+    forbidden_fields = [
+        key
+        for key in ("answerable", "choice", "answer", "answer_text", "option")
+        if key in evaluation
+    ]
+    if forbidden_fields:
+        return None, "response included forbidden answer fields: " + ", ".join(
+            forbidden_fields
+        )
+    if not str(evaluation.get("reason") or "").strip():
+        return None, "reason must be a non-empty string"
+    facts = evaluation.get("needed_facts")
+    if not isinstance(facts, list) or not facts:
+        return None, "needed_facts must be a non-empty array"
+    condition_users = {
+        str(user) for user in (evaluation.get("users") or []) if str(user).strip()
+    }
+    required_fields = (
+        "fact",
+        "why_needed",
+        "visibility",
+        "source_user",
+        "original_time_range",
+        "visual_description",
+    )
+    all_visible = True
+    for index, fact in enumerate(facts):
+        if not isinstance(fact, dict):
+            return None, f"needed_facts[{index}] must be an object"
+        missing = [key for key in required_fields if key not in fact]
+        if missing:
+            return None, f"needed_facts[{index}] missing fields: {', '.join(missing)}"
+        for key in ("fact", "why_needed", "visual_description"):
+            if not isinstance(fact.get(key), str) or not fact[key].strip():
+                return None, f"needed_facts[{index}].{key} must be a non-empty string"
+        visibility = fact.get("visibility")
+        if visibility not in {"VISIBLE", "NOT_VISIBLE", "AMBIGUOUS"}:
+            return None, (
+                f"needed_facts[{index}].visibility must be VISIBLE, "
+                "NOT_VISIBLE, or AMBIGUOUS"
+            )
+        if visibility == "VISIBLE":
+            source_user = str(fact.get("source_user") or "").strip()
+            if source_user not in condition_users:
+                return None, (
+                    f"needed_facts[{index}].source_user must name a user in the condition"
+                )
+            time_range = str(fact.get("original_time_range") or "").strip()
+            if not time_range:
+                return None, (
+                    f"needed_facts[{index}].original_time_range must be non-empty "
+                    "when visibility is VISIBLE"
+                )
+        else:
+            all_visible = False
+            if fact.get("source_user") not in (None, ""):
+                return None, (
+                    f"needed_facts[{index}].source_user must be null when visibility "
+                    f"is {visibility}"
+                )
+            if fact.get("original_time_range") not in (None, ""):
+                return None, (
+                    f"needed_facts[{index}].original_time_range must be null when "
+                    f"visibility is {visibility}"
+                )
+    return all_visible, None
+
+
+def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]]) -> dict[str, Any]:
     required_users = list(qa_item.get("required_users") or [])
     if len(required_users) == 6:
         speaker_rows = [
@@ -835,7 +1096,10 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
             for row in evaluations
             if row.get("condition_type") == "combined_all_six_users"
         ]
-        base = {"answerability_evaluated_condition_count": len(evaluations)}
+        base = {
+            "answerability_mode": "evidence_sufficiency_reasoning",
+            "answerability_evaluated_condition_count": len(evaluations),
+        }
         if not speaker_rows:
             return {
                 "passed": False,
@@ -844,34 +1108,27 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 **base,
             }
 
-        speaker_choice, speaker_invalid = parsed_choice(speaker_rows[-1].get("choice"))
-        if speaker_invalid:
+        speaker_answerable, speaker_error = parsed_answerability_sufficiency(
+            speaker_rows[-1]
+        )
+        if speaker_error:
             return {
                 "passed": False,
-                "reason": "speaker-only evaluation did not select exactly one A-E answer",
+                "reason": f"invalid speaker-only sufficiency evaluation: {speaker_error}",
                 "failure_label": "speaker_only_unparsed",
-                "speaker_only_choice": None,
+                "speaker_only_answerable": None,
                 **base,
             }
 
-        speaker_only_correct = speaker_choice == correct
         metrics = {
-            "speaker_only_choice": speaker_choice,
-            "speaker_only_correct": speaker_only_correct,
+            "speaker_only_answerable": speaker_answerable,
             **base,
         }
-        if speaker_only_correct:
+        if speaker_answerable:
             return {
                 "passed": False,
-                "reason": "speaker-only condition selected the declared correct answer",
-                "failure_label": "speaker_only_correct",
-                **metrics,
-            }
-        if not ENABLE_COMBINED_ALL_SIX_ANSWERABILITY:
-            return {
-                "passed": True,
-                "reason": "speaker-only condition selected a wrong option",
-                "failure_label": None,
+                "reason": "speaker-only videos were judged sufficient to answer the question",
+                "failure_label": "speaker_only_answerable",
                 **metrics,
             }
         if not all_six_rows:
@@ -881,38 +1138,42 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "failure_label": "all_six_missing",
                 **metrics,
             }
-        all_six_choice, all_six_invalid = parsed_choice(all_six_rows[-1].get("choice"))
-        if all_six_invalid:
+        all_six_answerable, all_six_error = parsed_answerability_sufficiency(
+            all_six_rows[-1]
+        )
+        if all_six_error:
             return {
                 "passed": False,
-                "reason": "all-six evaluation did not select exactly one A-E answer",
+                "reason": f"invalid all-six sufficiency evaluation: {all_six_error}",
                 "failure_label": "all_six_unparsed",
-                "all_six_choice": None,
-                "all_six_correct": False,
+                "all_six_answerable": None,
                 **metrics,
             }
-        all_six_correct = all_six_choice == correct
         combined_metrics = {
-            "all_six_choice": all_six_choice,
-            "all_six_correct": all_six_correct,
+            "all_six_answerable": all_six_answerable,
             **metrics,
         }
-        if not all_six_correct:
+        if not all_six_answerable:
             return {
                 "passed": False,
-                "reason": f"all-six condition did not select correct answer {correct}",
-                "failure_label": "all_six_wrong",
+                "reason": "all-six videos were judged insufficient to answer the question",
+                "failure_label": "all_six_not_answerable",
                 **combined_metrics,
             }
         return {
             "passed": True,
             "reason": (
-                "speaker-only condition selected a wrong option and all-six condition "
-                "selected the declared correct answer"
+                "speaker-only evidence was judged insufficient and all-six evidence was "
+                "judged sufficient"
             ),
             "failure_label": None,
             **combined_metrics,
         }
+
+    try:
+        correct = normalize_correct(qa_item.get("correct"))
+    except ValueError as exc:
+        return {"passed": False, "reason": str(exc)}
 
     combined = [row for row in evaluations if row.get("condition_type") == "combined_all_users"]
     if not combined:
@@ -1701,7 +1962,7 @@ def answerability_uncertainty_from_choice_logits(
         "generated_choice": generated if generated in choices else None,
         "token_index": signal.get("token_index"),
         "distribution_scope": "softmax restricted to direct answer tokens A, B, C, D, and E",
-        "note": "diagnostic only; production answerability is forced-choice over A-E",
+        "note": "diagnostic only; legacy non-six-user answerability is forced-choice over A-E",
     }
 
 
@@ -2083,8 +2344,10 @@ def merge_parallel_judges(
         )
         qa_formality_check["fix"] = (
             "Repair every failed or missing formality subcheck: use natural first-person or "
-            "shared-memory wording, clarify references and options, and remove participant "
-            "names and timestamp citations."
+            "shared-memory wording, clarify references and options, replace any concurrent-activity "
+            "report with a concrete missing object, identity, state, location, outcome, consequence, "
+            "explanation, interaction result, or follow-up, and remove participant names and "
+            "timestamp citations."
         )
     if schema_branch["status"] != "PASS":
         qa_formality_check["status"] = "FAIL"
@@ -2213,8 +2476,15 @@ def answerability_check_from_gate(answerability: dict[str, Any] | None) -> dict[
         "status": "FAIL",
         "reason": reason or "answerability gate failed",
         "fix": (
-            "Revise the question-answer item so the combined required users select the correct answer "
-            "and the asker/subset conditions do not."
+            (
+                "Revise the question-answer item so the speaker video alone lacks the needed "
+                "visual evidence and the six combined videos contain it."
+            )
+            if gate.get("answerability_mode") == "evidence_sufficiency_reasoning"
+            else (
+                "Revise the question-answer item so the combined required users select the correct "
+                "answer and the asker/subset conditions do not."
+            )
         ),
     }
 
@@ -2637,6 +2907,7 @@ def run_answerability_eval(
     attempt: int | None = None,
 ) -> dict[str, Any]:
     evaluations = []
+    reasoning_sufficiency_mode = len(qa_item.get("required_users") or []) == 6
     for condition in build_answerability_conditions(qa_item.get("required_users", [])):
         clips = clips_for_users(packet, condition["users"])
         image_paths, video_paths = media_for_clips(
@@ -2648,10 +2919,13 @@ def run_answerability_eval(
         prompt = build_answerability_prompt(qa_item, condition)
         prompt_row = {
             "stage": "answerability",
+            "generation_slot_id": qa_item.get("generation_slot_id"),
+            "generation_group_id": qa_item.get("generation_group_id"),
             "qa_id": qa_item.get("qa_id"),
             "attempt": attempt,
             "generation_mode": qa_item.get("generation_mode"),
             "condition_id": condition["condition_id"],
+            "condition_type": condition["condition_type"],
             "prompt": prompt,
             "image_paths": image_paths,
             "video_paths": video_paths,
@@ -2690,14 +2964,22 @@ def run_answerability_eval(
         try:
             answer = extract_json_object(raw)
         except Exception as exc:
-            answer = {
-                "choice": None,
-                "answer_text": "",
-                "evidence_used": f"parse_failed: {exc}",
-            }
+            if reasoning_sufficiency_mode:
+                answer = {
+                    "reason": f"parse_failed: {exc}",
+                    "needed_facts": [],
+                }
+            else:
+                answer = {
+                    "choice": None,
+                    "answer_text": "",
+                    "evidence_used": f"parse_failed: {exc}",
+                }
         evaluations.append(
             {
                 **condition,
+                "generation_slot_id": qa_item.get("generation_slot_id"),
+                "generation_group_id": qa_item.get("generation_group_id"),
                 **answer,
                 "raw_output": raw,
                 "elapsed_seconds": elapsed_seconds,
@@ -2712,6 +2994,105 @@ def run_answerability_eval(
         )
     gate = answerability_gate(qa_item, evaluations)
     return {"evaluations": evaluations, "gate": gate}
+
+
+def run_chunked_evidence_groundedness_eval(
+    *,
+    qa_item: dict[str, Any],
+    packet: dict[str, Any],
+    runner: Any,
+    full_video_paths: list[str],
+    prompt_rows: list[dict[str, Any]],
+    attempt: int,
+    segment_paths_by_user: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    """Extract six per-user segment audits, then aggregate them text-only."""
+
+    specs_by_user = evidence_segment_specs(packet, full_video_paths)
+    active_paths = segment_paths_by_user or materialize_evidence_segment_paths(
+        packet,
+        specs_by_user,
+    )
+    observations = []
+    for user in packet.get("required_users") or []:
+        user = str(user)
+        specs = specs_by_user[user]
+        video_paths = list(active_paths.get(user) or [])
+        if len(video_paths) != len(specs):
+            raise ValueError(f"user {user} must provide six materialized evidence segments")
+        prompt = build_evidence_segment_observation_prompt(
+            qa_item,
+            user=user,
+            segments=specs,
+        )
+        prompt_row = {
+            "stage": "evidence_segment_observation",
+            "generation_slot_id": qa_item.get("generation_slot_id"),
+            "generation_group_id": qa_item.get("generation_group_id"),
+            "evidence_id": packet.get("evidence_id"),
+            "qa_id": qa_item.get("qa_id"),
+            "attempt": attempt,
+            "user": user,
+            "segments": specs,
+            "prompt": prompt,
+            "image_paths": [],
+            "video_paths": video_paths,
+            "media_role": "full_original_30s_segments",
+            "model_id": getattr(runner, "model_id", None),
+        }
+        prompt_rows.append(prompt_row)
+        stage_start = time.time()
+        raw = runner.generate(prompt, image_paths=[], video_paths=video_paths)
+        prompt_row["elapsed_seconds"] = round(time.time() - stage_start, 3)
+        observation = extract_json_object(raw)
+        errors = validate_segment_observation(
+            observation,
+            expected_user=user,
+            expected_time_tokens=[str(row.get("time_token") or "") for row in specs],
+        )
+        if errors:
+            raise ValueError(
+                f"evidence segment observation contract failed for {user}: "
+                + "; ".join(errors)
+            )
+        observation["raw_output"] = raw
+        observations.append(observation)
+
+    aggregation_prompt = build_evidence_observation_aggregation_prompt(
+        qa_item,
+        packet,
+        observations=observations,
+    )
+    prompt_rows.append(
+        {
+            "stage": "evidence_groundedness_aggregation",
+            "generation_slot_id": qa_item.get("generation_slot_id"),
+            "generation_group_id": qa_item.get("generation_group_id"),
+            "evidence_id": packet.get("evidence_id"),
+            "qa_id": qa_item.get("qa_id"),
+            "attempt": attempt,
+            "prompt": aggregation_prompt,
+            "image_paths": [],
+            "video_paths": [],
+            "media_role": "text_only_segment_aggregation",
+            "model_id": getattr(runner, "model_id", None),
+            "chunk_observation_count": len(observations),
+        }
+    )
+    result = run_model_judge_branch(
+        check_name="evidence_groundedness",
+        prompt=aggregation_prompt,
+        runner=runner,
+        image_paths=[],
+        video_paths=[],
+        evidence_id=packet.get("evidence_id"),
+        qa_id=qa_item.get("qa_id"),
+        attempt=attempt,
+    )
+    result["chunked_evidence_review"] = True
+    result["chunk_observations"] = observations
+    result["aggregation_prompt"] = aggregation_prompt
+    return result
 
 
 def run_parallel_review_judges(
@@ -2773,6 +3154,11 @@ def run_parallel_review_judges(
         packet,
         pass_fail_only=True,
     )
+    chunked_evidence_review = (
+        len(packet.get("required_users") or []) == 6
+        and len(packet.get("clips") or []) == 6
+        and all(len(clip.get("segments") or []) == 6 for clip in packet.get("clips") or [])
+    )
     qa_formality_entropy_probe_prompt = None
     evidence_groundedness_entropy_probe_prompt = None
     if record_decision_entropy:
@@ -2789,6 +3175,8 @@ def run_parallel_review_judges(
     prompt_rows.append(
         {
             "stage": "qa_formality_judge",
+            "generation_slot_id": qa_item.get("generation_slot_id"),
+            "generation_group_id": qa_item.get("generation_group_id"),
             "evidence_id": packet.get("evidence_id"),
             "qa_id": qa_item.get("qa_id"),
             "question_type": qa_item.get("question_type"),
@@ -2809,28 +3197,31 @@ def run_parallel_review_judges(
             "point_scoring": point_scoring_mode,
         }
     )
-    prompt_rows.append(
-        {
-            "stage": "evidence_groundedness_judge",
-            "evidence_id": packet.get("evidence_id"),
-            "qa_id": qa_item.get("qa_id"),
-            "question_type": qa_item.get("question_type"),
-            "generation_mode": qa_item.get("generation_mode"),
-            "attempt": attempt,
-            "prompt": evidence_groundedness_prompt,
-            "image_paths": full_image_paths,
-            "video_paths": full_video_paths,
-            "media_role": judge_media_role,
-            "model_id": getattr(runner, "model_id", None),
-            "generator_rationale_included": include_generator_rationale,
-            "pass_fail_only": True,
-            "judge_contract": "legacy_review_passed",
-            "decision_entropy_requested": False,
-            "authoritative_for_acceptance": True,
-            "entropy_probe_affects_acceptance": False,
-            "point_scoring": point_scoring_mode,
-        }
-    )
+    if not chunked_evidence_review:
+        prompt_rows.append(
+            {
+                "stage": "evidence_groundedness_judge",
+                "generation_slot_id": qa_item.get("generation_slot_id"),
+                "generation_group_id": qa_item.get("generation_group_id"),
+                "evidence_id": packet.get("evidence_id"),
+                "qa_id": qa_item.get("qa_id"),
+                "question_type": qa_item.get("question_type"),
+                "generation_mode": qa_item.get("generation_mode"),
+                "attempt": attempt,
+                "prompt": evidence_groundedness_prompt,
+                "image_paths": full_image_paths,
+                "video_paths": full_video_paths,
+                "media_role": judge_media_role,
+                "model_id": getattr(runner, "model_id", None),
+                "generator_rationale_included": include_generator_rationale,
+                "pass_fail_only": True,
+                "judge_contract": "legacy_review_passed",
+                "decision_entropy_requested": False,
+                "authoritative_for_acceptance": True,
+                "entropy_probe_affects_acceptance": False,
+                "point_scoring": point_scoring_mode,
+            }
+        )
     if record_decision_entropy:
         prompt_rows.extend(
             [
@@ -2876,6 +3267,7 @@ def run_parallel_review_judges(
         )
 
     answerability_prompt_rows: list[dict[str, Any]] = []
+    evidence_chunk_prompt_rows: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=3) as executor:
         qa_formality_future = executor.submit(
             run_model_judge_branch,
@@ -2890,19 +3282,30 @@ def run_parallel_review_judges(
             collect_choice_logits=record_decision_entropy,
             minimal_verdict_probe_prompt=qa_formality_entropy_probe_prompt,
         )
-        evidence_groundedness_future = executor.submit(
-            run_model_judge_branch,
-            check_name="evidence_groundedness",
-            prompt=evidence_groundedness_prompt,
-            runner=runner,
-            image_paths=full_image_paths,
-            video_paths=full_video_paths,
-            evidence_id=packet.get("evidence_id"),
-            qa_id=qa_item.get("qa_id"),
-            attempt=attempt,
-            collect_choice_logits=record_decision_entropy,
-            minimal_verdict_probe_prompt=evidence_groundedness_entropy_probe_prompt,
-        )
+        if chunked_evidence_review:
+            evidence_groundedness_future = executor.submit(
+                run_chunked_evidence_groundedness_eval,
+                qa_item=qa_for_prompt,
+                packet=packet,
+                runner=runner,
+                full_video_paths=full_video_paths,
+                prompt_rows=evidence_chunk_prompt_rows,
+                attempt=attempt,
+            )
+        else:
+            evidence_groundedness_future = executor.submit(
+                run_model_judge_branch,
+                check_name="evidence_groundedness",
+                prompt=evidence_groundedness_prompt,
+                runner=runner,
+                image_paths=full_image_paths,
+                video_paths=full_video_paths,
+                evidence_id=packet.get("evidence_id"),
+                qa_id=qa_item.get("qa_id"),
+                attempt=attempt,
+                collect_choice_logits=record_decision_entropy,
+                minimal_verdict_probe_prompt=evidence_groundedness_entropy_probe_prompt,
+            )
         answerability_future = executor.submit(
             run_answerability_eval,
             qa_item=qa_item,
@@ -2944,6 +3347,8 @@ def run_parallel_review_judges(
             }
 
     for row in answerability_prompt_rows:
+        prompt_rows.append(row)
+    for row in evidence_chunk_prompt_rows:
         prompt_rows.append(row)
 
     judge = merge_parallel_judges(
@@ -3018,10 +3423,20 @@ def run_parallel_review_judges(
             "model_id": getattr(runner, "model_id", None),
             "elapsed_seconds": evidence_groundedness_judge.get("elapsed_seconds"),
             "generator_rationale_included": include_generator_rationale,
-            "prompt": evidence_groundedness_prompt,
+            "prompt": evidence_groundedness_judge.get(
+                "aggregation_prompt",
+                evidence_groundedness_prompt,
+            ),
             "entropy_probe_prompt": evidence_groundedness_entropy_probe_prompt,
             "raw_output": evidence_groundedness_judge.get("raw_output"),
             "parsed": evidence_groundedness_judge,
+            "chunked_evidence_review": bool(
+                evidence_groundedness_judge.get("chunked_evidence_review")
+            ),
+            "chunk_observations": evidence_groundedness_judge.get(
+                "chunk_observations",
+                [],
+            ),
         },
         "answerability": answerability,
         "answerability_model_id": getattr(runner, "model_id", None),
@@ -3075,6 +3490,10 @@ def generate_video_qa_loop(
     generator_temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
     generator_top_p: float = DEFAULT_SAMPLING_TOP_P,
     generator_top_k: int | None = None,
+    deadline_epoch_seconds: float | None = None,
+    repeat_evidence: bool = False,
+    max_generation_slots: int | None = None,
+    attempts_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     judge_include_generator_rationale = False
     # Archived scored/quota production switch:
@@ -3096,6 +3515,8 @@ def generate_video_qa_loop(
     active_question_types = tuple(question_types or DEFAULT_QUESTION_TYPES)
     if not active_question_types:
         raise ValueError("question_types must include at least one question type")
+    if repeat_evidence and deadline_epoch_seconds is None:
+        raise ValueError("repeat_evidence requires deadline_epoch_seconds")
     unknown_question_types = [
         question_type for question_type in active_question_types if question_type not in QUESTION_TYPES
     ]
@@ -3195,6 +3616,7 @@ def generate_video_qa_loop(
     intermediate_rows = StreamingJsonlRows(intermediate_path, reset=not resume)
     accepted = StreamingJsonlRows(output_path, reset=not resume)
     rejected = StreamingJsonlRows(rejected_path, reset=not resume)
+    attempt_rows = StreamingJsonlRows(attempts_path, reset=not resume)
     judge_entropy_rows = StreamingJsonlRows(
         judge_entropy_path if record_judge_decision_entropy else None,
         reset=not resume,
@@ -3204,6 +3626,7 @@ def generate_video_qa_loop(
         rejected.load_existing()
         prompts.load_existing()
         intermediate_rows.load_existing()
+        attempt_rows.load_existing()
         judge_entropy_rows.load_existing()
     quality_quota_counts: dict[str, int] | None = None
     # Archived resume-time quota restoration:
@@ -3221,19 +3644,51 @@ def generate_video_qa_loop(
         if question_type in counts:
             counts[question_type] += 1
     judge_media_backend = judge_backend or backend
+    previous_questions_by_group: dict[str, list[str]] = {}
+    normalized_questions_by_group: dict[str, set[str]] = {}
+    evidence_packets = list(iter_jsonl(evidence_path))
+    packet_source = (
+        round_robin_generation_slots(
+            evidence_packets,
+            max_slots=max_generation_slots,
+        )
+        if repeat_evidence
+        else iter(evidence_packets)
+    )
+    stop_for_deadline = False
 
-    for packet_index, packet in enumerate(iter_jsonl(evidence_path)):
-        if fixed_question_type_schedule and packet_index >= target_count:
+    for packet_index, source_packet in enumerate(packet_source):
+        if repeat_evidence and deadline_reached(float(deadline_epoch_seconds)):
+            stop_for_deadline = True
             break
-        if len(accepted) >= target_count:
+        if not repeat_evidence and fixed_question_type_schedule and packet_index >= target_count:
             break
+        if not repeat_evidence and len(accepted) >= target_count:
+            break
+        packet = dict(source_packet)
         evidence_id = str(packet.get("evidence_id") or "")
-        if resume and evidence_id in processed_evidence_ids:
+        if resume and not repeat_evidence and evidence_id in processed_evidence_ids:
             print(f"resume_skip evidence_id={evidence_id}", flush=True)
             continue
+        generation_group_id = str(packet.get("generation_group_id") or evidence_id)
+        slot_fields = {
+            key: packet.get(key)
+            for key in (
+                "generation_slot_id",
+                "base_evidence_id",
+                "generation_group_id",
+                "generation_round_index",
+                "generation_diversity_focus",
+                "speaker_index",
+            )
+            if packet.get(key) is not None
+        }
+        packet["previous_questions_to_avoid"] = list(
+            previous_questions_by_group.get(generation_group_id, [])
+        )
         question_type = (
             active_question_types[packet_index % len(active_question_types)]
-            if fixed_question_type_schedule
+            if repeat_evidence or fixed_question_type_schedule
             else choose_question_type(counts, targets, active_question_types)
         )
         if question_type is None:
@@ -3356,6 +3811,7 @@ def generate_video_qa_loop(
             # Archived discovery prompt-row emission removed from the production trace.
             prompts.append(
                 {
+                    **slot_fields,
                     "stage": "generation",
                     "evidence_id": packet.get("evidence_id"),
                     "question_type": question_type,
@@ -3369,6 +3825,7 @@ def generate_video_qa_loop(
             )
             prompts.append(
                 {
+                    **slot_fields,
                     "stage": "qa_formality_judge",
                     "evidence_id": packet.get("evidence_id"),
                     "qa_id": qa.get("qa_id"),
@@ -3387,6 +3844,7 @@ def generate_video_qa_loop(
             )
             prompts.append(
                 {
+                    **slot_fields,
                     "stage": "evidence_groundedness_judge",
                     "evidence_id": packet.get("evidence_id"),
                     "qa_id": qa.get("qa_id"),
@@ -3412,6 +3870,7 @@ def generate_video_qa_loop(
                 )
                 prompts.append(
                     {
+                        **slot_fields,
                         "stage": "answerability",
                         "evidence_id": packet.get("evidence_id"),
                         "question_type": question_type,
@@ -3454,8 +3913,41 @@ def generate_video_qa_loop(
         packet_final_status = "unknown"
         packet_final_attempt: int | None = None
         last_review = None
+        latest_qa: dict[str, Any] | None = None
+        slot_stopped_for_deadline = False
+
+        def persist_attempt(status: str, *, qa: dict[str, Any] | None) -> None:
+            attempt_rows.append(
+                {
+                    **slot_fields,
+                    "evidence_id": packet.get("evidence_id"),
+                    "question_type": question_type,
+                    "generation_mode": generation_mode,
+                    "attempt": attempt_trace["attempt"],
+                    "status": status,
+                    "qa": qa,
+                    "trace": attempt_trace,
+                }
+            )
+
         for attempt in range(1, max_attempts + 1):
+            if repeat_evidence and deadline_reached(float(deadline_epoch_seconds)):
+                if packet_trace:
+                    partial_row = {
+                        **slot_fields,
+                        "evidence_id": packet.get("evidence_id"),
+                        "question_type": question_type,
+                        "generation_mode": generation_mode,
+                        "status": "time_budget_partial",
+                        "attempts": packet_trace,
+                        "qa": latest_qa,
+                    }
+                    intermediate_rows.append(partial_row)
+                slot_stopped_for_deadline = True
+                stop_for_deadline = True
+                break
             attempt_trace: dict[str, Any] = {
+                **slot_fields,
                 "evidence_id": packet.get("evidence_id"),
                 "question_type": question_type,
                 "generation_mode": generation_mode,
@@ -3481,6 +3973,9 @@ def generate_video_qa_loop(
                 "result": {},
             }
             packet_trace.append(attempt_trace)
+            packet["previous_questions_to_avoid"] = list(
+                previous_questions_by_group.get(generation_group_id, [])
+            )
             # Archived discovery mode previously made a planning call here and then
             # converted selected_relation with build_relation_mcq_prompt. Production
             # now makes the single baseline generation call only.
@@ -3494,6 +3989,7 @@ def generate_video_qa_loop(
             attempt_trace["generation"]["prompt"] = gen_prompt
             prompts.append(
                 {
+                    **slot_fields,
                     "stage": "generation",
                     "evidence_id": packet.get("evidence_id"),
                     "question_type": question_type,
@@ -3542,9 +4038,17 @@ def generate_video_qa_loop(
                 feedback = f"Generator output was not valid JSON: {exc}"
                 attempt_trace["result"] = {"accepted": False, "reason": feedback}
                 packet_rejections.append({"attempt": attempt, "reason": feedback, "raw_output": raw_generation})
+                persist_attempt("rejected", qa=None)
                 continue
 
             qa.setdefault("qa_id", f"QA_{len(accepted) + 1:03d}_{packet.get('evidence_id')}")
+            qa.update(slot_fields)
+            option_rotation = rotate_qa_options(
+                qa,
+                offset=packet_index + attempt - 1,
+            )
+            attempt_trace["generation"]["option_rotation"] = option_rotation
+            latest_qa = qa
             attempt_trace["qa_id"] = qa.get("qa_id")
             attempt_trace["generation"]["parsed_qa"] = {
                 "qa_id": qa.get("qa_id"),
@@ -3559,6 +4063,39 @@ def generate_video_qa_loop(
                 "per_user_evidence_claims": qa.get("per_user_evidence_claims"),
                 "referred_timestamps": qa.get("referred_timestamps"),
             }
+            question = str(qa.get("question") or "").strip()
+            normalized_question = normalize_question_for_duplicate(question)
+            attempt_trace["generation"]["normalized_question"] = normalized_question
+            seen_questions = normalized_questions_by_group.setdefault(
+                generation_group_id,
+                set(),
+            )
+            if normalized_question and normalized_question in seen_questions:
+                feedback = (
+                    "Normalized duplicate question in the same synchronized group; "
+                    "generate a substantively different question."
+                )
+                attempt_trace["result"] = {
+                    "accepted": False,
+                    "failure_label": "normalized_duplicate_question",
+                    "reason": feedback,
+                }
+                packet_rejections.append(
+                    {
+                        "attempt": attempt,
+                        "failure_label": "normalized_duplicate_question",
+                        "reason": feedback,
+                        "qa": qa,
+                    }
+                )
+                persist_attempt("rejected", qa=qa)
+                continue
+            if normalized_question:
+                seen_questions.add(normalized_question)
+                previous_questions_by_group.setdefault(
+                    generation_group_id,
+                    [],
+                ).append(question)
             qa["evidence_id"] = packet.get("evidence_id")
             qa["question_type"] = question_type
             qa["generation_mode"] = generation_mode
@@ -3631,6 +4168,7 @@ def generate_video_qa_loop(
                 qa["generation_trace"] = packet_trace
                 intermediate_rows.append(
                     {
+                        **slot_fields,
                         "evidence_id": packet.get("evidence_id"),
                         "qa_id": qa.get("qa_id"),
                         "question_type": question_type,
@@ -3640,6 +4178,7 @@ def generate_video_qa_loop(
                         "qa": qa,
                     }
                 )
+                persist_attempt("infrastructure_error", qa=qa)
                 raise
             attempt_trace["judge"] = judge_trace
             attempt_trace["answerability"] = answerability
@@ -3672,6 +4211,7 @@ def generate_video_qa_loop(
                     )
                     attempt_trace["judge_entropy"] = attempt_entropy_rows
                     packet_entropy_rows.extend(attempt_entropy_rows)
+                persist_attempt("rejected", qa=qa)
                 continue
 
             qa["review"] = build_review_from_gates(
@@ -3710,6 +4250,7 @@ def generate_video_qa_loop(
                     )
                     attempt_trace["judge_entropy"] = attempt_entropy_rows
                     packet_entropy_rows.extend(attempt_entropy_rows)
+                persist_attempt("rejected", qa=qa)
                 continue
 
             attempt_trace["result"] = {"accepted": True, "reason": "passed all gates"}
@@ -3725,9 +4266,11 @@ def generate_video_qa_loop(
                 packet_entropy_rows.extend(attempt_entropy_rows)
             qa["generation_trace"] = packet_trace
             last_review = qa["review"]
+            persist_attempt("accepted", qa=qa)
             accepted.append(qa)
             intermediate_rows.append(
                 {
+                    **slot_fields,
                     "evidence_id": packet.get("evidence_id"),
                     "qa_id": qa.get("qa_id"),
                     "question_type": question_type,
@@ -3743,6 +4286,7 @@ def generate_video_qa_loop(
             break
         else:
             rejected_row = {
+                **slot_fields,
                 "evidence_id": packet.get("evidence_id"),
                 "question_type": question_type,
                 "generation_mode": generation_mode,
@@ -3758,6 +4302,9 @@ def generate_video_qa_loop(
             intermediate_rows.append({**rejected_row, "status": "rejected"})
             packet_final_status = "rejected"
             packet_final_attempt = max_attempts
+
+        if slot_stopped_for_deadline:
+            break
 
         if record_judge_decision_entropy:
             for entropy_row in packet_entropy_rows:
@@ -3777,6 +4324,8 @@ def generate_video_qa_loop(
         write_jsonl(prompts_path, prompts)
     if intermediate_path:
         write_jsonl(intermediate_path, intermediate_rows)
+    if attempts_path:
+        write_jsonl(attempts_path, attempt_rows)
     write_jsonl(output_path, accepted)
     if rejected_path and rejected:
         write_jsonl(rejected_path, rejected)
@@ -3874,6 +4423,10 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
         help="Comma-separated question types to schedule. Use 'neutral' to disable commonality/difference subtype constraints.",
     )
     parser.add_argument("--resume", action="store_true", help="Append to existing JSONL outputs and skip completed evidence IDs")
+    parser.add_argument("--deadline-epoch-seconds", type=float)
+    parser.add_argument("--repeat-evidence", action="store_true")
+    parser.add_argument("--max-generation-slots", type=int)
+    parser.add_argument("--attempts-output")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3930,6 +4483,10 @@ def main(argv: list[str] | None = None) -> int:
         generator_temperature=args.generator_temperature,
         generator_top_p=args.generator_top_p,
         generator_top_k=args.generator_top_k,
+        deadline_epoch_seconds=args.deadline_epoch_seconds,
+        repeat_evidence=args.repeat_evidence,
+        max_generation_slots=args.max_generation_slots,
+        attempts_path=args.attempts_output,
     )
     print(f"accepted {len(rows)} video-first question-answer rows")
     return 0

@@ -1,95 +1,122 @@
-# 六视频多用户 QA 生成链路设计
+# 六视频 speaker-consensus pruning 与多用户 QA 设计
 
-日期：2026-08-18
+日期：2026-08-20
 状态：用户已批准设计，等待实现
 
 ## 1. 目标
 
-把当前 QA 生成输入从两位用户扩展为六位同步用户：
+在现有六用户 QA、judge、answerability 和 Qwen3.6-27B memory-safe 执行层上，将“双 anchor 星型裁剪”改成 speaker-centered 六视频共识裁剪：
 
 \[
 1\ \text{speaker}
-+ 2\ \text{anchor providers}
-+ 3\ \text{additional providers}
++ 5\ \text{providers}
+\rightarrow 6\ \text{pruned generator videos}
 \rightarrow 1\ \text{QA}
 \]
 
-本轮只修改 QA 候选挖掘、生成、自动审核和 Torch 试验链路，不修改 GRPO、DPO 或 reviewer 训练合同。
+同一同步组固定按用户顺序依次遍历六个 speaker。每个 speaker 候选独立执行共识裁剪和最短保留时长检查；无论失败或成功，都记录结果并继续下一位 speaker，因此一个同步组可以产出多个成功候选。
 
-六位用户同时作为模型输入，但不要求五个 providers 全部贡献答案。核心 answerability 条件是：speaker 单独不能答对，而六视频实际输入能够答对。
+本轮只修改六用户候选 pruning、媒体物化、packet、prompt、自动审核兼容层及对应 Torch 作业文档，不修改 GRPO、DPO、reviewer、optimizer、checkpoint 或训练合同。
 
 ## 2. 非目标与证据边界
 
 - 不要求六位用户缺一不可。
-- 不要求两个 anchor providers 都被最终 QA 使用。
-- 不要求 additional providers 提供答案。
+- 不要求五个 providers 全部贡献答案。
 - 不遍历全部用户子集做 answerability 搜索。
-- 不修改 GRPO、DPO 和 reviewer 训练数据、奖励或模型结构。
+- 不修改二用户活跃路径及其 pair filter 兼容接口。
 - 不计算、校验、冻结或保存版本哈希、文件哈希或媒体哈希。
+- 不新增 baseline 或额外 Gate。
 - 不把 runtime probe 通过表述为 QA 质量结论。
 - 不把自动 reviewer 通过表述为人工确认的自然性或可回答性。
-- 正式 5 条 accepted QA 仅用于初步定性观察，不支持统计显著性结论。
+- 正式 pilot 最多尝试 40 个候选；得到 1–39 条 accepted QA 时只作为 `partial` 初步定性观察，不支持统计显著性结论。
 
-## 3. 六用户候选结构
+## 3. 六用户候选与 speaker 尝试
 
 ### 3.1 同步用户采样
 
-从包含至少六位用户的同一同步 group 中抽取六段视频，对六位用户计算全部：
+从同一同步 group 中按现有采样逻辑取六段视频。组内正好六人时全部保留；人数更多时延续现有随机数生成器与排序规则选择六人。
 
-\[
-\binom{6}{2}=15
-\]
+六用户路径不再计算全部 15 条 pair edge，不再使用 `relative_group_scores`、`score_video_pairs`、pair `kept/rejected`、双 anchor 或 additional-provider 角色选择。provider-provider similarity 不参与候选选择或裁剪。
 
-条 CLIP pair edges。
+### 3.2 多 speaker 合同
 
-候选 speaker 必须至少拥有两条通过现有 pair filter 的 speaker-provider edges。从其合格邻居中选择两位 anchor providers，其余三位成为 additional providers。
+对选中的六位用户按已排序的固定顺序 `1, 2, 3, 4, 5, 6` 遍历 speaker。每次固定一位 speaker，其余五位均为 provider：
 
-provider-provider edges 以及未被选择的 speaker-provider edges 只保存为诊断，不作为候选阻断条件。若存在多个合格角色结构，使用固定随机种子选择；若所有角色结构在媒体物化阶段失败，则拒绝该 group 并保存诊断。
+1. speaker 顺序不使用随机数，也不随机打乱；
+2. 每位用户在同一同步组中最多作为 speaker 尝试一次；
+3. 当前 speaker 的共识裁剪或媒体物化失败时，保存失败诊断并继续下一位 speaker；
+4. 当前 speaker 成功时，保存一个独立候选并继续下一位 speaker；
+5. 一个同步组可产生 0–6 个成功候选；全部 speaker 均失败时拒绝该 group，并保留六次失败原因。
 
-### 3.2 用户顺序合同
+### 3.3 用户顺序合同
 
-六用户顺序固定为：
+每个候选的六用户顺序固定为：
 
 1. `input_users[0]`：speaker；
-2. `input_users[1]`：anchor provider 1；
-3. `input_users[2]`：anchor provider 2；
-4. `input_users[3]`：additional provider 1；
-5. `input_users[4]`：additional provider 2；
-6. `input_users[5]`：additional provider 3。
+2. `input_users[1:6]`：五个 providers。
 
-`required_users` 保留为历史兼容字段，值与 `input_users` 相同并继续决定媒体顺序；在六用户模式中，它不再表示六位用户都逻辑必要。
+`required_users` 保留为历史兼容字段，值与 `input_users` 相同并继续决定媒体顺序；在六用户模式中，它不表示六位用户都逻辑必要。
 
-## 4. 媒体裁剪与路由
+## 4. Speaker-consensus pruning
 
-### 4.1 Generator 输入
+### 4.1 聚类表示
 
-- speaker：使用两条 anchor edges 对应删除区间的归一化并集进行裁剪；
-- anchor provider 1：使用其与 speaker 的 pair-specific 裁剪；
-- anchor provider 2：使用其与 speaker 的 pair-specific 裁剪；
-- 三个 additional providers：使用完整同步视频，不根据无关或未通过的 edges 强行裁剪。
+每个视频延续现有实现：
 
-因此 generator 接收三段裁剪视频和三段完整视频。每段媒体都保存显式角色：
+- 按现有固定采样间隔抽帧；
+- 使用现有 CLIP frame embedding；
+- 使用 deterministic cosine k-means；
+- 请求 12 个 cluster；采样帧不足时实际数量为 `min(12, sampled_frame_count)`；
+- 每个 cluster 使用现有 medoid 表示，不改用 centroid。
 
-- `speaker_pruned`
-- `anchor_provider_pruned`
-- `additional_provider_full`
+### 4.2 匹配与阈值
 
-speaker 合并裁剪后低于现有最短保留时长时，当前角色结构失败；实现继续尝试其他合格 speaker/anchor 结构，不静默回退未裁剪 speaker。全部结构失败时才拒绝 group。
+对当前 speaker 的每个 cluster，分别在五个 provider 的 cluster 中选择 similarity 最大的唯一 argmax cluster。只计算 speaker-to-provider 的五个 similarity matrix，不计算 provider-provider matrix。
 
-### 4.2 Judge 输入
+阈值延续旧实现：
 
-groundedness judge 查看同一顺序的六段完整原视频。
+\[
+\operatorname{high}(s,p)=\mathbf{1}[\operatorname{similarity}(s,p)\ge 0.82]
+\]
 
-answerability judge 只运行两个条件：
+若五个 provider argmax 中至少四个达到阈值，则创建联合删除事件。
 
-- `speaker_only`：一段 speaker 完整原视频；
-- `combined_all_six_users`：六段完整原视频。
+### 4.3 4-of-5 删除范围
 
-所有媒体 trace 必须同时记录用户、角色、generator path、full judge path、是否裁剪及其来源 edges。
+- `5-of-5`：删除 speaker cluster 和五个过阈值 provider argmax cluster。
+- `4-of-5`：只删除 speaker cluster 和四个过阈值 provider argmax cluster；未过阈值的第五个 provider cluster 不删除。
+- `3-of-5` 及以下：不创建删除事件。
 
-## 5. Answerability 门禁
+每个事件记录五个 argmax、similarity、是否过阈值、过阈值数量和实际删除的用户/cluster。联合事件不要求六个视频每次都同时删除 cluster；`4-of-5` 明确只影响五段视频。
 
-六用户门禁定义为：
+### 4.4 去重、区间与时长保护
+
+- 同一 provider cluster 可被多个 speaker cluster 命中；marked cluster 按用户集合去重，只物理删除一次。
+- 诊断保留全部触发来源，不因去重丢失事件 provenance。
+- 删除 cluster 的全部 member frames，不只删除 medoid frame。
+- member frames 使用现有区间 helper 转换、合并 remove intervals，并计算 keep intervals。
+- 不启用 `max_pair_time_difference_seconds` 或其他时间接近限制，仅比较视觉 embedding。
+- 若裁剪后任一视频低于现有最短保留时长，则拒绝当前 speaker 候选；不单独恢复某个 cluster，也不静默回退完整视频。
+
+## 5. 媒体物化与路由
+
+### 5.1 Generator 输入
+
+六段视频都经过当前 speaker 候选的 consensus pruning 物化，并按 `[speaker, provider1, ..., provider5]` 输入 generator。即使某个 provider 没有任何 marked cluster，也仍物化其 pruned 输出；该输出内容可与原窗口等价，但角色统一记录为 consensus-pruned。
+
+媒体模式改为 `six_pruned_videos`。每段 clip 至少记录：用户、位置、`media_role`、pruned path、full original path、marked clusters、remove/keep intervals、删除/保留时长和触发事件。
+
+### 5.2 Judge 输入
+
+- groundedness：同一顺序的六段完整原视频；
+- answerability `speaker_only`：一段 speaker 完整原视频；
+- answerability `combined_all_six_users`：六段完整原视频。
+
+pruning 不改变 judge 的 full-video 路由，也不增加 provider-only 或其他子集调用。
+
+## 6. Answerability 合同
+
+六用户接受条件保持不变：
 
 \[
 \operatorname{Pass}
@@ -99,195 +126,141 @@ answerability judge 只运行两个条件：
 \operatorname{Correct}(\{S,P_1,P_2,P_3,P_4,P_5\})
 \]
 
-具体行为：
+- speaker-only 正确：拒绝；
+- speaker-only 错误且 all-six 正确：通过；
+- 任一条件无法解析：拒绝并按现有重试合同处理；
+- all-six 错误：中性失败记录，不自动归因为噪声；
+- `answerability_evaluated_condition_count=2`；
+- accepted QA 的 `cross_view_gain=1`。
 
-- speaker-only 选择正确答案：拒绝；
-- speaker-only 输出无法解析：门禁失败并触发生成重试；
-- speaker-only 选择错误答案：继续 all-six；
-- all-six 选择正确答案：通过；
-- all-six 选择错误答案或无法解析：门禁失败并触发重试。
+该合同只证明 speaker 需要外部视角且六视频输入可恢复正确答案，不证明五个 providers 都必要。
 
-不评估 provider-only、speaker 加部分 providers 或其他子集。这些子集是否答对均不构成阻断，也不产生额外 VLM 调用。
+## 7. Prompt、schema 与 metadata
 
-该门禁只说明 speaker 需要外部视角，且六视频实际输入可恢复正确答案；它不说明每个 provider 都必要。
+### 7.1 Prompt
 
-## 6. Prompt 与审核合同
-
-### 6.1 Generator prompt
-
-Prompt 必须：
+Generator prompt 改为一名 speaker 加五名普通 providers：
 
 - 从 speaker 的第一人称经历或共享场景提出自然问题；
-- 要求 speaker 自身视频不能确定答案；
-- 提示优先检查两个经过 CLIP 关系过滤的 anchor providers；
-- 允许 additional providers 提供证据；
+- speaker 自身视频不能确定答案；
 - 允许一个或多个 providers 支持答案；
-- 禁止声称所有 providers 都不可替代；
-- 禁止要求只有六视频全集才能回答。
+- 不再描述 anchor/additional 角色、pair filter 或“3 pruned + 3 full”；
+- 禁止声称所有 providers 都不可替代或只有六视频全集才能回答。
 
-### 6.2 Groundedness judge
+Groundedness judge 继续使用六段完整视频，检查问题动机、答案证据、supporting claims 和事实错误；未使用某个 provider 不是拒绝理由。
 
-Groundedness judge 使用六段完整视频检查：
+### 7.2 活跃六用户字段
 
-- speaker 的问题动机或共享场景锚点是否真实；
-- declared answer 是否被至少一个外部视角或外部视角组合支持；
-- generator 声称使用的 provider 证据是否真实可见；
-- 是否存在人物、物体、动作、时间或身份误认。
-
-未使用某个 provider 不是拒绝理由。
-
-## 7. Schema 与 metadata
-
-六用户 packet 新增：
+六用户 packet 使用：
 
 - `input_users`
+- `required_users`
 - `speaker_user`
+- `provider_users`
+- `evidence_provider_user`
+- `evidence_provider_users`
+- `media_roles`
+- `speaker_consensus_pruning`
+- `speaker_attempts`
+- `generator_media_mode=six_pruned_videos`
+
+活跃六用户输出不再生成：
+
 - `anchor_provider_users`
 - `additional_provider_users`
-- `media_roles`
 - `selected_anchor_edges`
 - `diagnostic_pair_edges`
+- `generator_media_mode=three_pruned_three_full_videos`
 
-兼容保留：
+生成与审核继续记录 `speaker_only_correct`、`speaker_only_choice`、`all_six_correct`、`all_six_choice`、`cross_view_gain`、`answerability_evaluated_condition_count` 和 `supporting_user_claims`。
 
-- `required_users`：六位有序输入用户；
-- `evidence_provider_user`：第一个 anchor provider；
-- `evidence_provider_users`：两个 anchor providers；
-- `why_two_users_needed`：保留旧字段名，但只说明 speaker 需要至少一个外部视角。
+## 8. 测试驱动策略
 
-生成与审核产物新增：
+### 8.1 纯算法
 
-- `speaker_only_correct`
-- `speaker_only_choice`
-- `all_six_correct`
-- `all_six_choice`
-- `cross_view_gain`
-- `answerability_evaluated_condition_count`
-- `supporting_user_claims`
+先写并确认失败的测试，再实现生产代码：
 
-`supporting_user_claims` 至少包含一个非 speaker 用户；其中引用的用户必须属于六位输入用户。不要求为全部输入用户编造 evidence claim。
+- `5-of-5` 触发，删除 speaker 加五个 provider clusters；
+- 恰好 `4-of-5` 触发，只删除 speaker 加四个过阈值 provider clusters；
+- `3-of-5` 不触发；
+- 阈值边界 `similarity == 0.82` 计为通过；
+- 每个 provider 只选 argmax，不删除其他超过阈值但非 argmax 的 cluster；
+- 同一 provider cluster 被多个事件命中时只删除一次，诊断保留全部来源；
+- 删除所有 cluster members，而非仅 medoid；
+- 不计算 provider-provider matrix。
 
-## 8. 噪声指标与解释
+### 8.2 接入与媒体
 
-定义：
+- 一个同步组严格按 `1, 2, 3, 4, 5, 6` 遍历 speaker，不调用随机 speaker 选择；
+- 当前 speaker 任一视频时长保护失败时记录原因并进入下一 speaker；
+- 当前 speaker 成功时产出独立候选并继续下一 speaker；
+- 单组可产生 0–6 个成功候选，全部失败时保存六次诊断并拒绝；
+- 六段视频均产生 pruned generator path；
+- 六段 full original path 保持存在；
+- generator 顺序为 `1 speaker + 5 providers` 的 6 pruned；
+- groundedness 顺序为同一六用户的 6 full；
+- 二用户路径保持兼容。
 
-\[
-\text{cross\_view\_gain}
-=
-\mathbf{1}[\text{all-six correct}]
--
-\mathbf{1}[\text{speaker-only correct}]
-\]
+### 8.3 Prompt、answerability 与 Torch 合同
 
-accepted QA 的 `cross_view_gain` 应为 1。
-
-每个候选至少记录：
-
-- speaker-only 与 all-six 的选择和正确性；
-- 六段媒体顺序、角色和裁剪状态；
-- all-six 输入总视频时长；
-- generation、groundedness 和 answerability 阶段耗时；
-- `all_six_wrong` 拒绝数量和比例；
-- 解析失败、媒体解码、上下文长度、OOM 和其他运行错误。
-
-`all_six_wrong` 只说明六视频条件未恢复正确答案，不能仅凭自动输出归因为噪声。可能原因还包括 QA 不清楚、证据不足、VLM 能力、媒体顺序或解码问题。
-
-## 9. 测试策略
-
-### 9.1 候选与角色
-
-- 六人产生 15 条 pair edges；
-- speaker 至少有两个合格 anchor neighbors；
-- 两个 anchor 合格、其他 edges 失败时仍可接受；
-- 固定随机种子产生稳定用户顺序；
-- 无合格角色结构时保存诊断并拒绝；
-- 二用户路径保持兼容；
-- CLI 支持 `selected_count=2` 和 `selected_count=6`，其他值在媒体下载和模型加载前报错。
-
-### 9.2 媒体
-
-- speaker 使用两条 anchor 删除区间并集；
-- 两个 anchors 各使用自身边区间；
-- 三个 additional providers 使用完整视频；
-- generator 顺序为三段 pruned 加三段 full；
-- judge 顺序为六段 full；
-- 最短保留保护失败时尝试其他角色结构；
-- 所有路径与用户一一对应。
-
-### 9.3 门禁与兼容
-
-- 六用户只生成两个 answerability 条件；
-- speaker-only 正确时拒绝；
+- 六用户活跃 packet 不再包含 anchor/additional/edge 合同；
+- Prompt 不再包含 anchor/additional 描述；
+- answerability 仍只有 speaker-only 与 all-six 两次；
 - speaker-only 错误且 all-six 正确时通过；
-- 任一条件无法解析时拒绝；
-- all-six 错误时拒绝；
-- 二用户回归测试保持通过；
-- Prompt 不再包含三用户“所有 providers 必要”的旧措辞。
+- Qwen3.6-27B、memory-safe backend、decord、显式视频像素上下界不被 pruning 修改；
+- runtime probe 与 pilot40 审计 `six_pruned_videos` 和 consensus 字段；
+- JobID 仍由 `sbatch --parsable` 自动写入时间戳 manifest。
 
-### 9.4 完整验证
+### 8.4 本地验证
 
-- 定向测试；
-- 完整本地测试套件；
-- Python 静态语法检查；
+- 新增纯算法与六用户接入定向测试；
+- 相关 prompt、video QA、runner 和 Torch 合同回归测试；
+- Python `compileall`；
 - 两个 `.sbatch` 的 `bash -n`；
 - `git diff --check`。
 
-## 10. Torch 作业
+本地验证不能证明 H100 runtime、模型能力、QA 质量或人工终点改善。
 
-### 10.1 唯一六视频 runtime probe
+## 9. Torch 作业保持项
 
-只处理一个六用户候选，验证：
+现有 runtime probe 与 pilot40 只同步更新 pruning/packet 审计字段，保留当前用户修改：
 
-- H100 上模型能够加载；
-- generator 能处理三段裁剪和三段完整视频；
-- groundedness judge 能处理六段完整视频；
-- answerability 能分别处理一段和六段完整视频；
-- 不发生 OOM、解码、输入顺序或上下文长度错误；
-- 必需环境、媒体和 trace 产物存在。
+- Qwen3.6-27B memory-safe 路径；
+- 强制 decord 视频后端；
+- 显式视频像素下界与上界；
+- job-specific `HOME`、cache、temp 和 scratch；
+- 模型加载前 `storage_preflight.json`；
+- `${SLURM_JOB_ID}` 派生输出目录；
+- `sbatch --parsable` 和时间戳 submission manifest；
+- probe 目标 1 条，pilot 最多 40 个候选及显式 `partial`；
+- 现有 walltime 与吞吐依据；
+- 不保存任何哈希。
 
-该 probe 是唯一 smoke。通过后不再串联其他规模 smoke。
+设计与计划阶段不上传 Torch、不提交 Slurm、不取消已有任务。用户批准实施计划后，允许直接在 Torch 上完成窄同步与登录节点零 GPU 验证，然后在同一轮连续提交 runtime probe 和 pilot40。pilot40 使用 `afterok` 依赖 probe 的批处理成功状态；该依赖不替代产物验收。两个作业结果出来后再单独验收并决定后续；不再更新 Torch Runbook。
 
-### 10.2 正式 5 条小试验
-
-- 目标为 5 条 accepted QA；
-- 除六视频输入、角色结构和 answerability 外，沿用当前二用户试验的模型、阈值、视频长度、采样间隔、随机种子、生成模式和重试次数；
-- `accepted_count=0` 视为自动 Gate 失败；
-- accepted 数量介于 1 与 4 时按实际结果报告，不声称达到目标；
-- 不自动扩大样本或提交后续实验。
-
-两个作业均需：
-
-- 从 JobID 派生 output 与 job-specific scratch；
-- 在模型加载前封闭 HOME、cache 和临时目录；
-- 在模型加载前运行存储预检；
-- 审计 Python、CUDA、GPU、FFmpeg 和 TorchCodec；
-- 保存 `storage_preflight.json` 与 `job_manifest.json`；
-- `job_manifest.json` 只保存分支名、dirty state、参数和路径，不保存任何哈希；
-- 使用 `sbatch --parsable` 提交并自动记录 JobID；
-- 提交前根据远端查询复核 account、partition、QOS 和 H100 资源；
-- 不自动 push、上传或提交作业。
-
-## 11. 产物与验收
+## 10. 产物与验收
 
 至少保存：
 
 - 输入 manifest；
 - 六用户 candidates JSONL；
-- 15 条 pair edge 与角色选择 trace；
-- 六段 generator/judge 媒体 provenance；
+- 固定 speaker 遍历顺序与逐 speaker 成功/失败 trace；
+- 每个 speaker cluster 的五个 provider argmax 与 threshold 结果；
+- 联合删除事件、按用户去重的 marked clusters、member frames 和 intervals；
+- 六段 generator pruned 与六段 judge full 媒体 provenance；
 - prompts、intermediate、accepted 和 rejected JSONL；
 - 两个 answerability condition traces；
 - storage/environment/job manifests；
 - CSV、generation report、human review sheet；
 - stdout/stderr。
 
-运行时 Gate 只证明六视频链路可执行。正式自动 Gate 要求作业正常、产物完整、计数一致、`accepted_count>0`，且 accepted QA 均满足 speaker-only 错误和 all-six 正确。
+运行时验收只证明六视频 consensus-pruning 链路可执行。自动验收还要求作业正常、产物完整、计数一致、`accepted_count>0`，且 accepted QA 均满足 speaker-only 错误和 all-six 正确。人工终点评估必须查看六段完整视频，区分问题质量、证据不足、VLM 能力和媒体路由错误。
 
-人工终点评估必须查看六段完整视频，重点区分 additional-provider 噪声、问题质量、证据不足、VLM 能力和媒体路由错误。远端运行前所有结论均属于本地静态或单元测试证据。
+## 11. 工作区与范围保护
 
-## 12. 历史与分支
-
-- 三用户设计和实施计划保留为决策历史，但标记为已被本文档取代；
-- 三用户实现尚未开始，不需要回滚实现代码；
-- 当前开发分支重命名为 `feature/multi-user-six-video-qa`；
-- 不 push，不创建或修改远端分支。
+- 继续使用 `feature/multi-user-six-video-qa` 当前工作树；
+- 保留现有未提交的 27B、decord、pilot40、Runbook 与远程约束修改；
+- 不 reset、checkout、stash、clean 或覆盖用户改动；
+- 原地更新现有设计、实施计划和 Runbook，不创建重复文档；
+- 不 commit、不 push、不创建或修改远端分支；
+- 不使用 SHA 或其他哈希作为身份、检查、manifest 或验收字段。

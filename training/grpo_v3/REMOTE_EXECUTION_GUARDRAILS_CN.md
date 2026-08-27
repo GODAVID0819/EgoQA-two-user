@@ -103,17 +103,25 @@ export PATH="${FFMPEG_ENV}/bin:${PATH}"
 export LD_LIBRARY_PATH="${FFMPEG_ENV}/lib:${LD_LIBRARY_PATH:-}"
 ```
 
-模型或 trainer 启动前运行：
+模型或 trainer 启动前必须显式记录任务实际使用的视频后端，并只检查该后端。使用 `qwen-vl-utils` 且已验证 decord 的任务运行：
 
 ```bash
 "${FFMPEG_ENV}/bin/ffmpeg" -version
+export FORCE_QWENVL_VIDEO_READER=decord
 "${PYTHON}" - <<'PY'
-from torchcodec.decoders import VideoDecoder
-print(VideoDecoder.__module__)
+import decord
+from qwen_vl_utils.vision_process import get_video_reader_backend
+
+backend = get_video_reader_backend()
+if backend != "decord":
+    raise SystemExit(f"unexpected Qwen video backend: {backend}")
+print(f"video_backend={backend} decord={decord.__version__}")
 PY
 ```
 
-`torchvision.io.read_video` 回退、`Could not load libtorchcodec` 或 `libavutil.so.*` 缺失，优先检查上述两个运行时路径，不能直接归因于模型或 reward。
+明确使用 TorchCodec 的其他任务仍须预检 `torchcodec.decoders.VideoDecoder`。不得要求任务安装或导入未被应用选择的视频后端。`torchvision.io.read_video` 意外回退、所选 decoder 导入失败或 `libavutil.so.*` 缺失时，优先检查上述两个运行时路径，不能直接归因于模型或 reward。
+
+当任务显式降低 `max_pixels` 时，必须同时显式传入满足 `0 < min_pixels <= max_pixels` 的视频下界，并在 job manifest 中记录两者。不得依赖 `qwen-vl-utils` 未公开或随版本移动的默认常量。
 
 ## 5. Reviewer 与 scorer
 

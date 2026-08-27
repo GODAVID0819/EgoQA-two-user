@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=egoqa_6u_pilot40
+#SBATCH --job-name=egoqa_6u_p20_4h
 #SBATCH --account=torch_pr_674_tandon_advanced
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -7,30 +7,31 @@
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=h100
 #SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --time=04:00:00
 #SBATCH --output=hpc/logs/%x_%j.out
 #SBATCH --error=hpc/logs/%x_%j.err
 
 set -euo pipefail
 
-RUN_MODE="six_user_qa_pilot_40"
-ACCEPTED_TARGET="40"
-EVIDENCE_TARGET="40"
-MAX_GROUPS="320"
-MAX_ATTEMPTS="1"
+RUN_MODE="six_user_qa_pilot_20_4h"
+ACCEPTED_TARGET="20"
+EVIDENCE_TARGET="20"
+MAX_GROUPS="160"
+MAX_ATTEMPTS="3"
 ALLOW_PARTIAL="1"
 export RUN_MODE ACCEPTED_TARGET EVIDENCE_TARGET MAX_GROUPS MAX_ATTEMPTS ALLOW_PARTIAL
 
-PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
+PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-six-user}"
 CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-1}"
 CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/hpc/shared/cuda.py}"
 CUDA_KEEPER_THRESHOLD="${CUDA_KEEPER_THRESHOLD:-60}"
 CUDA_KEEPER_GPUS="${CUDA_KEEPER_GPUS:-0}"
 CUDA_KEEPER_RESERVE="${CUDA_KEEPER_RESERVE:-8.0}"
 CUDA_KEEPER_MAX_PREALLOC="${CUDA_KEEPER_MAX_PREALLOC:-2.5}"
-# 27B 模型加载阶段先不分配保活矩阵，避免与权重加载争抢显存。
+# 模型加载阶段先不分配保活矩阵，避免与权重加载争抢显存。
 CUDA_KEEPER_START_USED_MIB="${CUDA_KEEPER_START_USED_MIB:-49152}"
 CUDA_KEEPER_AUTO_INSTALL="${CUDA_KEEPER_AUTO_INSTALL:-0}"
 export CUDA_KEEPER_ENABLE CUDA_KEEPER_SCRIPT CUDA_KEEPER_THRESHOLD CUDA_KEEPER_GPUS \
   CUDA_KEEPER_RESERVE CUDA_KEEPER_MAX_PREALLOC CUDA_KEEPER_START_USED_MIB CUDA_KEEPER_AUTO_INSTALL
+
 bash "${PROJECT_ROOT}/hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch"

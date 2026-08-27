@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 import unittest
 from pathlib import Path
@@ -8,6 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "hpc" / "qa" / "smoke" / "run_six_user_qa_runtime_probe.sbatch"
 PILOT = ROOT / "hpc" / "qa" / "experiments" / "run_six_user_qa_pilot_40.sbatch"
+PILOT_100 = ROOT / "hpc" / "qa" / "experiments" / "run_six_user_qa_pilot_100.sbatch"
+PILOT_20_4H = ROOT / "hpc" / "qa" / "experiments" / "run_six_user_qa_pilot_20_4h.sbatch"
 OLD_PILOT = ROOT / "hpc" / "qa" / "experiments" / "run_six_user_qa_pilot_5.sbatch"
 RUNBOOK = ROOT / "docs" / "SIX_USER_QA_TORCH_RUNBOOK_CN.md"
 
@@ -19,7 +22,7 @@ class SixUserTorchJobContractTests(unittest.TestCase):
 
     def effective_text(self, path: Path) -> str:
         text = self.read(path)
-        if path == PILOT:
+        if path in {PILOT, PILOT_100, PILOT_20_4H}:
             text += "\n" + self.read(PROBE)
         return text
 
@@ -57,7 +60,9 @@ class SixUserTorchJobContractTests(unittest.TestCase):
         self.assertIn("provider_similarity_pruned", text)
         self.assertIn("six_user_speaker_consensus", text)
         self.assertIn("speaker_attempts", text)
-        self.assertIn("speaker_only_correct", text)
+        self.assertIn("speaker_only_answerable", text)
+        self.assertIn("all_six_answerable", text)
+        self.assertNotIn('"speaker_only_correct": False if accepted else None', text)
         self.assertIn("answerability_evaluated_condition_count", text)
         self.assertIn("generator_video_count", text)
         self.assertIn("groundedness_video_count", text)
@@ -67,11 +72,19 @@ class SixUserTorchJobContractTests(unittest.TestCase):
         self.assertIn('row.get("stage") == "qa_formality_judge"', text)
         self.assertIn('formality_check.get("status") != "PASS"', text)
         self.assertIn('accepted_answerability_call_counts', text)
-        self.assertIn('rows = by_qa_attempt.get((qa_id, attempt), [])', text)
+        self.assertIn('by_answerability_identity = prompt_rows_by_generation_identity(', text)
+        self.assertIn('by_segment_identity = prompt_rows_by_generation_identity(', text)
+        self.assertIn('by_aggregation_identity = prompt_rows_by_generation_identity(', text)
         self.assertIn('speaker_answerability.get("media_role") != "full"', text)
         self.assertIn('speaker_answerability.get("video_paths") != [speaker_full_video]', text)
-        self.assertIn('all_six_answerability.get("video_paths") != full_videos', text)
-        self.assertIn('"all_six_correct": True', text)
+        self.assertIn('len(all_six_answerability.get("video_paths") or []) != 6', text)
+        self.assertNotIn('"all_six_correct": True', text)
+        self.assertIn('condition_types == {"speaker_only", "combined_all_six_users"}', text)
+        self.assertIn('accepted QA must have 6 evidence segment observations', text)
+        self.assertIn('accepted QA must have 1 evidence aggregation', text)
+        self.assertIn("summarize_review_gate_attempts", text)
+        self.assertIn('"gate_review_by_attempt"', text)
+        self.assertIn('"gate_review_overall"', text)
         self.assertNotIn('"cross_view_gain"', text)
         self.assertNotIn('"all_six_wrong_count"', text)
         self.assertNotIn('"all_six_wrong_rate"', text)
@@ -152,6 +165,32 @@ class SixUserTorchJobContractTests(unittest.TestCase):
         self.assertIn('status = "partial"', text)
         self.assertIn('if status == "failed":', text)
 
+    def test_pilot_100_runs_one_hundred_groups_with_three_attempts(self) -> None:
+        text = self.effective_text(PILOT_100)
+        self.assert_common_contract(text)
+        self.assertIn("#SBATCH --time=24:00:00", text)
+        self.assertNotRegex(text, r"(?:--nodelist|#SBATCH\s+-w(?:\s|=))")
+        self.assertIn('RUN_MODE="six_user_qa_pilot_100"', text)
+        self.assertIn('ACCEPTED_TARGET="100"', text)
+        self.assertIn('EVIDENCE_TARGET="100"', text)
+        self.assertIn('MAX_GROUPS="800"', text)
+        self.assertIn('MAX_ATTEMPTS="3"', text)
+        self.assertIn('ALLOW_PARTIAL="1"', text)
+        self.assertIn('CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-1}"', text)
+
+    def test_pilot_20_4h_finishes_a_bounded_three_attempt_run(self) -> None:
+        text = self.effective_text(PILOT_20_4H)
+        self.assert_common_contract(text)
+        self.assertIn("#SBATCH --time=04:00:00", text)
+        self.assertNotRegex(text, r"(?:--nodelist|#SBATCH\s+-w(?:\s|=))")
+        self.assertIn('RUN_MODE="six_user_qa_pilot_20_4h"', text)
+        self.assertIn('ACCEPTED_TARGET="20"', text)
+        self.assertIn('EVIDENCE_TARGET="20"', text)
+        self.assertIn('MAX_GROUPS="160"', text)
+        self.assertIn('MAX_ATTEMPTS="3"', text)
+        self.assertIn('ALLOW_PARTIAL="1"', text)
+        self.assertIn('CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-1}"', text)
+
     def test_jobs_do_not_modify_training_contracts(self) -> None:
         for path in (PROBE, PILOT):
             text = self.effective_text(path).lower()
@@ -169,6 +208,27 @@ class SixUserTorchJobContractTests(unittest.TestCase):
             self.assertEqual(output_assignments, [
                 'OUTDIR="${OUTPUT_ROOT}/${RUN_MODE}_${SLURM_JOB_ID}"'
             ])
+
+    def test_runtime_probe_embedded_python_is_syntactically_valid(self) -> None:
+        text = self.read(PROBE)
+        blocks = re.findall(r"<<?'?PY'?\n(.*?)\nPY", text, flags=re.DOTALL)
+        self.assertGreaterEqual(len(blocks), 1)
+        for index, block in enumerate(blocks, 1):
+            try:
+                ast.parse(block)
+            except SyntaxError as exc:
+                self.fail(f"embedded Python block {index} is invalid: {exc}")
+
+    def test_runtime_probe_matches_video_evidence_user_field(self) -> None:
+        text = self.read(PROBE)
+        self.assertIn(
+            'str(item.get("user") or "") == speaker_user',
+            text,
+        )
+        self.assertNotIn(
+            'str(item.get("agent_name") or "") == speaker_user',
+            text,
+        )
 
 
 if __name__ == "__main__":

@@ -365,6 +365,20 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--max-mean-sim", type=float, default=0.90)
     benchmark.add_argument("--high-similarity-interval-threshold", type=float, default=0.82)
     benchmark.add_argument("--pruning-clusters-per-video", type=int, default=12)
+    benchmark.add_argument("--pruning-seconds-per-cluster", type=float, default=2.5)
+    benchmark.add_argument("--pruning-time-weight", type=float, default=0.1)
+    benchmark.add_argument("--pruning-temporal-unit-seconds", type=float, default=30.0)
+    benchmark.add_argument("--pruning-max-iterations", type=int, default=25)
+    benchmark.add_argument(
+        "--pruning-cross-gap-mode",
+        choices=["center", "interval"],
+        default="center",
+    )
+    benchmark.add_argument(
+        "--pruning-max-cross-gap-seconds",
+        type=float,
+        default=10.0,
+    )
     benchmark.add_argument("--preserve-shared-anchor-seconds", type=float, default=0.0)
     benchmark.add_argument("--min-pruned-video-seconds", type=float, default=8.0)
     benchmark.add_argument(
@@ -789,6 +803,12 @@ def main(argv: list[str] | None = None) -> int:
             max_mean_sim=args.max_mean_sim,
             high_similarity_interval_threshold=args.high_similarity_interval_threshold,
             pruning_clusters_per_video=args.pruning_clusters_per_video,
+            pruning_seconds_per_cluster=args.pruning_seconds_per_cluster,
+            pruning_time_weight=args.pruning_time_weight,
+            pruning_temporal_unit_seconds=args.pruning_temporal_unit_seconds,
+            pruning_max_iterations=args.pruning_max_iterations,
+            pruning_cross_gap_mode=args.pruning_cross_gap_mode,
+            pruning_max_cross_gap_seconds=args.pruning_max_cross_gap_seconds,
             preserve_shared_anchor_seconds=args.preserve_shared_anchor_seconds,
             min_pruned_video_seconds=args.min_pruned_video_seconds,
             pruning_protection_mode=args.pruning_protection_mode,
@@ -972,6 +992,10 @@ def main(argv: list[str] | None = None) -> int:
             generator_temperature=args.generator_temperature,
             generator_top_p=args.generator_top_p,
             generator_top_k=args.generator_top_k,
+            deadline_epoch_seconds=args.deadline_epoch_seconds,
+            repeat_evidence=args.repeat_evidence,
+            max_generation_slots=args.max_generation_slots,
+            attempts_path=args.attempts_output,
         )
         print(f"accepted {len(rows)} video-first question-answer rows")
         return 0
