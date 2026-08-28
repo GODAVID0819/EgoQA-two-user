@@ -17,13 +17,16 @@ from typing import Any
 
 from .io_utils import append_jsonl, iter_jsonl, write_json, write_jsonl
 from .evidence_chunk_review import (
+    aggregate_evidence_user_votes,
     evidence_segment_specs,
     materialize_evidence_segment_paths,
+    validate_evidence_premise_audit,
     validate_segment_observation,
 )
 from .qa_generation_schedule import deadline_reached, round_robin_generation_slots
 from .prompts import (
     DEFAULT_QUALITY_QUOTA,
+    EVIDENCE_AGGREGATION_SCHEMA,
     GENERATION_MODES,
     JUDGE_OUTPUT_SCHEMA_MARKER,
     QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
@@ -3068,7 +3071,7 @@ def run_chunked_evidence_groundedness_eval(
     aggregation_call_profile: GenerationCallProfile | None = None,
     repair_call_profile: GenerationCallProfile | None = None,
 ) -> dict[str, Any]:
-    """Extract six per-user segment audits, then aggregate them text-only."""
+    """Extract per-user segment audits, aggregate strict votes, then audit premises."""
 
     specs_by_user = evidence_segment_specs(packet, full_video_paths)
     active_paths = segment_paths_by_user or materialize_evidence_segment_paths(
@@ -3081,7 +3084,9 @@ def run_chunked_evidence_groundedness_eval(
         specs = specs_by_user[user]
         video_paths = list(active_paths.get(user) or [])
         if len(video_paths) != len(specs):
-            raise ValueError(f"user {user} must provide six materialized evidence segments")
+            raise ValueError(
+                f"user {user} must provide {len(specs)} materialized evidence segments"
+            )
         prompt = build_evidence_segment_observation_prompt(
             qa_item,
             user=user,
@@ -3129,10 +3134,19 @@ def run_chunked_evidence_groundedness_eval(
         observation["raw_output"] = raw
         observations.append(observation)
 
+    vote_summary = aggregate_evidence_user_votes(
+        str(qa_item.get("correct") or ""),
+        observations,
+    )
+    aggregation_observations = [
+        {key: value for key, value in observation.items() if key != "raw_output"}
+        for observation in observations
+    ]
     aggregation_prompt = build_evidence_observation_aggregation_prompt(
         qa_item,
         packet,
-        observations=observations,
+        observations=aggregation_observations,
+        vote_summary=vote_summary,
     )
     aggregation_row = {
             "stage": "evidence_groundedness_aggregation",
@@ -3154,18 +3168,93 @@ def run_chunked_evidence_groundedness_eval(
         )
         aggregation_row["max_new_tokens"] = aggregation_call_profile.max_new_tokens
     prompt_rows.append(aggregation_row)
-    result = run_model_judge_branch(
-        check_name="evidence_groundedness",
-        prompt=aggregation_prompt,
-        runner=runner,
+    aggregation_start = time.time()
+    raw = generate_with_call_profile(
+        runner,
+        aggregation_prompt,
         image_paths=[],
         video_paths=[],
-        evidence_id=packet.get("evidence_id"),
-        qa_id=qa_item.get("qa_id"),
-        attempt=attempt,
         call_profile=aggregation_call_profile,
-        repair_call_profile=repair_call_profile,
     )
+    initial_raw = raw
+    final_raw = raw
+    format_repair = {"attempted": False, "succeeded": False}
+    try:
+        premise_audit = extract_json_object(raw)
+        audit_errors = validate_evidence_premise_audit(premise_audit)
+        if audit_errors:
+            raise ValueError("; ".join(audit_errors))
+    except Exception as initial_exc:
+        format_repair = {
+            "attempted": True,
+            "succeeded": False,
+            "initial_error": f"{type(initial_exc).__name__}: {initial_exc}",
+        }
+        repair_prompt = build_judge_json_repair_prompt(
+            raw,
+            EVIDENCE_AGGREGATION_SCHEMA,
+        )
+        try:
+            final_raw = generate_with_call_profile(
+                runner,
+                repair_prompt,
+                image_paths=[],
+                video_paths=[],
+                call_profile=repair_call_profile,
+            )
+            premise_audit = extract_json_object(final_raw)
+            audit_errors = validate_evidence_premise_audit(premise_audit)
+            if audit_errors:
+                raise ValueError("; ".join(audit_errors))
+            format_repair["succeeded"] = True
+        except OpenRouterRequestError:
+            raise
+        except Exception as repair_exc:
+            format_repair["repair_error"] = (
+                f"{type(repair_exc).__name__}: {repair_exc}"
+            )
+            premise_audit = {
+                "premises_supported": False,
+                "high_confidence_material_conflict": True,
+                "reason": "Text-only premise audit output was invalid after one repair.",
+            }
+    aggregation_row["elapsed_seconds"] = round(time.time() - aggregation_start, 3)
+    final_pass = bool(
+        vote_summary["passed"]
+        and premise_audit["premises_supported"] is True
+        and premise_audit["high_confidence_material_conflict"] is False
+    )
+    reason = (
+        f"vote_passed={vote_summary['passed']}; "
+        f"premises_supported={premise_audit['premises_supported']}; "
+        "high_confidence_material_conflict="
+        f"{premise_audit['high_confidence_material_conflict']}; "
+        f"{premise_audit['reason']}"
+    )
+    evidence_check = {
+        "status": "PASS" if final_pass else "FAIL",
+        "reason": reason,
+        "fix": "" if final_pass else (
+            "Use directly visible high-confidence evidence so the declared answer reaches the "
+            "visible-user threshold and every material premise is supported without conflict."
+        ),
+        "vote_summary": vote_summary,
+        "premise_audit": premise_audit,
+    }
+    result = {
+        "review_passed": final_pass,
+        "checks": {"evidence_groundedness": evidence_check},
+        "blocking_failures": [] if final_pass else ["evidence_groundedness"],
+        "why_generator_asked_this": "",
+        "feedback_to_generator": "" if final_pass else evidence_check["fix"],
+        "raw_output": final_raw,
+        "elapsed_seconds": aggregation_row["elapsed_seconds"],
+        "vote_summary": vote_summary,
+        "premise_audit": premise_audit,
+    }
+    if format_repair["attempted"]:
+        result["initial_raw_output"] = initial_raw
+        result["format_repair"] = format_repair
     result["chunked_evidence_review"] = True
     result["chunk_observations"] = observations
     result["aggregation_prompt"] = aggregation_prompt

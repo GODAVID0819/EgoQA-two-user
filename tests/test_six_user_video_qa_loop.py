@@ -838,6 +838,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                                         {
                                             "claim": "the relevant object is visible",
                                             "status": "SUPPORTED",
+                                            "confidence": "HIGH",
                                             "visual_description": "A concrete object is visible.",
                                             "original_time_range": f"00:0{index}:00-00:0{index}:30",
                                         }
@@ -854,20 +855,20 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                                     )
                                 )
                             ],
+                            "user_vote": {
+                                "visible": True,
+                                "confidence": "HIGH",
+                                "supported_option": "A",
+                                "supporting_segment_indices": [0],
+                                "reason": "The relevant object is directly visible.",
+                            },
                         }
                     )
                 return json.dumps(
                     {
-                        "review_passed": True,
-                        "checks": {
-                            "evidence_groundedness": {
-                                "status": "PASS",
-                                "reason": "Every material claim is supported.",
-                                "fix": "",
-                            }
-                        },
-                        "blocking_failures": [],
-                        "feedback_to_generator": "",
+                        "premises_supported": True,
+                        "high_confidence_material_conflict": False,
+                        "reason": "Every material premise is supported.",
                     }
                 )
 
@@ -891,7 +892,11 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         self.assertEqual(len(runner.calls), 7)
         self.assertEqual([len(call["video_paths"]) for call in runner.calls[:6]], [6] * 6)
         self.assertEqual(runner.calls[-1]["video_paths"], [])
+        self.assertNotIn('"raw_output"', runner.calls[-1]["prompt"])
         self.assertEqual(result["checks"]["evidence_groundedness"]["status"], "PASS")
+        self.assertTrue(result["vote_summary"]["passed"])
+        self.assertEqual(result["vote_summary"]["option_support_counts"]["A"], 6)
+        self.assertTrue(result["premise_audit"]["premises_supported"])
         self.assertEqual(len(result["chunk_observations"]), 6)
         self.assertTrue(all("generation_slot_id" in row for row in prompt_rows))
         self.assertTrue(all(row["generation_slot_id"] == "slot-chunk" for row in prompt_rows))
@@ -1003,8 +1008,17 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         packet = six_user_packet()
         for clip in packet["clips"]:
             clip["segments"] = [
-                {"time_token": f"segment-{index}", "video_url": f"https://example/{index}.mp4"}
-                for index in range(6)
+                {"time_token": token, "video_url": f"https://example/{index}.mp4"}
+                for index, token in enumerate(
+                    (
+                        "20060000",
+                        "20063000",
+                        "20070000",
+                        "20073000",
+                        "20080000",
+                        "20083000",
+                    )
+                )
             ]
         full_paths = []
         for index in range(6):

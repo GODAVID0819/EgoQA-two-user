@@ -169,12 +169,36 @@ EVIDENCE_SEGMENT_OBSERVATION_SCHEMA = {
                 {
                     "claim": "one material question, answer, identity, state, or relation claim",
                     "status": "SUPPORTED, CONTRADICTED, NOT_VISIBLE, or AMBIGUOUS",
+                    "confidence": "HIGH, MEDIUM, or LOW",
                     "visual_description": "concrete visible evidence or the specific ambiguity",
                     "original_time_range": "original clock range within this segment",
                 }
             ],
         }
     ],
+    "user_vote": {
+        "visible": "boolean; true only for a directly visible high-confidence option fact",
+        "confidence": "HIGH, MEDIUM, or LOW",
+        "supported_option": "A/B/C/D/E only for a HIGH visible vote; otherwise null",
+        "supporting_segment_indices": "segment indices proving the HIGH vote; otherwise []",
+        "reason": "short view-specific reason",
+    },
+}
+
+
+EVIDENCE_AGGREGATION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "premises_supported",
+        "high_confidence_material_conflict",
+        "reason",
+    ],
+    "properties": {
+        "premises_supported": {"type": "boolean"},
+        "high_confidence_material_conflict": {"type": "boolean"},
+        "reason": {"type": "string", "minLength": 1},
+    },
 }
 
 
@@ -1732,7 +1756,7 @@ def build_evidence_segment_observation_prompt(
     user: str,
     segments: list[dict[str, Any]],
 ) -> str:
-    """Ask one user-view call to audit six ordered 30-second videos."""
+    """Ask one user-view call to audit ordered 30-second videos."""
 
     qa_brief = {
         "question": qa_item.get("question"),
@@ -1750,7 +1774,7 @@ def build_evidence_segment_observation_prompt(
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
-You receive six separate 30-second videos from the same user in chronological order. Analyze every segment independently. Do not combine this user's observations with any omitted user, and do not decide the final multiple-choice answer.
+You receive {len(segments)} separate 30-second videos from the same user in chronological order. Analyze every segment independently. Do not combine this user's observations with any omitted user, and do not decide the overall multi-user verdict.
 
 User:
 {user}
@@ -1761,9 +1785,15 @@ Video order and original time identity:
 Question and options, supplied only to identify material claims that need visual checking:
 {json.dumps(qa_brief, ensure_ascii=False, indent=2)}
 
-For each segment, record every material claim that the segment supports, contradicts, leaves not visible, or leaves ambiguous. Use only these status labels: SUPPORTED, CONTRADICTED, NOT_VISIBLE, AMBIGUOUS. A related scene is not evidence for an exact object, identity, action, state, or temporal relation.
+For each segment, record every material claim that the segment supports, contradicts, leaves not visible, or leaves ambiguous. Use only these status labels: SUPPORTED, CONTRADICTED, NOT_VISIBLE, AMBIGUOUS, and assign HIGH, MEDIUM, or LOW confidence. A related scene is not evidence for an exact object, identity, action, state, or temporal relation.
 
-Return exactly one JSON object with this shape and include all six segment rows:
+Strict visibility and one-vote rule:
+- When visibility or identity is uncertain because the target is blurry, small, distant, dark, occluded, brief, or confusable, mark it NOT_VISIBLE or AMBIGUOUS; do not guess.
+- After auditing every segment, emit exactly one `user_vote` for this user. It is one user-level vote, never one vote per segment.
+- Set `visible=true`, `confidence=HIGH`, and select exactly one A-E option only when this view directly and clearly establishes that option. Cite every supporting segment index.
+- For MEDIUM/LOW confidence, NOT_VISIBLE, AMBIGUOUS, or no clear option, set `visible=false`, `supported_option=null`, and `supporting_segment_indices=[]`.
+
+Return exactly one JSON object with this shape and include all {len(segments)} segment rows:
 {json.dumps(EVIDENCE_SEGMENT_OBSERVATION_SCHEMA, ensure_ascii=False, indent=2)}
 """
 
@@ -1773,6 +1803,7 @@ def build_evidence_observation_aggregation_prompt(
     packet: dict[str, Any],
     *,
     observations: list[dict[str, Any]],
+    vote_summary: dict[str, Any],
 ) -> str:
     """Aggregate per-user segment observations without reopening visual media."""
 
@@ -1780,16 +1811,14 @@ def build_evidence_observation_aggregation_prompt(
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
-Judge only the structured per-user, per-segment observations below. Do not invent evidence from the question wording, option wording, timestamps, or omitted video content.
+Judge only the structured per-user, per-segment observations below. Do not invent evidence from the question wording, option wording, timestamps, or omitted video content. The program has already produced the authoritative deterministic vote summary from strict HIGH-confidence visible user votes. Do not recalculate option support, visible-user counts, thresholds, or the answer vote.
 
-PASS evidence_groundedness only when:
+Audit only the remaining non-vote evidence conditions:
 - every material factual premise in the question is explicitly SUPPORTED;
-- the declared correct answer is explicitly SUPPORTED;
-- no observation CONTRADICTS the premise or declared answer;
+- there is no HIGH-confidence material contradiction about a question premise, identity, continuity, state change, or temporal relation;
 - identity, continuity, state-change, and temporal claims have direct supporting observations rather than scene-level similarity;
-- exactly one option remains correct.
-
-FAIL when any material claim is CONTRADICTED, NOT_VISIBLE, or AMBIGUOUS, or when the observations do not establish exactly one option. A claim mentioned only by the generator is not evidence.
+- MEDIUM/LOW-confidence reports and NOT_VISIBLE views do not create an answer vote and do not overrule the authoritative vote summary.
+- A claim mentioned only by the generator is not evidence.
 
 Required-user order:
 {json.dumps(packet.get("required_users") or [], ensure_ascii=False)}
@@ -1800,8 +1829,11 @@ Generated QA:
 Structured observations:
 {json.dumps(observations, ensure_ascii=False, indent=2)}
 
-Return exactly one valid JSON object with this exact shape:
-{json.dumps(judge_schema_for_check("evidence_groundedness", pass_fail_only=True), ensure_ascii=False, indent=2)}
+Authoritative deterministic vote summary:
+{json.dumps(vote_summary, ensure_ascii=False, indent=2)}
+
+Return exactly one valid JSON object conforming to this schema:
+{json.dumps(EVIDENCE_AGGREGATION_SCHEMA, ensure_ascii=False, indent=2)}
 """
 
 

@@ -179,15 +179,47 @@ class SixUserPromptTests(unittest.TestCase):
                     ],
                 }
             ],
+            vote_summary={
+                "passed": True,
+                "correct": "A",
+                "visible_user_count": 3,
+                "option_support_counts": {"A": 3, "B": 0, "C": 0, "D": 0, "E": 0},
+                "threshold_options": ["A"],
+            },
         )
 
-        self.assertIn("six separate 30-second videos", observation_prompt)
+        self.assertIn("6 separate 30-second videos", observation_prompt)
         self.assertIn("20083000", observation_prompt)
         self.assertIn("SUPPORTED", observation_prompt)
         self.assertIn("CONTRADICTED", observation_prompt)
+        self.assertIn("HIGH", observation_prompt)
+        self.assertIn("user_vote", observation_prompt)
+        self.assertIn("When visibility or identity is uncertain", observation_prompt)
         self.assertIn("text-only evidence aggregator", aggregation_prompt)
         self.assertIn("20060000", aggregation_prompt)
-        self.assertIn("exactly one option", aggregation_prompt)
+        self.assertIn("authoritative deterministic vote summary", aggregation_prompt)
+        self.assertIn("premises_supported", aggregation_prompt)
+        self.assertIn("high_confidence_material_conflict", aggregation_prompt)
+        self.assertIn("Do not recalculate option support", aggregation_prompt)
+
+    def test_ten_minute_observation_prompt_uses_actual_segment_count(self) -> None:
+        segments = [
+            {
+                "segment_index": index,
+                "time_token": f"token-{index}",
+                "original_time_range": f"range-{index}",
+            }
+            for index in range(20)
+        ]
+
+        prompt = prompts_module.build_evidence_segment_observation_prompt(
+            six_user_qa(),
+            user="speaker",
+            segments=segments,
+        )
+
+        self.assertIn("20 separate 30-second videos", prompt)
+        self.assertIn("include all 20 segment rows", prompt)
 
     def test_answerability_prompts_describe_only_two_conditions(self) -> None:
         speaker_prompt = build_answerability_prompt(
