@@ -85,6 +85,13 @@ def test_runtime_propagates_ten_minute_memory_safe_limits() -> None:
     assert '--max-image-pixels "${QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS}"' in runtime
 
 
+def test_runtime_cleanup_preserves_original_failure_status() -> None:
+    runtime = runtime_text()
+
+    assert "cleanup_status=$?" in runtime
+    assert 'return "${cleanup_status}"' in runtime
+
+
 def test_formal_wrapper_targets_three_distinct_groups_and_twenty_slots_each() -> None:
     job = FORMAL_JOB.read_text(encoding="utf-8")
 

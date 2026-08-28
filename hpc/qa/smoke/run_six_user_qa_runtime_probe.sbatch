@@ -64,11 +64,13 @@ CUDA_KEEPER_PID=""
 TERMINATION_REQUESTED="0"
 
 cleanup() {
+  cleanup_status=$?
   if [[ -n "${CUDA_KEEPER_PID}" ]] && kill -0 "${CUDA_KEEPER_PID}" 2>/dev/null; then
     echo "stage=stop_cuda_keeper pid=${CUDA_KEEPER_PID}"
     kill "${CUDA_KEEPER_PID}" 2>/dev/null || true
     wait "${CUDA_KEEPER_PID}" 2>/dev/null || true
   fi
+  return "${cleanup_status}"
 }
 
 mark_termination() {
