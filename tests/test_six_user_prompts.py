@@ -270,6 +270,7 @@ class SixUserPromptTests(unittest.TestCase):
                 "fact",
                 "why_needed",
                 "visibility",
+                "confidence",
                 "source_user",
                 "original_time_range",
                 "visual_description",
@@ -288,6 +289,9 @@ class SixUserPromptTests(unittest.TestCase):
         self.assertIn("needed_facts", prompt)
         self.assertIn("NOT_VISIBLE", prompt)
         self.assertIn("AMBIGUOUS", prompt)
+        self.assertIn("HIGH", prompt)
+        self.assertIn("MEDIUM/LOW", prompt)
+        self.assertIn("does not make the condition sufficient", prompt)
         self.assertIn("original_time_range", prompt)
         self.assertIn("The program computes sufficiency", prompt)
 

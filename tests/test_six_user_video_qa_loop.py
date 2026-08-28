@@ -99,6 +99,7 @@ def sufficiency_evaluation(
     condition: dict[str, object],
     answerable: bool,
     *,
+    confidence: str = "HIGH",
     available_evidence: list[str] | None = None,
     missing_evidence: list[str] | None = None,
 ) -> dict[str, object]:
@@ -111,6 +112,7 @@ def sufficiency_evaluation(
                 "fact": "the later destination",
                 "why_needed": "the question asks where the object ended up",
                 "visibility": visibility,
+                "confidence": confidence,
                 "source_user": condition.get("users", [None])[0] if answerable else None,
                 "original_time_range": "00:01:10-00:01:20" if answerable else None,
                 "visual_description": (
@@ -249,6 +251,19 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         inconsistent_result = parsed_answerability_sufficiency(inconsistent)
         self.assertIsNone(inconsistent_result[0])
         self.assertIn("original_time_range", inconsistent_result[1])
+
+    def test_visible_fact_requires_high_confidence_for_sufficiency(self) -> None:
+        condition = build_answerability_conditions(SIX_USERS)[0]
+        evaluation_row = sufficiency_evaluation(
+            condition,
+            True,
+            confidence="MEDIUM",
+        )
+
+        answerable, error = parsed_answerability_sufficiency(evaluation_row)
+
+        self.assertIsNone(error)
+        self.assertFalse(answerable)
 
     def test_six_user_gate_requires_speaker_insufficient_and_all_six_sufficient(self) -> None:
         conditions = build_answerability_conditions(SIX_USERS)
@@ -485,6 +500,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                 "fact": "the recipient identity",
                 "why_needed": "the question asks who received the object",
                 "visibility": "AMBIGUOUS",
+                "confidence": "LOW",
                 "source_user": None,
                 "original_time_range": None,
                 "visual_description": "Several people could be the recipient.",

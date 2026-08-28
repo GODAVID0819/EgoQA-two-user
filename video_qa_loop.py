@@ -1080,6 +1080,7 @@ def parsed_answerability_sufficiency(
         "fact",
         "why_needed",
         "visibility",
+        "confidence",
         "source_user",
         "original_time_range",
         "visual_description",
@@ -1100,6 +1101,13 @@ def parsed_answerability_sufficiency(
                 f"needed_facts[{index}].visibility must be VISIBLE, "
                 "NOT_VISIBLE, or AMBIGUOUS"
             )
+        confidence = fact.get("confidence")
+        if confidence not in {"HIGH", "MEDIUM", "LOW"}:
+            return None, (
+                f"needed_facts[{index}].confidence must be HIGH, MEDIUM, or LOW"
+            )
+        if visibility != "VISIBLE" or confidence != "HIGH":
+            all_visible = False
         if visibility == "VISIBLE":
             source_user = str(fact.get("source_user") or "").strip()
             if source_user not in condition_users:
@@ -1113,7 +1121,6 @@ def parsed_answerability_sufficiency(
                     "when visibility is VISIBLE"
                 )
         else:
-            all_visible = False
             if fact.get("source_user") not in (None, ""):
                 return None, (
                     f"needed_facts[{index}].source_user must be null when visibility "

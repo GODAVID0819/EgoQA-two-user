@@ -138,6 +138,7 @@ ANSWERABILITY_SUFFICIENCY_SCHEMA = {
                     "fact",
                     "why_needed",
                     "visibility",
+                    "confidence",
                     "source_user",
                     "original_time_range",
                     "visual_description",
@@ -148,6 +149,10 @@ ANSWERABILITY_SUFFICIENCY_SCHEMA = {
                     "visibility": {
                         "type": "string",
                         "enum": ["VISIBLE", "NOT_VISIBLE", "AMBIGUOUS"],
+                    },
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["HIGH", "MEDIUM", "LOW"],
                     },
                     "source_user": {"type": ["string", "null"]},
                     "original_time_range": {"type": ["string", "null"]},
@@ -1879,7 +1884,9 @@ Answer options (for judging whether the evidence resolves the question, not for 
 
 Rules:
 - Decompose the question into the smallest complete list of answer-relevant facts needed to distinguish one option from the alternatives. Return every fact in `needed_facts`.
-- Mark each fact `VISIBLE` only when this condition directly shows that exact fact. Use `NOT_VISIBLE` when it is absent or occluded, and `AMBIGUOUS` when multiple interpretations remain plausible.
+- Mark each fact `VISIBLE` only when this condition directly shows that exact fact. Use `NOT_VISIBLE` when it is absent or occluded, and `AMBIGUOUS` when multiple interpretations remain plausible. Assign `confidence` as HIGH, MEDIUM, or LOW.
+- Be conservative: blur, distance, darkness, occlusion, brief exposure, lookalike objects or people, and uncertain identity should be NOT_VISIBLE or AMBIGUOUS rather than guessed as VISIBLE/HIGH.
+- A needed fact contributes to sufficiency only when it is both `VISIBLE` and `HIGH` confidence. `VISIBLE` with MEDIUM/LOW confidence does not make the condition sufficient.
 - For every `VISIBLE` fact, `source_user` must name one user in this condition, `original_time_range` must identify the visible interval in that user's original video, and `visual_description` must state what is concretely visible.
 - For `NOT_VISIBLE` or `AMBIGUOUS`, set `source_user` and `original_time_range` to null and explain the missing or ambiguous evidence in `visual_description`.
 - Do not select an option. Do not output an A-E letter, the final answer, or the text of the option you think is correct.
