@@ -94,15 +94,19 @@ DECISION_ENTROPY_JUDGE_CHECKS = {
 
 def extract_json_object(text: str) -> dict[str, Any]:
     cleaned = text.strip()
-    if cleaned.startswith("```"):
-        match = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL)
-        if match:
-            cleaned = match.group(1).strip()
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        raise ValueError("No JSON object found in model output")
-    return json.loads(cleaned[start : end + 1])
+    decoder = json.JSONDecoder()
+    candidates: list[tuple[int, int, dict[str, Any]]] = []
+    for match in re.finditer(r"\{", cleaned):
+        try:
+            value, consumed = decoder.raw_decode(cleaned[match.start() :])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            candidates.append((match.start() + consumed, match.start(), value))
+    if not candidates:
+        raise ValueError("No complete JSON object found in model output")
+    _, _, selected = max(candidates, key=lambda row: (row[0], -row[1]))
+    return selected
 
 
 def normalize_correct(value: Any) -> str:
