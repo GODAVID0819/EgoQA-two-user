@@ -45,6 +45,7 @@ from .qwen3vl_runner import (
     DEFAULT_MODEL_ID,
     DEFAULT_SAMPLING_TEMPERATURE,
     DEFAULT_SAMPLING_TOP_P,
+    GenerationCallProfile,
     GENERATOR_DECODING_MODES,
     OpenRouterRequestError,
     OPENROUTER_REASONING_EFFORTS,
@@ -104,6 +105,44 @@ MINIMAL_VERDICT_ENTROPY_VERSION = "independent_minimal_verdict_v1"
 FIRST_VERDICT_FIELD = "verdict"
 FIRST_VERDICT_CHOICES = ("pass", "fail")
 TEMPORAL_REASONING_MODE = "temporal_reasoning"
+
+
+def six_user_ten_minute_reasoning_profiles(
+    *,
+    formality_max_new_tokens: int = 2048,
+) -> dict[str, GenerationCallProfile]:
+    reasoning = GenerationCallProfile(max_new_tokens=8192, disable_thinking=False)
+    formality = GenerationCallProfile(
+        max_new_tokens=formality_max_new_tokens,
+        disable_thinking=True,
+    )
+    return {
+        "generator": reasoning,
+        "evidence_segment_observation": reasoning,
+        "evidence_groundedness_aggregation": reasoning,
+        "answerability": reasoning,
+        "qa_formality": formality,
+        "json_repair": formality,
+    }
+
+
+def generate_with_call_profile(
+    runner: Any,
+    prompt: str,
+    *,
+    image_paths: list[str],
+    video_paths: list[str],
+    call_profile: GenerationCallProfile | None,
+    **generation_kwargs: Any,
+) -> str:
+    kwargs: dict[str, Any] = {
+        "image_paths": image_paths,
+        "video_paths": video_paths,
+        **generation_kwargs,
+    }
+    if call_profile is not None:
+        kwargs["call_profile"] = call_profile
+    return runner.generate(prompt, **kwargs)
 
 
 def prompt_rows_by_generation_identity(
@@ -2091,6 +2130,8 @@ def run_model_judge_branch(
     attempt: int,
     collect_choice_logits: bool = False,
     minimal_verdict_probe_prompt: str | None = None,
+    call_profile: GenerationCallProfile | None = None,
+    repair_call_profile: GenerationCallProfile | None = None,
 ) -> dict[str, Any]:
     """Run one model judge.
 
@@ -2108,7 +2149,13 @@ def run_model_judge_branch(
         f"images={len(image_paths)} videos={len(video_paths)}",
         flush=True,
     )
-    raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
+    raw = generate_with_call_profile(
+        runner,
+        prompt,
+        image_paths=image_paths,
+        video_paths=video_paths,
+        call_profile=call_profile,
+    )
     print(
         "qa_stage_done "
         f"stage={stage} evidence_id={evidence_id} "
@@ -2142,10 +2189,12 @@ def run_model_judge_branch(
             flush=True,
         )
         try:
-            final_raw = runner.generate(
+            final_raw = generate_with_call_profile(
+                runner,
                 repair_prompt,
                 image_paths=[],
                 video_paths=[],
+                call_profile=repair_call_profile,
             )
             judge = parse_single_judge_output(final_raw, check_name)
             format_repair["succeeded"] = True
@@ -2905,6 +2954,7 @@ def run_answerability_eval(
     prompt_rows: list[dict[str, Any]],
     judge_media_role: str = "full",
     attempt: int | None = None,
+    call_profile: GenerationCallProfile | None = None,
 ) -> dict[str, Any]:
     evaluations = []
     reasoning_sufficiency_mode = len(qa_item.get("required_users") or []) == 6
@@ -2938,6 +2988,9 @@ def run_answerability_eval(
                 media_role=judge_media_role,
             ),
         }
+        if call_profile is not None:
+            prompt_row["reasoning_enabled"] = not call_profile.disable_thinking
+            prompt_row["max_new_tokens"] = call_profile.max_new_tokens
         prompt_rows.append(prompt_row)
         stage_start = time.time()
         print(
@@ -2952,7 +3005,13 @@ def run_answerability_eval(
         # choice_signal = generation.get("choice_logits")
         # choice_uncertainty = answerability_uncertainty_from_choice_logits(choice_signal)
         # Production answerability now uses ordinary JSON generation only.
-        raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
+        raw = generate_with_call_profile(
+            runner,
+            prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            call_profile=call_profile,
+        )
         elapsed_seconds = round(time.time() - stage_start, 3)
         prompt_row["elapsed_seconds"] = elapsed_seconds
         print(
@@ -3005,6 +3064,9 @@ def run_chunked_evidence_groundedness_eval(
     prompt_rows: list[dict[str, Any]],
     attempt: int,
     segment_paths_by_user: dict[str, list[str]] | None = None,
+    segment_call_profile: GenerationCallProfile | None = None,
+    aggregation_call_profile: GenerationCallProfile | None = None,
+    repair_call_profile: GenerationCallProfile | None = None,
 ) -> dict[str, Any]:
     """Extract six per-user segment audits, then aggregate them text-only."""
 
@@ -3040,9 +3102,18 @@ def run_chunked_evidence_groundedness_eval(
             "media_role": "full_original_30s_segments",
             "model_id": getattr(runner, "model_id", None),
         }
+        if segment_call_profile is not None:
+            prompt_row["reasoning_enabled"] = not segment_call_profile.disable_thinking
+            prompt_row["max_new_tokens"] = segment_call_profile.max_new_tokens
         prompt_rows.append(prompt_row)
         stage_start = time.time()
-        raw = runner.generate(prompt, image_paths=[], video_paths=video_paths)
+        raw = generate_with_call_profile(
+            runner,
+            prompt,
+            image_paths=[],
+            video_paths=video_paths,
+            call_profile=segment_call_profile,
+        )
         prompt_row["elapsed_seconds"] = round(time.time() - stage_start, 3)
         observation = extract_json_object(raw)
         errors = validate_segment_observation(
@@ -3063,8 +3134,7 @@ def run_chunked_evidence_groundedness_eval(
         packet,
         observations=observations,
     )
-    prompt_rows.append(
-        {
+    aggregation_row = {
             "stage": "evidence_groundedness_aggregation",
             "generation_slot_id": qa_item.get("generation_slot_id"),
             "generation_group_id": qa_item.get("generation_group_id"),
@@ -3078,7 +3148,12 @@ def run_chunked_evidence_groundedness_eval(
             "model_id": getattr(runner, "model_id", None),
             "chunk_observation_count": len(observations),
         }
-    )
+    if aggregation_call_profile is not None:
+        aggregation_row["reasoning_enabled"] = (
+            not aggregation_call_profile.disable_thinking
+        )
+        aggregation_row["max_new_tokens"] = aggregation_call_profile.max_new_tokens
+    prompt_rows.append(aggregation_row)
     result = run_model_judge_branch(
         check_name="evidence_groundedness",
         prompt=aggregation_prompt,
@@ -3088,6 +3163,8 @@ def run_chunked_evidence_groundedness_eval(
         evidence_id=packet.get("evidence_id"),
         qa_id=qa_item.get("qa_id"),
         attempt=attempt,
+        call_profile=aggregation_call_profile,
+        repair_call_profile=repair_call_profile,
     )
     result["chunked_evidence_review"] = True
     result["chunk_observations"] = observations
@@ -3114,10 +3191,12 @@ def run_parallel_review_judges(
     quality_quota_counts: dict[str, int] | None = None,
     quality_quota: int = DEFAULT_QUALITY_QUOTA,
     record_decision_entropy: bool = False,
+    stage_profiles: dict[str, GenerationCallProfile] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Run qa_formality, evidence_groundedness, and answerability in parallel."""
 
     active_qa_formality_runner = qa_formality_runner or runner
+    active_stage_profiles = stage_profiles or {}
     include_generator_rationale = False
     participant_names = formality_participant_names(packet, qa_item)
     schema_errors = qa_formality_errors(
@@ -3281,6 +3360,8 @@ def run_parallel_review_judges(
             attempt=attempt,
             collect_choice_logits=record_decision_entropy,
             minimal_verdict_probe_prompt=qa_formality_entropy_probe_prompt,
+            call_profile=active_stage_profiles.get("qa_formality"),
+            repair_call_profile=active_stage_profiles.get("json_repair"),
         )
         if chunked_evidence_review:
             evidence_groundedness_future = executor.submit(
@@ -3291,6 +3372,13 @@ def run_parallel_review_judges(
                 full_video_paths=full_video_paths,
                 prompt_rows=evidence_chunk_prompt_rows,
                 attempt=attempt,
+                segment_call_profile=active_stage_profiles.get(
+                    "evidence_segment_observation"
+                ),
+                aggregation_call_profile=active_stage_profiles.get(
+                    "evidence_groundedness_aggregation"
+                ),
+                repair_call_profile=active_stage_profiles.get("json_repair"),
             )
         else:
             evidence_groundedness_future = executor.submit(
@@ -3305,6 +3393,10 @@ def run_parallel_review_judges(
                 attempt=attempt,
                 collect_choice_logits=record_decision_entropy,
                 minimal_verdict_probe_prompt=evidence_groundedness_entropy_probe_prompt,
+                call_profile=active_stage_profiles.get(
+                    "evidence_groundedness_aggregation"
+                ),
+                repair_call_profile=active_stage_profiles.get("json_repair"),
             )
         answerability_future = executor.submit(
             run_answerability_eval,
@@ -3316,6 +3408,7 @@ def run_parallel_review_judges(
             prompt_rows=answerability_prompt_rows,
             judge_media_role=judge_media_role,
             attempt=attempt,
+            call_profile=active_stage_profiles.get("answerability"),
         )
 
         try:
@@ -3475,6 +3568,8 @@ def generate_video_qa_loop(
     judge_api_key: str | None = None,
     judge_max_new_tokens: int | None = None,
     judge_reasoning_effort: str | None = None,
+    six_user_ten_minute_reasoning_profile: bool = False,
+    formality_max_new_tokens: int = 2048,
     qa_formality_use_generator: bool = False,
     judge_video_source: str = "full",
     judge_include_generator_rationale: bool = False,
@@ -3496,6 +3591,13 @@ def generate_video_qa_loop(
     attempts_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     judge_include_generator_rationale = False
+    stage_profiles = (
+        six_user_ten_minute_reasoning_profiles(
+            formality_max_new_tokens=formality_max_new_tokens,
+        )
+        if six_user_ten_minute_reasoning_profile
+        else {}
+    )
     # Archived scored/quota production switch:
     # judge_pass_fail_only = caller-provided value
     # judge_quality_quota = caller-provided value
@@ -3821,6 +3923,16 @@ def generate_video_qa_loop(
                     "image_paths": image_paths,
                     "video_paths": video_paths,
                     "generator_decode": decode_config,
+                    **(
+                        {
+                            "reasoning_enabled": (
+                                not stage_profiles["generator"].disable_thinking
+                            ),
+                            "max_new_tokens": stage_profiles["generator"].max_new_tokens,
+                        }
+                        if "generator" in stage_profiles
+                        else {}
+                    ),
                 }
             )
             prompts.append(
@@ -4010,17 +4122,25 @@ def generate_video_qa_loop(
                 flush=True,
             )
             if generator_decode_mode == "sampling":
-                raw_generation = runner.generate(
+                raw_generation = generate_with_call_profile(
+                    runner,
                     gen_prompt,
                     image_paths=image_paths,
                     video_paths=video_paths,
+                    call_profile=stage_profiles.get("generator"),
                     decoding_mode=generator_decode_mode,
                     temperature=generator_temperature,
                     top_p=generator_top_p,
                     top_k=generator_top_k,
                 )
             else:
-                raw_generation = runner.generate(gen_prompt, image_paths=image_paths, video_paths=video_paths)
+                raw_generation = generate_with_call_profile(
+                    runner,
+                    gen_prompt,
+                    image_paths=image_paths,
+                    video_paths=video_paths,
+                    call_profile=stage_profiles.get("generator"),
+                )
             generation_elapsed_seconds = round(time.time() - stage_start, 3)
             print(
                 "qa_stage_done "
@@ -4154,6 +4274,7 @@ def generate_video_qa_loop(
                     pass_fail_only=True,
                     quality_quota_counts=None,
                     record_decision_entropy=record_judge_decision_entropy,
+                    stage_profiles=stage_profiles,
                 )
             except OpenRouterRequestError as exc:
                 # This is an infrastructure failure, not a negative judgment. Preserve the
@@ -4359,6 +4480,20 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--allow-cpu", action="store_true")
     parser.add_argument("--allow-openai-video-input", action="store_true")
     parser.add_argument("--disable-thinking", action="store_true")
+    parser.add_argument(
+        "--six-user-ten-minute-reasoning-profile",
+        action="store_true",
+        help=(
+            "Use reasoning with 8192 output tokens for generator/evidence/answerability "
+            "and non-reasoning 2048-token calls for qa_formality/JSON repair."
+        ),
+    )
+    parser.add_argument(
+        "--formality-max-new-tokens",
+        type=int,
+        default=2048,
+        help="Per-call output token cap for qa_formality and JSON repair.",
+    )
     parser.add_argument("--api-key", help="Provider API key; OpenRouter reads OPENROUTER_API_KEY and Gemini reads GEMINI_API_KEY or GOOGLE_API_KEY")
     parser.add_argument("--judge-backend", choices=["transformers-local", "transformers-local-memory-safe", "openai-compatible-local", "openrouter", "gemini"])
     parser.add_argument("--judge-model-id", help=f"Model for review judges/evaluators; defaults to {DEFAULT_JUDGE_MODEL_ID} when judge backend differs")
@@ -4467,6 +4602,10 @@ def main(argv: list[str] | None = None) -> int:
         judge_api_key=args.judge_api_key,
         judge_max_new_tokens=args.judge_max_new_tokens,
         judge_reasoning_effort=args.judge_reasoning_effort,
+        six_user_ten_minute_reasoning_profile=(
+            args.six_user_ten_minute_reasoning_profile
+        ),
+        formality_max_new_tokens=args.formality_max_new_tokens,
         qa_formality_use_generator=args.qa_formality_use_generator,
         judge_video_source=args.judge_video_source,
         judge_include_generator_rationale=args.judge_include_generator_rationale,

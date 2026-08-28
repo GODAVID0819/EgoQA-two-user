@@ -148,6 +148,100 @@ def test_item_is_rejected_only_after_all_three_attempts_fail(tmp_path: Path) -> 
     assert rejected[0]["review"]["accepted"] is False
 
 
+def test_ten_minute_profile_reaches_generator_and_review_without_second_runner(
+    tmp_path: Path,
+) -> None:
+    class ProfileRunner:
+        model_id = "profile-runner"
+
+        def __init__(self) -> None:
+            self.call_profiles = []
+
+        def generate(self, prompt, *, image_paths, video_paths, call_profile=None):
+            self.call_profiles.append(call_profile)
+            return json.dumps(
+                {
+                    "qa_id": "profile-qa",
+                    "question": "What object could I not identify from where I was sitting?",
+                    "options": [f"Option {letter}" for letter in "ABCDE"],
+                    "correct": "A",
+                    "answer": "Option A",
+                    "required_users": [
+                        "speaker",
+                        "provider_one",
+                        "provider_two",
+                        "provider_three",
+                        "provider_four",
+                        "provider_five",
+                    ],
+                }
+            )
+
+    evidence_path = tmp_path / "evidence.jsonl"
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "evidence_id": "ten-minute-profile-packet",
+                "required_users": [
+                    "speaker",
+                    "provider_one",
+                    "provider_two",
+                    "provider_three",
+                    "provider_four",
+                    "provider_five",
+                ],
+                "clips": [],
+                "source_urls": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runner = ProfileRunner()
+    observed_stage_profiles = []
+
+    def fake_review(**kwargs):
+        observed_stage_profiles.append(kwargs["stage_profiles"])
+        return (
+            {"gate": {"passed": True}, "review_passed": True, "checks": {}},
+            {"gate": {"passed": True}},
+            {"attempt": kwargs["attempt"]},
+        )
+
+    with (
+        mock.patch.object(video_qa_loop, "make_runner", return_value=runner) as factory,
+        mock.patch.object(video_qa_loop, "run_parallel_review_judges", side_effect=fake_review),
+        mock.patch.object(video_qa_loop, "validate_qa_item", return_value=[]),
+        mock.patch.object(video_qa_loop, "qa_formality_errors", return_value=[]),
+        mock.patch.object(video_qa_loop, "complete_generator_metadata"),
+        mock.patch.object(video_qa_loop, "human_audit_packet", return_value={}),
+        mock.patch.object(video_qa_loop, "video_evidence_for_packet", return_value=[]),
+        mock.patch.object(video_qa_loop, "prepare_runner_video_uploads", return_value={}),
+        mock.patch.object(
+            video_qa_loop,
+            "build_review_from_gates",
+            return_value={"accepted": True},
+        ),
+    ):
+        accepted = video_qa_loop.generate_video_qa_loop(
+            evidence_path=evidence_path,
+            output_path=tmp_path / "accepted.jsonl",
+            prompts_path=tmp_path / "prompts.jsonl",
+            rejected_path=tmp_path / "rejected.jsonl",
+            backend="test",
+            target_count=1,
+            max_attempts=1,
+            question_types=("neutral",),
+            six_user_ten_minute_reasoning_profile=True,
+        )
+
+    profiles = video_qa_loop.six_user_ten_minute_reasoning_profiles()
+    assert len(accepted) == 1
+    assert factory.call_count == 1
+    assert runner.call_profiles == [profiles["generator"]]
+    assert observed_stage_profiles == [profiles]
+
+
 def test_review_summary_counts_each_gate_by_attempt() -> None:
     def trace(attempt: int, statuses: dict[str, str] | None):
         merged = (

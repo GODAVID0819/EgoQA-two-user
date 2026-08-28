@@ -10,18 +10,56 @@ import pytest
 import egolife_two_user_qa.qwen3vl_runner as qwen_runner_module
 from egolife_two_user_qa.qwen3vl_runner import apply_chat_template_compat
 from egolife_two_user_qa.qwen3vl_runner import (
+    GenerationCallProfile,
     MEMORY_SAFE_DEFAULT_ATTN_IMPLEMENTATION,
     MEMORY_SAFE_DEFAULT_KV_BYTES_PER_TOKEN,
     MEMORY_SAFE_DEFAULT_MAX_INPUT_TOKENS,
     MEMORY_SAFE_DEFAULT_MIN_AVAILABLE_RAM_GIB,
     MEMORY_SAFE_DEFAULT_MIN_FREE_GIB,
     MEMORY_SAFE_DEFAULT_VIDEO_FPS,
+    GeminiRunner,
+    OpenAICompatibleLocalRunner,
     Qwen3VLMemorySafeTransformersRunner,
     Qwen3VLTransformersRunner,
 )
 
 
 MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+
+
+def test_generation_call_profile_validates_output_budget() -> None:
+    profile = GenerationCallProfile(max_new_tokens=8192, disable_thinking=False)
+
+    assert profile.max_new_tokens == 8192
+    assert profile.disable_thinking is False
+
+
+def test_generation_call_profile_rejects_non_positive_budget() -> None:
+    with pytest.raises(ValueError, match="max_new_tokens must be positive"):
+        GenerationCallProfile(max_new_tokens=0, disable_thinking=False)
+
+
+def test_local_runner_generate_accepts_per_call_profile() -> None:
+    parameters = inspect.signature(Qwen3VLTransformersRunner.generate).parameters
+
+    assert "call_profile" in parameters
+
+
+def test_api_runners_accept_per_call_profile() -> None:
+    assert "call_profile" in inspect.signature(
+        OpenAICompatibleLocalRunner.generate
+    ).parameters
+    assert "call_profile" in inspect.signature(GeminiRunner.generate).parameters
+
+
+def test_memory_safe_vram_estimate_uses_per_call_output_budget() -> None:
+    runner = Qwen3VLTransformersRunner.__new__(Qwen3VLTransformersRunner)
+    runner.kv_bytes_per_token = MEMORY_SAFE_DEFAULT_KV_BYTES_PER_TOKEN
+
+    assert runner._estimated_kv_gib(
+        input_tokens=84_992,
+        max_new_tokens=8_192,
+    ) == pytest.approx(5.6875)
 
 
 def test_new_processor_receives_thinking_flag_in_template_kwargs() -> None:

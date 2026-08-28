@@ -27,6 +27,7 @@ from egolife_two_user_qa.video_qa_loop import (  # noqa: E402
     parsed_answerability_sufficiency,
     run_parallel_review_judges,
     run_answerability_eval,
+    six_user_ten_minute_reasoning_profiles,
     video_evidence_for_packet,
 )
 from egolife_two_user_qa import video_qa_loop  # noqa: E402
@@ -38,6 +39,27 @@ from egolife_two_user_qa.schema import validate_qa_item  # noqa: E402
 
 
 SIX_USERS = ["speaker", "provider_one", "provider_two", "provider_three", "provider_four", "provider_five"]
+
+
+def test_six_user_ten_minute_reasoning_profiles_are_stage_specific() -> None:
+    profiles = six_user_ten_minute_reasoning_profiles()
+
+    assert profiles["generator"].max_new_tokens == 8192
+    assert profiles["generator"].disable_thinking is False
+    assert profiles["evidence_segment_observation"] is profiles["generator"]
+    assert profiles["evidence_groundedness_aggregation"] is profiles["generator"]
+    assert profiles["answerability"] is profiles["generator"]
+    assert profiles["qa_formality"].max_new_tokens == 2048
+    assert profiles["qa_formality"].disable_thinking is True
+    assert profiles["json_repair"] is profiles["qa_formality"]
+
+
+def test_six_user_ten_minute_reasoning_profiles_allow_formality_token_override() -> None:
+    profiles = six_user_ten_minute_reasoning_profiles(formality_max_new_tokens=3072)
+
+    assert profiles["generator"].max_new_tokens == 8192
+    assert profiles["qa_formality"].max_new_tokens == 3072
+    assert profiles["json_repair"] is profiles["qa_formality"]
 
 
 def six_user_qa(*, correct: str = "A") -> dict[str, object]:
@@ -531,6 +553,43 @@ class SixUserAnswerabilityTests(unittest.TestCase):
             "evidence_sufficiency_reasoning",
         )
 
+    def test_run_eval_propagates_answerability_call_profile(self) -> None:
+        class Runner:
+            def __init__(self) -> None:
+                self.calls: list[object] = []
+
+            def generate(self, prompt, *, image_paths, video_paths, call_profile=None):
+                self.calls.append(call_profile)
+                condition = {
+                    "condition_type": (
+                        "speaker_only" if len(self.calls) == 1 else "combined_all_six_users"
+                    ),
+                    "users": ["speaker"] if len(self.calls) == 1 else list(SIX_USERS),
+                }
+                return json.dumps(
+                    sufficiency_evaluation(condition, len(self.calls) == 2)
+                )
+
+        profile = six_user_ten_minute_reasoning_profiles()["answerability"]
+        runner = Runner()
+        prompt_rows: list[dict[str, object]] = []
+
+        run_answerability_eval(
+            qa_item=six_user_qa(correct="A"),
+            packet={"clips": []},
+            runner=runner,
+            media_backend="transformers-local",
+            allow_openai_video_input=False,
+            prompt_rows=prompt_rows,
+            call_profile=profile,
+        )
+
+        self.assertEqual(runner.calls, [profile, profile])
+        self.assertEqual(
+            [(row["reasoning_enabled"], row["max_new_tokens"]) for row in prompt_rows],
+            [(True, 8192), (True, 8192)],
+        )
+
     def test_six_user_media_routes_generator_and_judges_in_order(self) -> None:
         packet = self.media_packet()
         clips = packet["clips"]
@@ -866,8 +925,11 @@ class SixUserAnswerabilityTests(unittest.TestCase):
             "aggregation_prompt": "chunk aggregation prompt",
         }
 
-        def fake_formality(*, check_name, **_kwargs):
+        observed_formality_profiles = []
+
+        def fake_formality(*, check_name, call_profile=None, repair_call_profile=None, **_kwargs):
             self.assertEqual(check_name, "qa_formality")
+            observed_formality_profiles.append((call_profile, repair_call_profile))
             return {
                 "review_passed": True,
                 "checks": {
@@ -887,6 +949,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                 "elapsed_seconds": 0.1,
             }
 
+        profiles = six_user_ten_minute_reasoning_profiles()
         with (
             mock.patch.object(video_qa_loop, "run_model_judge_branch", side_effect=fake_formality),
             mock.patch.object(
@@ -898,7 +961,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                 video_qa_loop,
                 "run_answerability_eval",
                 return_value={"evaluations": [], "gate": {"passed": True, "reason": "test"}},
-            ),
+            ) as answerability,
         ):
             _judge, _answerability, trace = run_parallel_review_judges(
                 qa_item=six_user_qa(),
@@ -911,9 +974,26 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                 full_image_paths=[],
                 full_video_paths=[clip["full_local_video"] for clip in packet["clips"]],
                 attempt=1,
+                stage_profiles=profiles,
         )
 
         chunked.assert_called_once()
+        self.assertEqual(
+            observed_formality_profiles,
+            [(profiles["qa_formality"], profiles["json_repair"])],
+        )
+        self.assertIs(
+            chunked.call_args.kwargs["segment_call_profile"],
+            profiles["evidence_segment_observation"],
+        )
+        self.assertIs(
+            chunked.call_args.kwargs["aggregation_call_profile"],
+            profiles["evidence_groundedness_aggregation"],
+        )
+        self.assertIs(
+            answerability.call_args.kwargs["call_profile"],
+            profiles["answerability"],
+        )
         self.assertIn("chunked_evidence_review", trace["evidence_groundedness"])
         self.assertTrue(trace["evidence_groundedness"]["chunked_evidence_review"])
         self.assertEqual(trace["evidence_groundedness"]["prompt"], "chunk aggregation prompt")

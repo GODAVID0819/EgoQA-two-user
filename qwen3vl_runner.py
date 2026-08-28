@@ -14,6 +14,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -50,6 +51,16 @@ DEFAULT_SAMPLING_TOP_P = 0.9
 # judge response. Lowercase pass/fail are each single Qwen3.6-27B tokens.
 DEFAULT_CHOICE_FIELD = "verdict"
 DEFAULT_DECISION_CHOICES = ("pass", "fail")
+
+
+@dataclass(frozen=True)
+class GenerationCallProfile:
+    max_new_tokens: int
+    disable_thinking: bool
+
+    def __post_init__(self) -> None:
+        if self.max_new_tokens <= 0:
+            raise ValueError("max_new_tokens must be positive")
 
 
 class OpenRouterRequestError(RuntimeError):
@@ -186,6 +197,7 @@ class Generator(Protocol):
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
+        call_profile: GenerationCallProfile | None = None,
     ) -> str:
         ...
 
@@ -560,13 +572,27 @@ class Qwen3VLTransformersRunner:
                 f"required_available_gib={self.min_available_ram_gib:.3f}"
             )
 
-    def _estimated_kv_gib(self, *, input_tokens: int) -> float:
+    def _estimated_kv_gib(
+        self,
+        *,
+        input_tokens: int,
+        max_new_tokens: int | None = None,
+    ) -> float:
+        output_tokens = self.max_new_tokens if max_new_tokens is None else max_new_tokens
         return (
-            (input_tokens + self.max_new_tokens) * self.kv_bytes_per_token / 1024**3
+            (input_tokens + output_tokens) * self.kv_bytes_per_token / 1024**3
         )
 
-    def _required_free_vram_gib(self, *, input_tokens: int) -> float:
-        return self._estimated_kv_gib(input_tokens=input_tokens) + self.min_free_gib
+    def _required_free_vram_gib(
+        self,
+        *,
+        input_tokens: int,
+        max_new_tokens: int | None = None,
+    ) -> float:
+        return self._estimated_kv_gib(
+            input_tokens=input_tokens,
+            max_new_tokens=max_new_tokens,
+        ) + self.min_free_gib
 
     def generate(
         self,
@@ -577,6 +603,7 @@ class Qwen3VLTransformersRunner:
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
+        call_profile: GenerationCallProfile | None = None,
     ) -> str:
         result = self._generate(
             prompt,
@@ -586,6 +613,7 @@ class Qwen3VLTransformersRunner:
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
+            call_profile=call_profile,
         )
         return str(result["text"])
 
@@ -616,6 +644,7 @@ class Qwen3VLTransformersRunner:
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
+        call_profile: GenerationCallProfile | None = None,
     ) -> str:
         """Generate from explicitly interleaved text/image/video content.
 
@@ -630,6 +659,7 @@ class Qwen3VLTransformersRunner:
             top_p=top_p,
             top_k=top_k,
             multimodal_content=content,
+            call_profile=call_profile,
         )
         return str(result["text"])
 
@@ -646,6 +676,7 @@ class Qwen3VLTransformersRunner:
         choice_field: str | None = None,
         choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
         multimodal_content: list[dict[str, Any]] | None = None,
+        call_profile: GenerationCallProfile | None = None,
     ) -> dict[str, Any]:
         image_paths = image_paths or []
         video_paths = video_paths or []
@@ -674,19 +705,30 @@ class Qwen3VLTransformersRunner:
             for item in content
             if item.get("type") == "text"
         )
+        effective_max_new_tokens = (
+            call_profile.max_new_tokens
+            if call_profile is not None
+            else self.max_new_tokens
+        )
+        effective_disable_thinking = (
+            call_profile.disable_thinking
+            if call_profile is not None
+            else self.disable_thinking
+        )
         messages = [{"role": "user", "content": content}]
         start = time.time()
         print(
             "qwen_generate_start "
             f"images={len(image_paths)} videos={len(video_paths)} "
-            f"prompt_chars={prompt_chars} disable_thinking={self.disable_thinking} "
+            f"prompt_chars={prompt_chars} disable_thinking={effective_disable_thinking} "
+            f"max_new_tokens={effective_max_new_tokens} "
             f"decoding_mode={decoding_mode}",
             flush=True,
         )
         text = apply_chat_template_compat(
             self.processor,
             messages,
-            disable_thinking=self.disable_thinking,
+            disable_thinking=effective_disable_thinking,
         )
         try:
             vision_info = self.process_vision_info(
@@ -736,8 +778,14 @@ class Qwen3VLTransformersRunner:
         if (self.min_free_gib > 0 or self.kv_bytes_per_token > 0) and self.torch.cuda.is_available():
             free_bytes, total_bytes = self.torch.cuda.mem_get_info(self.device)
             free_gib = free_bytes / 1024**3
-            estimated_kv_gib = self._estimated_kv_gib(input_tokens=input_tokens)
-            required_free_gib = self._required_free_vram_gib(input_tokens=input_tokens)
+            estimated_kv_gib = self._estimated_kv_gib(
+                input_tokens=input_tokens,
+                max_new_tokens=effective_max_new_tokens,
+            )
+            required_free_gib = self._required_free_vram_gib(
+                input_tokens=input_tokens,
+                max_new_tokens=effective_max_new_tokens,
+            )
             print(
                 "qwen_pre_generate_vram "
                 f"free_gib={free_gib:.3f} total_gib={total_bytes / 1024**3:.3f} "
@@ -754,7 +802,7 @@ class Qwen3VLTransformersRunner:
                     f"workspace_reserve_gib={self.min_free_gib:.3f}"
                 )
         generate_kwargs = generation_kwargs(
-            max_new_tokens=self.max_new_tokens,
+            max_new_tokens=effective_max_new_tokens,
             decoding_mode=decoding_mode,
             temperature=temperature,
             top_p=top_p,
@@ -1173,6 +1221,7 @@ class OpenAICompatibleLocalRunner:
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
+        call_profile: GenerationCallProfile | None = None,
     ) -> str:
         data = self._generate_response(
             prompt,
@@ -1182,6 +1231,7 @@ class OpenAICompatibleLocalRunner:
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
+            call_profile=call_profile,
         )
         return data["choices"][0]["message"]["content"].strip()
 
@@ -1231,6 +1281,7 @@ class OpenAICompatibleLocalRunner:
         top_k: int | None = None,
         *,
         include_logprobs: bool = False,
+        call_profile: GenerationCallProfile | None = None,
     ) -> dict[str, Any]:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for path in image_paths or []:
@@ -1244,11 +1295,16 @@ class OpenAICompatibleLocalRunner:
             content.append({"type": "video_url", "video_url": {"url": file_to_data_url(path)}})
         if decoding_mode not in GENERATOR_DECODING_MODES:
             raise ValueError(f"unknown decoding_mode: {decoding_mode}")
+        effective_max_new_tokens = (
+            call_profile.max_new_tokens
+            if call_profile is not None
+            else self.max_new_tokens
+        )
         payload = {
             "model": self.model_id,
             "messages": [{"role": "user", "content": content}],
             "temperature": temperature if decoding_mode == "sampling" else 0,
-            "max_tokens": self.max_new_tokens,
+            "max_tokens": effective_max_new_tokens,
         }
         if decoding_mode == "sampling":
             payload["top_p"] = top_p
@@ -1281,7 +1337,7 @@ class OpenAICompatibleLocalRunner:
             raise RuntimeError(
                 f"HTTP {exc.code} from {req.full_url}: {detail}; "
                 f"prompt_chars={len(prompt)} images={len(image_paths or [])} "
-                f"videos={len(video_paths or [])} max_tokens={self.max_new_tokens}"
+                f"videos={len(video_paths or [])} max_tokens={effective_max_new_tokens}"
             ) from exc
         return data
 
@@ -1529,6 +1585,7 @@ class OpenRouterRunner(OpenAICompatibleLocalRunner):
         top_k: int | None = None,
         *,
         include_logprobs: bool = False,
+        call_profile: GenerationCallProfile | None = None,
     ) -> dict[str, Any]:
         prepared_video_paths = [self._prepare_video_for_upload(path) for path in (video_paths or [])]
         attempts = self.max_retries + 1
@@ -1544,6 +1601,7 @@ class OpenRouterRunner(OpenAICompatibleLocalRunner):
                     top_p=top_p,
                     top_k=top_k,
                     include_logprobs=include_logprobs,
+                    call_profile=call_profile,
                 )
                 response_error = self._response_error(data)
                 if response_error is not None:
@@ -1800,6 +1858,7 @@ class GeminiRunner:
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
+        call_profile: GenerationCallProfile | None = None,
     ) -> str:
         result = self._generate(
             prompt,
@@ -1809,6 +1868,7 @@ class GeminiRunner:
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
+            call_profile=call_profile,
         )
         return str(result["text"])
 
@@ -1843,6 +1903,7 @@ class GeminiRunner:
         include_logprobs: bool = False,
         choice_field: str = DEFAULT_CHOICE_FIELD,
         choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
+        call_profile: GenerationCallProfile | None = None,
     ) -> dict[str, Any]:
         if decoding_mode not in GENERATOR_DECODING_MODES:
             raise ValueError(f"unknown decoding_mode: {decoding_mode}")
@@ -1858,8 +1919,13 @@ class GeminiRunner:
         parts = [self._image_part(path) for path in image_paths]
         parts.extend(self._file_part(path) for path in video_paths)
         parts.append({"text": prompt})
+        effective_max_new_tokens = (
+            call_profile.max_new_tokens
+            if call_profile is not None
+            else self.max_new_tokens
+        )
         generation_config: dict[str, Any] = {
-            "maxOutputTokens": self.max_new_tokens,
+            "maxOutputTokens": effective_max_new_tokens,
             "temperature": temperature if decoding_mode == "sampling" else 0,
         }
         if decoding_mode == "sampling":
