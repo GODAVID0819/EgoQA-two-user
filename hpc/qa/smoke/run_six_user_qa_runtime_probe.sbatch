@@ -21,6 +21,7 @@ MAX_ATTEMPTS="${MAX_ATTEMPTS:-1}"
 ALLOW_PARTIAL="${ALLOW_PARTIAL:-1}"
 EVIDENCE_DURATION_SECONDS="${EVIDENCE_DURATION_SECONDS:-30}"
 PRUNING_BLOCK_SECONDS="${PRUNING_BLOCK_SECONDS:-30}"
+PRUNING_MAX_CROSS_GAP_SECONDS="${PRUNING_MAX_CROSS_GAP_SECONDS:-10}"
 QA_TIME_BUDGET_MODE="${QA_TIME_BUDGET_MODE:-0}"
 RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED="${RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED:-0}"
 QA_DEADLINE_EPOCH_SECONDS="${QA_DEADLINE_EPOCH_SECONDS:-0}"
@@ -30,6 +31,11 @@ TARGET_GENERATION_GROUPS="${TARGET_GENERATION_GROUPS:-1}"
 GENERATOR_DECODE_MODE="${GENERATOR_DECODE_MODE:-greedy}"
 GENERATOR_TEMPERATURE="${GENERATOR_TEMPERATURE:-0.7}"
 GENERATOR_TOP_P="${GENERATOR_TOP_P:-0.9}"
+MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-2048}"
+FORMALITY_MAX_NEW_TOKENS="${FORMALITY_MAX_NEW_TOKENS:-2048}"
+SIX_USER_TEN_MINUTE_REASONING_PROFILE="${SIX_USER_TEN_MINUTE_REASONING_PROFILE:-0}"
+export PRUNING_MAX_CROSS_GAP_SECONDS MAX_NEW_TOKENS FORMALITY_MAX_NEW_TOKENS
+export SIX_USER_TEN_MINUTE_REASONING_PROFILE
 
 PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/outputs/six_user_qa}"
@@ -95,8 +101,9 @@ export LD_LIBRARY_PATH="${FFMPEG_ENV}/lib:${LD_LIBRARY_PATH:-}"
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 export QWEN_MEMORY_SAFE_VIDEO_FPS="${QWEN_MEMORY_SAFE_VIDEO_FPS:-1.0}"
-export QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS="3136"
-export QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS="32768"
+export QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS="${QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS:-3136}"
+export QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS="${QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS:-65536}"
+export QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS="${QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS:-32768}"
 export QWEN_MEMORY_SAFE_GPU_RESERVE_GIB="5"
 export QWEN_MEMORY_SAFE_MIN_AVAILABLE_RAM_GIB="32"
 export QWEN_MEMORY_SAFE_ATTN_IMPLEMENTATION="sdpa"
@@ -162,7 +169,7 @@ payload = {
     "model_dir": "${MODEL_DIR}",
     "video_backend": "${FORCE_QWENVL_VIDEO_READER}",
     "min_video_pixels": int("${QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS}"),
-    "max_image_pixels": 65536,
+    "max_image_pixels": int("${QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS}"),
     "pip_check_status": "pending",
     "pip_check_path": "${OUTDIR}/pip_check.txt",
     "accepted_target": int("${ACCEPTED_TARGET}"),
@@ -170,6 +177,11 @@ payload = {
     "target_generation_groups": int("${TARGET_GENERATION_GROUPS}"),
     "max_attempts": int("${MAX_ATTEMPTS}"),
     "allow_partial": bool(int("${ALLOW_PARTIAL}")),
+    "evidence_duration_seconds": float("${EVIDENCE_DURATION_SECONDS}"),
+    "pruning_max_cross_gap_seconds": float("${PRUNING_MAX_CROSS_GAP_SECONDS}"),
+    "max_new_tokens": int("${MAX_NEW_TOKENS}"),
+    "formality_max_new_tokens": int("${FORMALITY_MAX_NEW_TOKENS}"),
+    "ten_minute_reasoning_profile": bool(int("${SIX_USER_TEN_MINUTE_REASONING_PROFILE}")),
     "runtime_probe_allow_zero_accepted": bool(int("${RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED}")),
     "selected_count": 6,
     "generator_decode": {
@@ -286,6 +298,7 @@ fi
 
 python - "${OUTDIR}/job_manifest.json" <<PY
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -320,6 +333,8 @@ python "${PROJECT_ROOT}/group_relative_clip_sampling.py" \
   --selected-count 6 \
   --duration-seconds "${EVIDENCE_DURATION_SECONDS}" \
   --pruning-block-seconds "${PRUNING_BLOCK_SECONDS}" \
+  --pruning-cross-gap-mode center \
+  --pruning-max-cross-gap-seconds "${PRUNING_MAX_CROSS_GAP_SECONDS}" \
   --sample-interval-seconds 1 \
   --pairs-per-group 1 \
   --topk 3 \
@@ -391,6 +406,7 @@ PY
 
 python - "${OUTDIR}/six_user_candidates.jsonl" "${QWEN_MEMORY_SAFE_VIDEO_FPS}" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -410,8 +426,8 @@ messages = [{
             {
                 "type": "video",
                 "video": item,
-                "min_pixels": 3136,
-                "max_pixels": 65536,
+                "min_pixels": int(os.environ["QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS"]),
+                "max_pixels": int(os.environ["QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS"]),
                 "fps": video_fps,
             }
             for item in video_paths
@@ -437,6 +453,13 @@ PY
 
 echo "stage=generate_six_user_qa"
 QA_TIME_ARGS=()
+QA_PROFILE_ARGS=(--disable-thinking)
+if [[ "${SIX_USER_TEN_MINUTE_REASONING_PROFILE}" == "1" ]]; then
+  QA_PROFILE_ARGS=(
+    --six-user-ten-minute-reasoning-profile
+    --formality-max-new-tokens "${FORMALITY_MAX_NEW_TOKENS}"
+  )
+fi
 if [[ "${QA_TIME_BUDGET_MODE}" == "1" ]]; then
   QA_TIME_ARGS+=(
     --deadline-epoch-seconds "${QA_DEADLINE_EPOCH_SECONDS}"
@@ -459,9 +482,8 @@ python -m egolife_two_user_qa generate_video_qa_loop \
   --backend transformers-local-memory-safe \
   --model-id "${MODEL_DIR}" \
   --dtype bfloat16 \
-  --max-image-pixels 65536 \
-  --max-new-tokens 2048 \
-  --disable-thinking \
+  --max-image-pixels "${QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS}" \
+  --max-new-tokens "${MAX_NEW_TOKENS}" \
   --generation-mode baseline \
   --generator-decode-mode "${GENERATOR_DECODE_MODE}" \
   --generator-temperature "${GENERATOR_TEMPERATURE}" \
@@ -469,6 +491,7 @@ python -m egolife_two_user_qa generate_video_qa_loop \
   --judge-video-source full \
   --fixed-question-type-schedule \
   --question-types neutral \
+  "${QA_PROFILE_ARGS[@]}" \
   "${QA_TIME_ARGS[@]}"
 GENERATION_EXIT_CODE="$?"
 set -e
@@ -500,6 +523,12 @@ allow_partial = bool(int(sys.argv[3]))
 max_attempts = int(sys.argv[4])
 time_budget_mode = bool(int(sys.argv[5]))
 evidence_duration_seconds = float(sys.argv[6])
+if evidence_duration_seconds <= 0 or evidence_duration_seconds % 30 != 0:
+    raise SystemExit(
+        "evidence_duration_seconds must be a positive multiple of 30: "
+        f"actual={evidence_duration_seconds}"
+    )
+expected_segments_per_user = int(evidence_duration_seconds / 30)
 pruning_block_seconds = float(sys.argv[7])
 deadline_epoch_seconds = float(sys.argv[8])
 max_generation_slots = int(sys.argv[9]) if sys.argv[9] else None
@@ -629,11 +658,15 @@ for row in accepted:
     if segment_users != set(row.get("required_users") or []):
         raise SystemExit(f"evidence segment users do not match required_users: {qa_id}")
     if any(
-        len(item.get("video_paths") or []) != 6
+        len(item.get("video_paths") or []) != expected_segments_per_user
+        or len(item.get("segments") or []) != expected_segments_per_user
         or item.get("media_role") != "full_original_30s_segments"
         for item in segment_rows
     ):
-        raise SystemExit(f"evidence segment rows must each use six 30-second videos: {qa_id}")
+        raise SystemExit(
+            "evidence segment rows must use the duration-derived 30-second segments: "
+            f"qa_id={qa_id} expected={expected_segments_per_user}"
+        )
     aggregation_rows = by_aggregation_identity.get(identity, [])
     if len(aggregation_rows) != 1:
         raise SystemExit(
@@ -723,7 +756,7 @@ elif len(accepted) >= accepted_target:
     status = "passed"
 elif runtime_probe_allow_zero_accepted and len(accepted) == 0 and completed_review_count > 0:
     status = "runtime_passed_no_accepted"
-elif allow_partial and completed_review_count > 0:
+elif allow_partial and len(accepted) > 0 and completed_review_count > 0:
     status = "partial"
 else:
     status = "failed"

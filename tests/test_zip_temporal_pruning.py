@@ -15,10 +15,64 @@ if "egolife_two_user_qa" not in sys.modules:
     sys.modules["egolife_two_user_qa"] = package
 
 from egolife_two_user_qa import cross_user_temporal_gate_grid_sidecar as gate_grid  # noqa: E402
+from egolife_two_user_qa import group_relative_clip_sampling as sampling  # noqa: E402
 from egolife_two_user_qa import temporal_kmeans_grid_sidecar as sidecar  # noqa: E402
 
 
 class ZipTemporalPruningTests(unittest.TestCase):
+    def test_ten_minute_path_uses_k240_and_explicit_thirty_second_cross_gap(self) -> None:
+        frames_by_video = [
+            [{"timestamp_seconds": 0.0, "path": f"user-{index}.jpg"}]
+            for index in range(6)
+        ]
+        embeddings_by_video = [[[1.0, 0.0]] for _ in range(6)]
+
+        with (
+            mock.patch.object(
+                sidecar,
+                "time_aware_clustered_frame_representatives",
+                return_value={"cluster_count": 1, "representatives": []},
+            ) as cluster,
+            mock.patch.object(
+                sidecar,
+                "prune_time_aware_cluster_pair",
+                return_value={
+                    "high_similarity_representative_pairs": [],
+                    "right_marked_frame_indices": [],
+                    "right_remove_intervals": [],
+                    "right_keep_intervals": [[0.0, 600.0]],
+                    "right_kept_duration_seconds": 600.0,
+                    "right_removed_duration_seconds": 0.0,
+                    "passed": True,
+                },
+            ) as prune,
+        ):
+            result = sampling.clustered_six_user_zip_temporal_pruning(
+                frames_by_video,
+                embeddings_by_video,
+                speaker_index=0,
+                start_seconds=0.0,
+                duration_seconds=600.0,
+                sample_interval_seconds=1.0,
+                seconds_per_cluster=2.5,
+                cross_gap_mode="center",
+                max_cross_gap_seconds=30.0,
+            )
+
+        self.assertEqual(result["cluster_count"], 240)
+        self.assertEqual(result["max_cross_gap_seconds"], 30.0)
+        self.assertEqual(cluster.call_count, 6)
+        self.assertTrue(
+            all(call.kwargs["cluster_count"] == 240 for call in cluster.call_args_list)
+        )
+        self.assertEqual(prune.call_count, 5)
+        self.assertTrue(
+            all(
+                call.kwargs["max_cross_gap_seconds"] == 30.0
+                for call in prune.call_args_list
+            )
+        )
+
     def test_zero_weight_matches_current_cosine_clustering(self) -> None:
         embeddings = [
             [1.0, 0.0],

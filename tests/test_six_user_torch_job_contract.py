@@ -99,15 +99,24 @@ class SixUserTorchJobContractTests(unittest.TestCase):
             'export LD_LIBRARY_PATH="${FFMPEG_ENV}/lib:${LD_LIBRARY_PATH:-}"'
         )
         self.assertIn('export FORCE_QWENVL_VIDEO_READER="decord"', text)
-        self.assertIn('export QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS="3136"', text)
+        self.assertIn(
+            'export QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS="${QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS:-3136}"',
+            text,
+        )
         self.assertIn('if python -m pip check > "${OUTDIR}/pip_check.txt" 2>&1; then', text)
         self.assertIn("known_decord_platform_metadata_warning", text)
         self.assertIn("from qwen_vl_utils.vision_process import get_video_reader_backend", text)
         self.assertIn("from qwen_vl_utils import process_vision_info", text)
         self.assertIn("six_user_video_preflight_passed", text)
-        self.assertIn('"min_pixels": 3136', text)
-        self.assertIn('"max_pixels": 65536', text)
-        self.assertIn("--max-image-pixels 65536", text)
+        self.assertIn(
+            '"min_pixels": int(os.environ["QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS"])',
+            text,
+        )
+        self.assertIn(
+            '"max_pixels": int(os.environ["QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS"])',
+            text,
+        )
+        self.assertIn('--max-image-pixels "${QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS}"', text)
         self.assertIn('if video_backend != "decord":', text)
         self.assertNotIn("from torchcodec", text)
 
@@ -139,7 +148,10 @@ class SixUserTorchJobContractTests(unittest.TestCase):
         self.assertIn("MAX_ATTEMPTS:-1", text)
         self.assertIn("ALLOW_PARTIAL=\"${ALLOW_PARTIAL:-1}\"", text)
         self.assertIn("completed_review_count", text)
-        self.assertIn("allow_partial and completed_review_count > 0", text)
+        self.assertIn(
+            "allow_partial and len(accepted) > 0 and completed_review_count > 0",
+            text,
+        )
         self.assertIn('"runtime_completed_review_count": completed_review_count', text)
         self.assertIn('if [[ -s "${OUTDIR}/qa_mcq.jsonl" ]]; then', text)
 
