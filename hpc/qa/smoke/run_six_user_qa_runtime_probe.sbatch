@@ -29,6 +29,7 @@ MAX_GENERATION_SLOTS="${MAX_GENERATION_SLOTS:-}"
 SINGLE_CANDIDATE_GROUP="${SINGLE_CANDIDATE_GROUP:-0}"
 TARGET_GENERATION_GROUPS="${TARGET_GENERATION_GROUPS:-1}"
 EXPECTED_QA_PER_GROUP="${EXPECTED_QA_PER_GROUP:-0}"
+ONE_CANDIDATE_PER_GROUP="${ONE_CANDIDATE_PER_GROUP:-0}"
 GENERATOR_DECODE_MODE="${GENERATOR_DECODE_MODE:-greedy}"
 GENERATOR_TEMPERATURE="${GENERATOR_TEMPERATURE:-0.7}"
 GENERATOR_TOP_P="${GENERATOR_TOP_P:-0.9}"
@@ -38,6 +39,7 @@ SIX_USER_TEN_MINUTE_REASONING_PROFILE="${SIX_USER_TEN_MINUTE_REASONING_PROFILE:-
 export PRUNING_MAX_CROSS_GAP_SECONDS MAX_NEW_TOKENS FORMALITY_MAX_NEW_TOKENS
 export SIX_USER_TEN_MINUTE_REASONING_PROFILE
 export EXPECTED_QA_PER_GROUP
+export ONE_CANDIDATE_PER_GROUP
 
 PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/outputs/six_user_qa}"
@@ -178,6 +180,7 @@ payload = {
     "evidence_target": int("${EVIDENCE_TARGET}"),
     "target_generation_groups": int("${TARGET_GENERATION_GROUPS}"),
     "expected_qa_per_generation_group": int("${EXPECTED_QA_PER_GROUP}"),
+    "one_candidate_per_generation_group": bool(int("${ONE_CANDIDATE_PER_GROUP}")),
     "max_attempts": int("${MAX_ATTEMPTS}"),
     "allow_partial": bool(int("${ALLOW_PARTIAL}")),
     "evidence_duration_seconds": float("${EVIDENCE_DURATION_SECONDS}"),
@@ -352,26 +355,40 @@ python "${PROJECT_ROOT}/group_relative_clip_sampling.py" \
   --download-media \
   "${CANDIDATE_MODE_ARGS[@]}"
 
-python - "${OUTDIR}/six_user_candidates.jsonl" "${TARGET_GENERATION_GROUPS}" <<'PY'
+python - "${OUTDIR}/six_user_candidates.jsonl" "${TARGET_GENERATION_GROUPS}" "${ONE_CANDIDATE_PER_GROUP}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
 target_generation_groups = int(sys.argv[2])
+one_candidate_per_group = bool(int(sys.argv[3]))
 rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 if not rows:
     raise SystemExit("no six-user candidate was materialized")
+all_generation_group_ids = sorted(
+    {str(row.get("generation_group_id")) for row in rows if row.get("generation_group_id")}
+)
+if len(all_generation_group_ids) != target_generation_groups:
+    raise SystemExit(
+        "generation_group_count must equal target_generation_groups: "
+        f"actual={len(all_generation_group_ids)} target={target_generation_groups} "
+        f"group_ids={all_generation_group_ids}"
+    )
+if one_candidate_per_group:
+    selected_by_group = {}
+    for row in rows:
+        group_id = str(row.get("generation_group_id") or "")
+        selected_by_group.setdefault(group_id, row)
+    rows = [selected_by_group[group_id] for group_id in all_generation_group_ids]
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
 generation_group_ids = sorted(
     {str(row.get("generation_group_id")) for row in rows if row.get("generation_group_id")}
 )
 generation_group_count = len(generation_group_ids)
-if generation_group_count != target_generation_groups:
-    raise SystemExit(
-        "generation_group_count must equal target_generation_groups: "
-        f"actual={generation_group_count} target={target_generation_groups} "
-        f"group_ids={generation_group_ids}"
-    )
 expected_roles = [
     "speaker_reference_unpruned",
     "provider_similarity_pruned",
@@ -417,7 +434,8 @@ if len(set(group_paths.values())) != len(group_paths):
     raise SystemExit("generation groups must reference different six-user video sets")
 print(
     f"candidate_contract_passed rows={len(rows)} "
-    f"generation_groups={generation_group_count} group_ids={generation_group_ids}"
+    f"generation_groups={generation_group_count} group_ids={generation_group_ids} "
+    f"one_candidate_per_group={one_candidate_per_group}"
 )
 PY
 

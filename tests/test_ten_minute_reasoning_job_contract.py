@@ -51,6 +51,9 @@ def test_runtime_propagates_cross_gap_and_reasoning_profile() -> None:
     assert "--six-user-ten-minute-reasoning-profile" in runtime
     assert 'QA_PROFILE_ARGS=(--disable-thinking)' in runtime
     assert '"pruning_max_cross_gap_seconds": float("${PRUNING_MAX_CROSS_GAP_SECONDS}")' in runtime
+    assert 'ONE_CANDIDATE_PER_GROUP="${ONE_CANDIDATE_PER_GROUP:-0}"' in runtime
+    assert '"one_candidate_per_generation_group": bool(int("${ONE_CANDIDATE_PER_GROUP}"))' in runtime
+    assert '"${ONE_CANDIDATE_PER_GROUP}" <<' in runtime
     assert '"max_new_tokens": int("${MAX_NEW_TOKENS}")' in runtime
     assert '"formality_max_new_tokens": int("${FORMALITY_MAX_NEW_TOKENS}")' in runtime
     assert (
@@ -88,6 +91,7 @@ def test_formal_wrapper_targets_three_distinct_groups_and_twenty_slots_each() ->
     assert 'EVIDENCE_TARGET="3"' in job
     assert 'TARGET_GENERATION_GROUPS="3"' in job
     assert 'EXPECTED_QA_PER_GROUP="20"' in job
+    assert 'ONE_CANDIDATE_PER_GROUP="1"' in job
     assert 'MAX_GENERATION_SLOTS="60"' in job
     assert 'QA_TIME_BUDGET_MODE="1"' in job
     assert 'SIX_USER_TEN_MINUTE_REASONING_PROFILE="1"' in job
