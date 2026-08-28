@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 JOB = ROOT / "hpc/qa/experiments/run_six_user_qa_10min_reasoning.sbatch"
+FORMAL_JOB = ROOT / "hpc/qa/experiments/run_six_user_qa_10min_3groups_x20.sbatch"
 RUNTIME_PATH = ROOT / "hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch"
 
 
@@ -78,3 +79,16 @@ def test_runtime_propagates_ten_minute_memory_safe_limits() -> None:
         in runtime
     )
     assert '--max-image-pixels "${QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS}"' in runtime
+
+
+def test_formal_wrapper_targets_three_distinct_groups_and_twenty_slots_each() -> None:
+    job = FORMAL_JOB.read_text(encoding="utf-8")
+
+    assert 'EVIDENCE_TARGET="3"' in job
+    assert 'TARGET_GENERATION_GROUPS="3"' in job
+    assert 'EXPECTED_QA_PER_GROUP="20"' in job
+    assert 'MAX_GENERATION_SLOTS="60"' in job
+    assert 'QA_TIME_BUDGET_MODE="1"' in job
+    assert 'SIX_USER_TEN_MINUTE_REASONING_PROFILE="1"' in job
+    assert "--nodelist" not in job
+    assert "#SBATCH -w" not in job

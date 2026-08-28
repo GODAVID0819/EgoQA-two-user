@@ -28,6 +28,7 @@ QA_DEADLINE_EPOCH_SECONDS="${QA_DEADLINE_EPOCH_SECONDS:-0}"
 MAX_GENERATION_SLOTS="${MAX_GENERATION_SLOTS:-}"
 SINGLE_CANDIDATE_GROUP="${SINGLE_CANDIDATE_GROUP:-0}"
 TARGET_GENERATION_GROUPS="${TARGET_GENERATION_GROUPS:-1}"
+EXPECTED_QA_PER_GROUP="${EXPECTED_QA_PER_GROUP:-0}"
 GENERATOR_DECODE_MODE="${GENERATOR_DECODE_MODE:-greedy}"
 GENERATOR_TEMPERATURE="${GENERATOR_TEMPERATURE:-0.7}"
 GENERATOR_TOP_P="${GENERATOR_TOP_P:-0.9}"
@@ -36,6 +37,7 @@ FORMALITY_MAX_NEW_TOKENS="${FORMALITY_MAX_NEW_TOKENS:-2048}"
 SIX_USER_TEN_MINUTE_REASONING_PROFILE="${SIX_USER_TEN_MINUTE_REASONING_PROFILE:-0}"
 export PRUNING_MAX_CROSS_GAP_SECONDS MAX_NEW_TOKENS FORMALITY_MAX_NEW_TOKENS
 export SIX_USER_TEN_MINUTE_REASONING_PROFILE
+export EXPECTED_QA_PER_GROUP
 
 PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/outputs/six_user_qa}"
@@ -175,6 +177,7 @@ payload = {
     "accepted_target": int("${ACCEPTED_TARGET}"),
     "evidence_target": int("${EVIDENCE_TARGET}"),
     "target_generation_groups": int("${TARGET_GENERATION_GROUPS}"),
+    "expected_qa_per_generation_group": int("${EXPECTED_QA_PER_GROUP}"),
     "max_attempts": int("${MAX_ATTEMPTS}"),
     "allow_partial": bool(int("${ALLOW_PARTIAL}")),
     "evidence_duration_seconds": float("${EVIDENCE_DURATION_SECONDS}"),
@@ -363,9 +366,9 @@ generation_group_ids = sorted(
     {str(row.get("generation_group_id")) for row in rows if row.get("generation_group_id")}
 )
 generation_group_count = len(generation_group_ids)
-if generation_group_count < target_generation_groups:
+if generation_group_count != target_generation_groups:
     raise SystemExit(
-        "generation_group_count < target_generation_groups: "
+        "generation_group_count must equal target_generation_groups: "
         f"actual={generation_group_count} target={target_generation_groups} "
         f"group_ids={generation_group_ids}"
     )
@@ -398,6 +401,20 @@ for row in rows:
         full_path = Path(str(clip.get("full_local_video") or ""))
         if not generator_path.is_file() or not full_path.is_file():
             raise SystemExit(f"missing candidate media for {clip.get('agent_name')}")
+group_paths = {}
+for row in rows:
+    group_id = str(row.get("generation_group_id") or "")
+    group_paths.setdefault(
+        group_id,
+        tuple(str(clip.get("full_local_video") or "") for clip in row.get("clips") or []),
+    )
+if len(group_paths) != target_generation_groups:
+    raise SystemExit(
+        f"expected exactly {target_generation_groups} distinct generation groups, "
+        f"got {sorted(group_paths)}"
+    )
+if len(set(group_paths.values())) != len(group_paths):
+    raise SystemExit("generation groups must reference different six-user video sets")
 print(
     f"candidate_contract_passed rows={len(rows)} "
     f"generation_groups={generation_group_count} group_ids={generation_group_ids}"
@@ -506,7 +523,8 @@ python - "${OUTDIR}" "${ACCEPTED_TARGET}" "${ALLOW_PARTIAL}" "${MAX_ATTEMPTS}" \
   "${QA_DEADLINE_EPOCH_SECONDS}" "${MAX_GENERATION_SLOTS}" \
   "${TERMINATION_REQUESTED}" "${GENERATION_EXIT_CODE}" \
   "${RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED}" \
-  "${GENERATOR_DECODE_MODE}" "${GENERATOR_TEMPERATURE}" "${GENERATOR_TOP_P}" <<'PY'
+  "${GENERATOR_DECODE_MODE}" "${GENERATOR_TEMPERATURE}" "${GENERATOR_TOP_P}" \
+  "${EXPECTED_QA_PER_GROUP}" <<'PY'
 import json
 import sys
 import time
@@ -538,6 +556,7 @@ runtime_probe_allow_zero_accepted = bool(int(sys.argv[12]))
 generator_decode_mode = sys.argv[13]
 generator_temperature = float(sys.argv[14])
 generator_top_p = float(sys.argv[15])
+expected_qa_per_group = int(sys.argv[16])
 
 def read_rows(name):
     path = output_dir / name
@@ -745,8 +764,27 @@ generation_group_ids = {
     for row in [*accepted, *rejected, *time_budget_partials]
     if row.get("generation_group_id")
 }
+completed_slots_by_group = {}
+for row in [*accepted, *rejected, *time_budget_partials]:
+    group_id = str(row.get("generation_group_id") or "missing-group")
+    completed_slots_by_group[group_id] = completed_slots_by_group.get(group_id, 0) + 1
+qa_per_group_target_reached = (
+    expected_qa_per_group <= 0
+    or (
+        len(completed_slots_by_group) == len(generation_group_ids)
+        and all(
+            count >= expected_qa_per_group
+            for count in completed_slots_by_group.values()
+        )
+    )
+)
 if time_budget_mode:
-    if len(accepted) > 0 and generated_count > 0 and completed_review_count > 0:
+    if (
+        len(accepted) > 0
+        and generated_count > 0
+        and completed_review_count > 0
+        and qa_per_group_target_reached
+    ):
         status = "partial" if deadline_stop else "completed"
     elif runtime_probe_allow_zero_accepted and completed_review_count > 0:
         status = "runtime_passed_no_accepted"
@@ -776,11 +814,17 @@ result = {
     "evidence_duration_seconds": evidence_duration_seconds,
     "pruning_block_seconds": pruning_block_seconds,
     "generation_group_ids": sorted(generation_group_ids),
+    "completed_slots_by_group": completed_slots_by_group,
+    "expected_qa_per_generation_group": expected_qa_per_group,
+    "qa_per_group_target_reached": qa_per_group_target_reached,
     "deadline_stop": deadline_stop,
     "termination_requested": termination_requested,
     "generation_exit_code": generation_exit_code,
     "runtime_probe_allow_zero_accepted": runtime_probe_allow_zero_accepted,
     "max_generation_slots": max_generation_slots,
+    "generation_slot_target_reached": (
+        max_generation_slots is None or generated_count >= max_generation_slots
+    ),
     "acceptance_rate": review_summary["acceptance_rate"],
     "generator_attempt_count": review_summary["generator_attempt_count"],
     "accepted_by_attempt": review_summary["accepted_by_attempt"],
@@ -835,6 +879,12 @@ if [[ -s "${OUTDIR}/qa_mcq.jsonl" ]]; then
     --output-dir "${OUTDIR}/review_videos"
 else
   echo "No accepted QA rows; semantic rejections remain recorded for pilot analysis."
+fi
+
+if [[ -s "${OUTDIR}/six_user_qa_result.json" ]] && [[ -f "${PROJECT_ROOT}/tools/render_six_user_10min_review.py" ]]; then
+  python "${PROJECT_ROOT}/tools/render_six_user_10min_review.py" \
+    --output-dir "${OUTDIR}" \
+    --output "${OUTDIR}/six_user_qa_review_cn.md"
 fi
 
 echo "SIX_USER_QA_JOB_FINISHED run_mode=${RUN_MODE} result=${OUTDIR}/six_user_qa_result.json"
