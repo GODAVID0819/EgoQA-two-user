@@ -24,6 +24,7 @@ def test_ten_minute_reasoning_wrapper_contract() -> None:
     assert 'MAX_NEW_TOKENS="8192"' in job
     assert 'FORMALITY_MAX_NEW_TOKENS="2048"' in job
     assert 'SIX_USER_TEN_MINUTE_REASONING_PROFILE="1"' in job
+    assert 'PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-six-user-10min-20260829}"' in job
     assert 'QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS="131072"' in job
     assert 'QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS="131072"' in job
     assert "--nodelist" not in job
