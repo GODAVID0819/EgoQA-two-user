@@ -441,33 +441,107 @@ print(
 )
 PY
 
-python - "${OUTDIR}/six_user_candidates.jsonl" "${QWEN_MEMORY_SAFE_VIDEO_FPS}" <<'PY'
+python - "${OUTDIR}/six_user_candidates.jsonl" "${QWEN_MEMORY_SAFE_VIDEO_FPS}" \
+  "${QWEN_MEMORY_SAFE_VIDEO_CACHE_DIR}" "${QWEN_MEMORY_SAFE_TRANSCODE_MAX_EDGE}" <<'PY'
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 from qwen_vl_utils import process_vision_info
 
+
+def cached_memory_safe_video(source: str, cache_dir: Path, *, fps: float, max_edge: int, crf: int = 23) -> str:
+    """Prepare exactly the same low-memory media used by the inference runner."""
+
+    source_path = Path(source).resolve()
+    stat = source_path.stat()
+    cache_label = ".".join(
+        (
+            f"{stat.st_dev:x}",
+            f"{stat.st_ino:x}",
+            str(stat.st_size),
+            str(stat.st_mtime_ns),
+            f"fps-{fps:g}",
+            f"edge-{max_edge}",
+            f"crf-{crf}",
+        )
+    )
+    output = cache_dir / f"{source_path.stem}.{cache_label}.mp4"
+    if output.is_file() and output.stat().st_size > 0:
+        return str(output)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    temporary = cache_dir / f".{source_path.stem}.{cache_label}.{os.getpid()}.tmp.mp4"
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source_path),
+        "-vf",
+        ",".join(
+            (
+                f"fps={fps:g}",
+                f"scale={max_edge}:{max_edge}:force_original_aspect_ratio=decrease",
+                "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            )
+        ),
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        str(crf),
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(temporary),
+    ]
+    print(
+        "qwen_memory_safe_preflight_transcode "
+        f"source={source_path} fps={fps:g} max_edge={max_edge}",
+        flush=True,
+    )
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        if not temporary.is_file() or temporary.stat().st_size <= 0:
+            raise RuntimeError(f"ffmpeg did not create a usable preflight file: {temporary}")
+        temporary.replace(output)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return str(output)
+
+
 path = Path(sys.argv[1])
 video_fps = float(sys.argv[2])
+cache_dir = Path(sys.argv[3])
+max_edge = int(sys.argv[4])
 first_row = json.loads(next(line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()))
-video_paths = [str(clip["generator_local_video"]) for clip in first_row["clips"]]
-if len(video_paths) != 6 or not all(Path(item).is_file() for item in video_paths):
+source_paths = [str(clip["generator_local_video"]) for clip in first_row["clips"]]
+if len(source_paths) != 6 or not all(Path(item).is_file() for item in source_paths):
     raise SystemExit("six-user video preflight requires six materialized generator videos")
-
+preflight_video_paths = [
+    cached_memory_safe_video(item, cache_dir, fps=video_fps, max_edge=max_edge)
+    for item in source_paths
+]
 messages = [{
     "role": "user",
     "content": [
         *[
             {
                 "type": "video",
-                "video": item,
+                "video": str(output),
                 "min_pixels": int(os.environ["QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS"]),
                 "max_pixels": int(os.environ["QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS"]),
                 "fps": video_fps,
             }
-            for item in video_paths
+            for output in preflight_video_paths
         ],
         {"type": "text", "text": "six-user runtime preflight"},
     ],
@@ -485,7 +559,7 @@ except TypeError:
         _, video_inputs = process_vision_info(messages)
 if video_inputs is None or len(video_inputs) != 6:
     raise SystemExit(f"Qwen video preflight decoded {0 if video_inputs is None else len(video_inputs)} videos")
-print("six_user_video_preflight_passed video_count=6 backend=decord")
+print("six_user_video_preflight_passed video_count=6 backend=decord", flush=True)
 PY
 
 echo "stage=generate_six_user_qa"
