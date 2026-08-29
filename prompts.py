@@ -1065,15 +1065,24 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
         }
 
     if six_user_mode:
-        required_users_order = (
-            "required_users[0] is the speaker. required_users[1] through required_users[5] "
-            "are providers. For generation, the speaker input contains every frame sampled for "
-            "CLIP clustering (normally 30 one-per-second images), while each provider input "
-            "contains only sampled members of clusters that survived pruning. The speaker input "
-            "must naturally motivate the question but remain insufficient to answer it, while "
-            "the combined six-user image input must support one unique answer. One or more "
-            "provider views may support the answer; an unused provider does not invalidate the item."
-        )
+        if generator_uses_sampled_frames(packet):
+            required_users_order = (
+                "required_users[0] is the speaker. required_users[1] through required_users[5] "
+                "are providers. For generation, the speaker input contains every frame sampled for "
+                "CLIP clustering (normally 30 one-per-second images), while each provider input "
+                "contains only sampled members of clusters that survived pruning. The speaker input "
+                "must naturally motivate the question but remain insufficient to answer it, while "
+                "the combined six-user image input must support one unique answer. One or more "
+                "provider views may support the answer; an unused provider does not invalidate the item."
+            )
+        else:
+            required_users_order = (
+                "required_users[0] is the speaker and is supplied as the full unpruned speaker "
+                "video. required_users[1] through required_users[5] are providers whose videos "
+                "may be pruned. The speaker video must naturally motivate the question but remain "
+                "insufficient to answer it, while the combined six-user videos must support one "
+                "unique answer. An unused provider does not invalidate the item."
+            )
     else:
         required_users_order = (
             "required_users[0] is the asker and the question must use that user's natural "
@@ -1384,21 +1393,32 @@ Input: raw videos from multiple people during the same time interval. They may b
         single_user_visibility = "the supplied video"
         interval_wording = "the videos share a time interval"
 
-    dependency_lines = (
-        [
+    if six_user_mode and sampled_frame_input:
+        dependency_lines = [
             "required_users[0] is the speaker, and required_users[1] through required_users[5] are providers.",
             "Ask a question that the speaker would naturally have and genuinely want to ask after what they experienced; do not manufacture a benchmark-style query merely because a provider view contains an extra detail.",
-            "The generator receives images only: every CLIP-sampled frame from the speaker (normally the full 30-frame one-per-second set) and only sampled members of provider clusters that survived pruning. It receives no MP4. The speaker's complete frame set must ground why the question naturally arises, but it must not reveal the answer.",
+            "The generator receives sampled images only: every CLIP-sampled frame from the speaker (normally the full 30-frame one-per-second set) and only sampled members of provider clusters that survived pruning. It receives no MP4. The speaker's complete frame set must ground why the question naturally arises, but it must not reveal the answer.",
             "The speaker's sampled frames alone must remain insufficient to answer the question; one or more provider frame sets must supply the missing answer-bearing evidence.",
             "The combined six-user image input must directly support exactly one correct option.",
             "One or more provider views may supply the answer or the cross-view relation needed to identify it.",
             "Do not require every provider to contribute, and do not reject a natural question merely because some provider views are irrelevant.",
         ]
-        if six_user_mode
-        else [
+    elif six_user_mode:
+        dependency_lines = [
+            "required_users[0] is the speaker, and required_users[1] through required_users[5] are providers.",
+            "Ask a question that the speaker would naturally have and genuinely want to ask after what they experienced; do not manufacture a benchmark-style query merely because a provider view contains an extra detail.",
+            "The generator receives the full unpruned speaker video for required_users[0] and provider videos for required_users[1] through required_users[5]. Provider videos may be pruned, but the speaker video is not.",
+            "Before drafting, scan the full unpruned speaker video from beginning to end, including the final minutes. Treat any clearly visible speaker frame as available evidence, even when the frame is late, brief, or separated from the motivating context.",
+            "If any speaker frame directly shows the answer or any necessary answer-bearing fact, reject that draft and choose a provider-exclusive detail that is absent or genuinely ambiguous in every speaker frame.",
+            "The speaker video must naturally motivate the question but remain insufficient to answer it; one or more provider views must supply the missing answer-bearing evidence.",
+            "The combined six-user video input must directly support exactly one correct option.",
+            "One or more provider views may supply the answer or the cross-view relation needed to identify it.",
+            "Do not require every provider to contribute, and do not reject a natural question merely because some provider views are irrelevant.",
+        ]
+    else:
+        dependency_lines = [
             "required_users[0]'s view alone must be insufficient. The question should not be answered by the asker on their own; it must require additional evidence from required_users[1]."
         ]
-    )
     provider_reference = (
         "required_users[1] through required_users[5]"
         if six_user_mode

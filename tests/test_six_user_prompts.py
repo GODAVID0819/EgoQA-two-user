@@ -74,8 +74,8 @@ class SixUserPromptTests(unittest.TestCase):
         self.assertNotIn('"anchor_provider_users"', brief)
         self.assertNotIn('"additional_provider_users"', brief)
         self.assertIn("required_users[1] through required_users[5] are providers", brief)
-        self.assertIn("speaker input contains every frame sampled for CLIP clustering", brief)
-        self.assertIn("an unused provider does not invalidate the item", brief)
+        self.assertIn("full unpruned speaker video", brief)
+        self.assertIn("An unused provider does not invalidate the item", brief)
 
     def test_packet_brief_supports_full_speaker_and_retained_provider_frames(self) -> None:
         packet = six_user_packet()
@@ -114,23 +114,30 @@ class SixUserPromptTests(unittest.TestCase):
         self.assertIn("required_users[0] is the speaker", prompt)
         self.assertIn("required_users[1] through required_users[5] are providers", prompt)
         self.assertIn("naturally have and genuinely want to ask", prompt)
-        self.assertIn("every CLIP-sampled frame from the speaker", prompt)
-        self.assertIn("It receives no MP4", prompt)
-        self.assertIn("speaker's sampled frames alone must remain insufficient", prompt)
+        self.assertIn("full unpruned speaker video", prompt)
+        self.assertIn("scan the full unpruned speaker video from beginning to end", prompt)
+        self.assertIn("speaker video must naturally motivate the question but remain insufficient", prompt)
         self.assertIn(
-            "The combined six-user image input must directly support exactly one correct option",
+            "The combined six-user video input must directly support exactly one correct option",
             prompt,
         )
         self.assertIn("One or more provider views may supply the answer", prompt)
         self.assertIn("Do not require every provider to contribute", prompt)
-        self.assertIn("every CLIP-sampled frame from the speaker", prompt)
-        self.assertIn("only sampled members of provider clusters that survived pruning", prompt)
-        self.assertIn("It receives no MP4", prompt)
+        self.assertIn("Provider videos may be pruned", prompt)
         self.assertIn("Concurrent-activity restriction", prompt)
         self.assertNotIn("Six-user interaction-chain example", prompt)
         self.assertNotIn("red tape dispenser with a torn white label", prompt)
         self.assertNotIn("Only all three required users", prompt)
         self.assertNotIn("omitting either evidence provider", prompt)
+
+    def test_raw_six_user_prompt_audits_entire_speaker_video_before_claiming_missing_evidence(self) -> None:
+        prompt = build_video_generation_prompt(six_user_packet(), "neutral")
+
+        self.assertIn("full unpruned speaker video", prompt)
+        self.assertIn("scan the full unpruned speaker video from beginning to end", prompt)
+        self.assertIn("including the final minutes", prompt)
+        self.assertIn("If any speaker frame directly shows the answer", prompt)
+        self.assertNotIn("The generator receives images only", prompt)
 
     def test_groundedness_prompt_checks_speaker_motivation_and_provider_evidence(self) -> None:
         prompt = build_evidence_groundedness_judge_prompt(
@@ -307,7 +314,7 @@ class SixUserPromptTests(unittest.TestCase):
 
         prompt = build_video_generation_prompt(packet, "neutral")
 
-        self.assertIn("speaker's sampled frames alone must remain insufficient", prompt)
+        self.assertIn("speaker video must naturally motivate the question but remain insufficient", prompt)
         self.assertIn("Do not require every provider to contribute", prompt)
         self.assertNotIn("generation_diversity_focus", prompt)
 
