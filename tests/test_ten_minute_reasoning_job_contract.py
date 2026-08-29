@@ -21,7 +21,7 @@ def test_ten_minute_reasoning_wrapper_contract() -> None:
     assert 'PRUNING_MAX_CROSS_GAP_SECONDS="30"' in job
     assert 'TARGET_GENERATION_GROUPS="1"' in job
     assert 'MAX_GENERATION_SLOTS="1"' in job
-    assert 'MAX_NEW_TOKENS="8192"' in job
+    assert 'MAX_NEW_TOKENS="16384"' in job
     assert 'FORMALITY_MAX_NEW_TOKENS="2048"' in job
     assert 'SIX_USER_TEN_MINUTE_REASONING_PROFILE="1"' in job
     assert 'PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-six-user-10min-20260829}"' in job
@@ -100,6 +100,7 @@ def test_formal_wrapper_targets_three_distinct_groups_and_twenty_slots_each() ->
     assert 'EXPECTED_QA_PER_GROUP="20"' in job
     assert 'ONE_CANDIDATE_PER_GROUP="1"' in job
     assert 'MAX_GENERATION_SLOTS="60"' in job
+    assert 'MAX_NEW_TOKENS="16384"' in job
     assert 'QA_TIME_BUDGET_MODE="1"' in job
     assert 'SIX_USER_TEN_MINUTE_REASONING_PROFILE="1"' in job
     assert "--nodelist" not in job
