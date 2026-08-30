@@ -95,6 +95,7 @@ def test_runtime_cleanup_preserves_original_failure_status() -> None:
 def test_formal_wrapper_targets_three_distinct_groups_and_twenty_slots_each() -> None:
     job = FORMAL_JOB.read_text(encoding="utf-8")
 
+    assert "#SBATCH --time=2-00:00:00" in job
     assert 'EVIDENCE_TARGET="3"' in job
     assert 'TARGET_GENERATION_GROUPS="3"' in job
     assert 'EXPECTED_QA_PER_GROUP="20"' in job

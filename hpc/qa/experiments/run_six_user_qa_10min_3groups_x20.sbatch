@@ -8,7 +8,7 @@
 #SBATCH --constraint=h100
 # 正式任务资源与时限将在 10 分钟 smoke 的真实吞吐/峰值基础上复核后提交。
 #SBATCH --mem=96G
-#SBATCH --time=04:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --output=hpc/logs/%x_%j.out
 #SBATCH --error=hpc/logs/%x_%j.err
 
@@ -32,7 +32,8 @@ SINGLE_CANDIDATE_GROUP="0"
 MAX_GENERATION_SLOTS="60"
 JOB_START_EPOCH_SECONDS="$(date +%s)"
 # 60 个 slot 的正式时限在 smoke 吞吐实测后复核；此处保留终止前正常落盘时间。
-QA_DEADLINE_EPOCH_SECONDS="$((JOB_START_EPOCH_SECONDS + 3 * 3600 + 45 * 60))"
+# 依据 smoke 的单 slot 实测推理/评审吞吐，给 60 个 slot 留出 46 小时；仍低于 gpu48 的 2 天上限。
+QA_DEADLINE_EPOCH_SECONDS="$((JOB_START_EPOCH_SECONDS + 46 * 3600))"
 QWEN_MEMORY_SAFE_VIDEO_FPS="0.25"
 QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS="131072"
 QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS="131072"
