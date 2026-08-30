@@ -37,3 +37,8 @@
 - 任何阻断性内部一致性错误、问题—答案类型错位、语义重复选项或浅层活动问题，都必须通过可审计规则限制最终奖励，不能仅依赖 judge 的总体印象。
 - 训练数据必须报告独立 `evidence_id` 数量、question type 分布和 held-out 划分。单一视频对上的 reward 上升不能称为跨 clip 泛化。
 - 失败实验应保留在明确的 archived 路径；活跃实验不得反向依赖 archived 实现。
+## Torch 视频结果下载规则
+
+- 从 Torch 下载视频用于人工审核时，只下载已生成并拼接完成的 `stitched` 目录及其中的成片；不要下载原始分段、缓存、临时文件或整个候选媒体树。
+- 本地视频目标目录应保持类似 `review_artifacts\\six_user_qa_3min_resubmissions_20260827\\media_DAY6_20060000\\stitched` 的结构，便于人工审核工具直接打开。
+- Markdown 审核文档与视频成片分开管理；若用户只要求 Markdown，则不下载 JSON 或视频。
