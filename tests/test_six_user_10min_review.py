@@ -129,3 +129,5 @@ def test_build_report_contains_all_slot_cards_and_statistics(tmp_path: Path) -> 
     assert "Evidence 可见用户数" in text
     assert "speaker-only" in text
     assert "large model output should not be rendered" not in text
+    assert "```json" not in text
+    assert "<details>" not in text

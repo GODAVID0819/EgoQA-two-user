@@ -20,6 +20,17 @@ def _cell(value: Any, limit: int = 800) -> str:
     return _short(value, limit).replace("|", "\\|").replace("\n", " ")
 
 
+def _readable_value(value: Any, limit: int = 1200) -> str:
+    """把常见列表或映射转成适合人工阅读的短文本，而不是 JSON 表示。"""
+
+    if isinstance(value, dict):
+        parts = [f"{key}={_short(item, 240)}" for key, item in value.items()]
+        return _cell("；".join(parts), limit)
+    if isinstance(value, (list, tuple, set)):
+        return _cell("、".join(_short(item, 240) for item in value), limit)
+    return _cell(value, limit)
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
@@ -159,9 +170,9 @@ def _render_qa_card(
     lines.extend(
         [
             "",
-            f"- Evidence 可见用户数：`{_cell(vote_summary.get('visible_user_count'))}`；"
-            f"支持计数：`{_cell(vote_summary.get('option_support_counts'))}`；"
-            f"阈值选项：`{_cell(vote_summary.get('threshold_options'))}`。",
+            f"- Evidence 可见用户数：`{_readable_value(vote_summary.get('visible_user_count'))}`；"
+            f"支持计数：`{_readable_value(vote_summary.get('option_support_counts'))}`；"
+            f"阈值选项：`{_readable_value(vote_summary.get('threshold_options'))}`。",
             f"- Answerability：speaker-only=`{_cell(gate.get('speaker_only_answerable'))}`；"
             f"combined-all-six=`{_cell(gate.get('all_six_answerable'))}`；"
             f"条件数=`{_cell(gate.get('answerability_evaluated_condition_count'))}`。",
@@ -170,19 +181,85 @@ def _render_qa_card(
     rationale = qa.get("generator_rationale") or qa.get("why_two_users_needed")
     if rationale:
         lines.extend([f"- 生成/多视角理由：{_cell(rationale, 1600)}", ""])
-    lines.extend(
-        [
-            "",
-            f"<details><summary>展开该 QA 的结构化生成与评审信息（已去除重复媒体路径和原始长输出）</summary>",
-            "",
-            "```json",
-            json.dumps(_sanitized(qa), ensure_ascii=False, indent=2),
-            "```",
-            "",
-            "</details>",
-            "",
-        ]
+    evidence_rows = qa.get("evidence") or []
+    if isinstance(evidence_rows, list) and evidence_rows:
+        lines.extend(
+            [
+                "#### 证据明细",
+                "",
+                "| 用户 | 直接可见事实 | 原始视频时间范围 |",
+                "|---|---|---|",
+            ]
+        )
+        for evidence in evidence_rows:
+            if not isinstance(evidence, dict):
+                continue
+            lines.append(
+                f"| `{_cell(evidence.get('user'), 120)}` | "
+                f"{_cell(evidence.get('needed_fact'), 1200)} | "
+                f"{_cell(evidence.get('timeframe'), 300)} |"
+            )
+
+    single_answerability = qa.get("single_user_answerability") or {}
+    if isinstance(single_answerability, dict) and single_answerability:
+        lines.extend(
+            [
+                "",
+                "#### 各用户单视角 Answerability",
+                "",
+                "| 用户 | 单视角判断 |",
+                "|---|---|",
+            ]
+        )
+        for user, reason in single_answerability.items():
+            lines.append(f"| `{_cell(user, 160)}` | {_cell(reason, 1400)} |")
+
+    combined_answerability = qa.get("combined_answerability")
+    if combined_answerability:
+        lines.extend(["", f"- 六用户合并判断：{_cell(combined_answerability, 1800)}"])
+
+    claims = qa.get("per_user_evidence_claims") or []
+    if isinstance(claims, list) and claims:
+        lines.extend(
+            [
+                "",
+                "#### 每用户证据声明",
+                "",
+                "| 用户 | 声明 |",
+                "|---|---|",
+            ]
+        )
+        for claim in claims:
+            if not isinstance(claim, dict):
+                continue
+            lines.append(
+                f"| `{_cell(claim.get('user'), 160)}` | {_cell(claim.get('claim'), 1400)} |"
+            )
+
+    self_check = review.get("generator_self_check")
+    if self_check:
+        lines.extend(["", f"- 生成器自检：{_cell(self_check, 1800)}"])
+
+    feedback = (
+        ((review.get("judger") or {}).get("feedback_to_generator"))
+        or review.get("feedback_to_generator")
     )
+    if feedback:
+        lines.extend(["", f"- judge 反馈：{_cell(feedback, 1800)}"])
+
+    if attempts:
+        lines.extend(["", "#### 重试记录", ""])
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            attempt_number = attempt.get("attempt") or "?"
+            attempt_status = attempt.get("status") or "未记录"
+            reason = attempt.get("reason") or attempt.get("failure_label") or ""
+            lines.append(
+                f"- 第 {attempt_number} 次：`{_cell(attempt_status, 100)}`"
+                + (f"；{_cell(reason, 1600)}" if reason else "")
+            )
+    lines.append("")
     return lines
 
 
@@ -253,7 +330,7 @@ def build_report(output_dir: str | Path, output_path: str | Path) -> Path:
     lines = [
         "# 六用户十分钟 QA 生成与人工审核报告",
         "",
-        "> 本文由 Torch 端结构化运行产物生成，保留全部 generation slot 的最终 QA/评审信息。原始 JSONL、视频和 prompt 记录仍在同一 JobID 目录；本 Markdown 去除重复媒体路径和原始模型长输出，便于人工审阅。",
+        "> 本文由 Torch 端运行产物生成，保留全部 generation slot 的最终 QA 与评审信息；重复媒体路径和模型原始长输出已省略，便于人工审阅。",
         "",
         "## 1. 结论摘要",
         "",
@@ -290,7 +367,7 @@ def build_report(output_dir: str | Path, output_path: str | Path) -> Path:
             "",
             "## 3. QA 逐条审核卡片",
             "",
-            "每张卡片对应一个 generation slot；若该 slot 发生重试，卡片保留最后一次 QA，并在结构化展开区保留该 QA 的完整评审字段。",
+            "每张卡片对应一个 generation slot；若该 slot 发生重试，卡片保留最后一次 QA，并在下方列出证据、可见性、judge 结果和重试原因。",
             "",
         ]
     )
@@ -311,20 +388,7 @@ def build_report(output_dir: str | Path, output_path: str | Path) -> Path:
         )
     lines.extend(
         [
-            "## 4. 原始产物索引",
-            "",
-            "| 文件 | 用途 |",
-            "|---|---|",
-            "| `six_user_qa_result.json` | 作业状态、计数和运行配置 |",
-            "| `job_manifest.json` | JobID、资源、模型与阶段合同 |",
-            "| `six_user_candidates.jsonl` | 三个六用户视频组及媒体映射 |",
-            "| `qa_mcq.jsonl` | accepted QA 原始结构化记录 |",
-            "| `qa_mcq.rejected.jsonl` | 达到最大尝试后拒绝的 slot |",
-            "| `qa_mcq.intermediate.jsonl` | 每个 slot 的最终中间记录 |",
-            "| `qa_mcq.attempts.jsonl` | 每一次生成/评审尝试 |",
-            "| `video_first_prompts.jsonl` | 全部生成与三个 judge 的 prompt 元数据 |",
-            "",
-            "## 5. 人工审核边界",
+            "## 4. 人工审核边界",
             "",
             "- 本文可以逐条查看题目、选项、声明答案、三个 judge 结果、Evidence 可见用户投票摘要和 Answerability 双条件。",
             "- 本文不替代原始视频；需要判断视觉事实时，请打开对应用户的完整十分钟视频或本地拼接成片。",
