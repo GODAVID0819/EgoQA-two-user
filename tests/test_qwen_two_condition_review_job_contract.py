@@ -10,7 +10,7 @@ def test_media_job_uses_cpu_job_specific_storage_and_real_preflight() -> None:
     text = MEDIA_JOB.read_text(encoding="utf-8")
     assert "#SBATCH --account=torch_pr_674_tandon_advanced" in text
     assert "#SBATCH --partition=cpu_short" in text
-    assert "#SBATCH --qos=normal" in text
+    assert "#SBATCH --qos=" not in text
     assert "#SBATCH --time=00:50:00" in text
     assert "#SBATCH --gres" not in text
     assert "--nodelist" not in text

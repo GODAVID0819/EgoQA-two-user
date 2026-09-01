@@ -2,7 +2,6 @@
 #SBATCH --job-name=qwen_review_media
 #SBATCH --account=torch_pr_674_tandon_advanced
 #SBATCH --partition=cpu_short
-#SBATCH --qos=normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
