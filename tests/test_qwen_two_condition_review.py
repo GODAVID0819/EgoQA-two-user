@@ -523,3 +523,84 @@ def test_finalize_review_writes_paired_summary_and_chinese_report(
     report = (output_dir / "report_cn.md").read_text(encoding="utf-8")
     assert "有效配对数：**1**" in report
     assert "仅 minimum set 正确" in report
+
+
+def _write_cli_markdown(path: Path) -> None:
+    path.write_text(
+        """# 1
+generation group：DAY1::17200000
+evidence id：E1
+speaker：Jake
+minimum required users: Jake, Lucia
+
+Which bottle was selected?
+
+A. red
+B. gold ← 声明答案
+C. silver
+D. blue
+E. green
+""",
+        encoding="utf-8",
+    )
+
+
+def test_cli_prepare_only_does_not_create_runner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from egolife_two_user_qa.tools import run_qwen_two_condition_review as cli
+
+    markdown = tmp_path / "QA.md"
+    _write_cli_markdown(markdown)
+    curated = tmp_path / "curated.jsonl"
+    curated.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "make_runner",
+        lambda *args, **kwargs: pytest.fail("runner must not load"),
+    )
+    output_dir = tmp_path / "run"
+    rc = cli.main(
+        [
+            "--approved-markdown",
+            str(markdown),
+            "--curated-jsonl",
+            str(curated),
+            "--media-root",
+            str(tmp_path / "media"),
+            "--output-dir",
+            str(output_dir),
+            "--prepare-only",
+        ]
+    )
+    assert rc == 0
+    manifest = json.loads(
+        (output_dir / "run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["mode"] == "prepare_only"
+    assert manifest["selected_count"] == 1
+
+
+def test_cli_model_mode_requires_explicit_inference_contract(
+    tmp_path: Path,
+) -> None:
+    from egolife_two_user_qa.tools import run_qwen_two_condition_review as cli
+
+    markdown = tmp_path / "QA.md"
+    _write_cli_markdown(markdown)
+    curated = tmp_path / "curated.jsonl"
+    curated.write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit, match="model review requires"):
+        cli.main(
+            [
+                "--approved-markdown",
+                str(markdown),
+                "--curated-jsonl",
+                str(curated),
+                "--media-root",
+                str(tmp_path / "media"),
+                "--output-dir",
+                str(tmp_path / "run"),
+            ]
+        )
