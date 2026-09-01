@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -50,6 +51,10 @@ class ConditionSpec:
 class ChoiceParse:
     choice: str | None
     status: str
+
+
+class ReviewExecutionError(RuntimeError):
+    """模型或媒体运行异常已写入预测记录。"""
 
 
 def normalize_text(value: str) -> str:
@@ -276,3 +281,134 @@ def parse_choice(raw_output: str) -> ChoiceParse:
         (fallback.group(1) or fallback.group(2)).upper(),
         "valid",
     )
+
+
+def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        handle.flush()
+
+
+def read_prediction_rows(path: str | Path) -> list[dict[str, Any]]:
+    source = Path(path)
+    if not source.is_file():
+        return []
+    return [
+        json.loads(line)
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _latest_by_key(
+    rows: Iterable[dict[str, Any]],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        latest[(str(row["qa_id"]), str(row["condition_id"]))] = row
+    return latest
+
+
+def _next_attempt(
+    rows: Iterable[dict[str, Any]],
+    qa_id: str,
+    condition_id: str,
+) -> int:
+    attempts = [
+        int(row.get("attempt", 0))
+        for row in rows
+        if row.get("qa_id") == qa_id
+        and row.get("condition_id") == condition_id
+    ]
+    return max(attempts, default=0) + 1
+
+
+def run_items(
+    items: Sequence[GoldItem],
+    media_root: str | Path,
+    output_dir: str | Path,
+    runner: Any,
+    *,
+    call_profile: Any = None,
+    rerun_nonvalid: bool = False,
+) -> list[dict[str, Any]]:
+    output_root = Path(output_dir)
+    predictions_path = output_root / "predictions.jsonl"
+    rows = read_prediction_rows(predictions_path)
+    latest = _latest_by_key(rows)
+    for item in items:
+        prompt = build_prompt(item.question, item.options)
+        for order, spec in enumerate(
+            build_condition_specs(item, media_root),
+            1,
+        ):
+            if spec.missing_paths:
+                continue
+            key = (item.qa_id, spec.condition_id)
+            prior = latest.get(key)
+            if prior is not None:
+                prior_valid = (
+                    prior.get("run_status") == "ok"
+                    and prior.get("parse_status") == "valid"
+                )
+                if prior_valid or not rerun_nonvalid:
+                    continue
+            attempt = _next_attempt(rows, item.qa_id, spec.condition_id)
+            started = time.perf_counter()
+            try:
+                raw_output = runner.generate(
+                    prompt,
+                    image_paths=[],
+                    video_paths=list(spec.video_paths),
+                    decoding_mode="greedy",
+                    call_profile=call_profile,
+                )
+            except Exception as exc:
+                row = {
+                    "qa_id": item.qa_id,
+                    "condition_id": spec.condition_id,
+                    "input_users": list(spec.input_users),
+                    "video_paths": list(spec.video_paths),
+                    "predicted_choice": None,
+                    "correct_choice": item.correct,
+                    "is_correct": None,
+                    "raw_output": "",
+                    "parse_status": "not_parsed",
+                    "run_status": "error",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "model_id": str(runner.model_id),
+                    "elapsed_seconds": time.perf_counter() - started,
+                    "condition_order": order,
+                    "attempt": attempt,
+                }
+                _append_jsonl(predictions_path, row)
+                raise ReviewExecutionError(str(exc)) from exc
+            parsed = parse_choice(str(raw_output))
+            row = {
+                "qa_id": item.qa_id,
+                "condition_id": spec.condition_id,
+                "input_users": list(spec.input_users),
+                "video_paths": list(spec.video_paths),
+                "predicted_choice": parsed.choice,
+                "correct_choice": item.correct,
+                "is_correct": (
+                    parsed.choice == item.correct
+                    if parsed.status == "valid"
+                    else None
+                ),
+                "raw_output": str(raw_output),
+                "parse_status": parsed.status,
+                "run_status": "ok",
+                "error_type": None,
+                "error_message": None,
+                "model_id": str(runner.model_id),
+                "elapsed_seconds": time.perf_counter() - started,
+                "condition_order": order,
+                "attempt": attempt,
+            }
+            _append_jsonl(predictions_path, row)
+            rows.append(row)
+            latest[key] = row
+    return read_prediction_rows(predictions_path)

@@ -226,3 +226,138 @@ def test_parse_choice_rejects_missing_or_conflicting_output(
     parsed = parse_choice(raw)
     assert parsed.choice is None
     assert parsed.status == status
+
+
+class FakeRunner:
+    model_id = "fake-model"
+
+    def __init__(self, outputs: list[str | Exception]) -> None:
+        self.outputs = list(outputs)
+        self.calls: list[dict] = []
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        self.calls.append({"prompt": prompt, **kwargs})
+        value = self.outputs.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+def _complete_media(tmp_path: Path) -> Path:
+    group = tmp_path / "media" / "DAY1_17200000"
+    group.mkdir(parents=True)
+    for user in ("Jake", "Alice", "Tasha", "Lucia", "Katrina", "Shure"):
+        (group / f"{user}.mp4").write_bytes(b"video")
+    return tmp_path / "media"
+
+
+def test_run_item_uses_identical_prompt_and_only_changes_videos(
+    tmp_path: Path,
+) -> None:
+    from egolife_two_user_qa.qwen_two_condition_review import run_items
+
+    item = _item("SECRET_GOLD_ID", "Which bottle was selected?")
+    runner = FakeRunner(
+        ["CHOICE: B\nANSWER: two", "CHOICE: A\nANSWER: one"]
+    )
+    output_dir = tmp_path / "run"
+    run_items([item], _complete_media(tmp_path), output_dir, runner)
+    assert len(runner.calls) == 2
+    assert runner.calls[0]["prompt"] == runner.calls[1]["prompt"]
+    assert len(runner.calls[0]["video_paths"]) == 2
+    assert len(runner.calls[1]["video_paths"]) == 6
+    assert "SECRET_GOLD_ID" not in runner.calls[0]["prompt"]
+    assert set(runner.calls[0]) == {
+        "prompt",
+        "image_paths",
+        "video_paths",
+        "decoding_mode",
+        "call_profile",
+    }
+    rows = [
+        json.loads(line)
+        for line in (output_dir / "predictions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [row["condition_id"] for row in rows] == ["minimum_set", "all_six"]
+    assert [row["is_correct"] for row in rows] == [True, False]
+
+
+def test_invalid_parse_is_saved_without_automatic_retry(tmp_path: Path) -> None:
+    from egolife_two_user_qa.qwen_two_condition_review import run_items
+
+    runner = FakeRunner(["unclear", "CHOICE: B\nANSWER: two"])
+    output_dir = tmp_path / "run"
+    run_items(
+        [_item("Q1", "Question?")],
+        _complete_media(tmp_path),
+        output_dir,
+        runner,
+    )
+    rows = [
+        json.loads(line)
+        for line in (output_dir / "predictions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert rows[0]["parse_status"] == "invalid_missing"
+    assert rows[0]["is_correct"] is None
+    assert rows[0]["attempt"] == 1
+    assert len(runner.calls) == 2
+
+
+def test_resume_skips_valid_rows_and_explicitly_reruns_invalid(
+    tmp_path: Path,
+) -> None:
+    from egolife_two_user_qa.qwen_two_condition_review import run_items
+
+    item = _item("Q1", "Question?")
+    media_root = _complete_media(tmp_path)
+    output_dir = tmp_path / "run"
+    first = FakeRunner(["unclear", "CHOICE: B\nANSWER: two"])
+    run_items([item], media_root, output_dir, first)
+    second = FakeRunner(["CHOICE: B\nANSWER: two"])
+    run_items(
+        [item],
+        media_root,
+        output_dir,
+        second,
+        rerun_nonvalid=True,
+    )
+    assert len(second.calls) == 1
+    rows = [
+        json.loads(line)
+        for line in (output_dir / "predictions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [
+        row["attempt"]
+        for row in rows
+        if row["condition_id"] == "minimum_set"
+    ] == [1, 2]
+
+
+def test_runner_error_is_saved_and_stops_following_calls(tmp_path: Path) -> None:
+    from egolife_two_user_qa.qwen_two_condition_review import (
+        ReviewExecutionError,
+        run_items,
+    )
+
+    runner = FakeRunner([RuntimeError("decoder failed"), "CHOICE: B"])
+    output_dir = tmp_path / "run"
+    with pytest.raises(ReviewExecutionError, match="decoder failed"):
+        run_items(
+            [_item("Q1", "Question?")],
+            _complete_media(tmp_path),
+            output_dir,
+            runner,
+        )
+    assert len(runner.calls) == 1
+    row = json.loads(
+        (output_dir / "predictions.jsonl").read_text(encoding="utf-8").strip()
+    )
+    assert row["run_status"] == "error"
+    assert row["parse_status"] == "not_parsed"
+    assert row["attempt"] == 1
