@@ -18,6 +18,7 @@ from egolife_two_user_qa.prompts import (  # noqa: E402
     QA_FORMALITY_CHECK_SCHEMA,
     QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
     SAMPLED_FRAME_GENERATOR_MEDIA_MODES,
+    VIDEO_GENERATION_SCHEMA,
     build_answerability_prompt,
     build_evidence_groundedness_judge_prompt,
     build_qa_formality_judge_prompt,
@@ -66,6 +67,57 @@ def two_user_packet() -> dict[str, object]:
 
 
 class SixUserPromptTests(unittest.TestCase):
+    def test_generator_schema_removes_only_why_two_users_needed(self) -> None:
+        self.assertNotIn("why_two_users_needed", VIDEO_GENERATION_SCHEMA)
+        for field in (
+            "qa_id",
+            "question_type",
+            "question",
+            "options",
+            "correct",
+            "answer",
+            "required_users",
+            "evidence",
+            "referred_timestamps",
+            "single_user_answerability",
+            "combined_answerability",
+            "generator_rationale",
+            "per_user_evidence_claims",
+            "review",
+        ):
+            self.assertIn(field, VIDEO_GENERATION_SCHEMA)
+
+    def test_all_six_answerability_prompt_reuses_canonical_facts(self) -> None:
+        condition = {
+            "condition_id": "combined_all_six_users::" + "+".join(USERS),
+            "condition_type": "combined_all_six_users",
+            "users": list(USERS),
+        }
+        canonical = [
+            {
+                "fact_id": "F1",
+                "fact": "the final destination",
+                "why_needed": "it distinguishes the options",
+            },
+            {
+                "fact_id": "F2",
+                "fact": "the final object state",
+                "why_needed": "it identifies the correct outcome",
+            },
+        ]
+
+        prompt = build_answerability_prompt(
+            six_user_qa(),
+            condition,
+            canonical_facts=canonical,
+        )
+
+        self.assertIn('"fact_id": "F1"', prompt)
+        self.assertIn(
+            "must not add, delete, reorder, merge, split, or rewrite facts",
+            prompt,
+        )
+
     def test_packet_brief_exposes_six_user_roles(self) -> None:
         brief = video_packet_brief(six_user_packet())
 
@@ -274,6 +326,7 @@ class SixUserPromptTests(unittest.TestCase):
         self.assertEqual(
             fact_schema["required"],
             [
+                "fact_id",
                 "fact",
                 "why_needed",
                 "visibility",
@@ -301,6 +354,7 @@ class SixUserPromptTests(unittest.TestCase):
         self.assertIn("does not make the condition sufficient", prompt)
         self.assertIn("original_time_range", prompt)
         self.assertIn("The program computes sufficiency", prompt)
+        self.assertIn("minimize the number of distinct source users", prompt)
 
     def test_generation_prompt_records_round_diversity_focus(self) -> None:
         packet = six_user_packet()

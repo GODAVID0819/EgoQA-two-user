@@ -51,10 +51,6 @@ VIDEO_GENERATION_SCHEMA = {
         "why this is a natural first-person information need and how the supplied visual "
         "evidence supports the question"
     ),
-    "why_two_users_needed": (
-        "how the available views contribute the facts or temporal relation needed to answer, without "
-        "overstating either view's individual necessity"
-    ),
     "per_user_evidence_claims": [
         {
             "user": "name",
@@ -135,6 +131,7 @@ ANSWERABILITY_SUFFICIENCY_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "required": [
+                    "fact_id",
                     "fact",
                     "why_needed",
                     "visibility",
@@ -144,6 +141,7 @@ ANSWERABILITY_SUFFICIENCY_SCHEMA = {
                     "visual_description",
                 ],
                 "properties": {
+                    "fact_id": {"type": "string", "minLength": 1},
                     "fact": {"type": "string", "minLength": 1},
                     "why_needed": {"type": "string", "minLength": 1},
                     "visibility": {
@@ -1447,11 +1445,6 @@ Input: raw videos from multiple people during the same time interval. They may b
             "combined_answerability": (
                 "sufficient because the combined six-user image input supports exactly one option"
             ),
-            "why_two_users_needed": (
-                "legacy field name: explain why the speaker view alone is insufficient and "
-                "which provider view or provider combination supplies the missing evidence; "
-                "do not claim that every provider is necessary unless the videos establish it"
-            ),
         }
     previous_questions = [
         str(question).strip()
@@ -1862,7 +1855,12 @@ Return exactly one valid JSON object conforming to this schema:
 """
 
 
-def build_answerability_prompt(qa_item: dict[str, Any], condition: dict[str, Any]) -> str:
+def build_answerability_prompt(
+    qa_item: dict[str, Any],
+    condition: dict[str, Any],
+    *,
+    canonical_facts: list[dict[str, Any]] | None = None,
+) -> str:
     options = "\n".join(
         f"{letter}. {option}"
         for letter, option in zip(["A", "B", "C", "D", "E"], qa_item.get("options", []))
@@ -1870,6 +1868,12 @@ def build_answerability_prompt(qa_item: dict[str, Any], condition: dict[str, Any
     six_user_mode = len(qa_item.get("required_users") or []) == 6
     condition_type = str(condition.get("condition_type") or "")
     if six_user_mode:
+        canonical_fact_block = ""
+        fact_generation_rule = (
+            "- Decompose the question into the smallest complete list of answer-relevant facts "
+            "needed to distinguish one option from the alternatives. Return every fact in "
+            "`needed_facts`, assigning unique stable fact IDs F1, F2, and so on in order."
+        )
         if condition_type == "speaker_only":
             media_rules = (
                 "- This condition contains only the full unpruned speaker video. Evaluate "
@@ -1882,6 +1886,17 @@ def build_answerability_prompt(qa_item: dict[str, Any], condition: dict[str, Any
                 "original provider videos. Combine visible evidence across them when needed. "
                 "Some provider views may be irrelevant."
             )
+            if canonical_facts is not None:
+                canonical_fact_block = f"""
+Canonical needed facts defined by the speaker-only condition:
+{json.dumps(canonical_facts, ensure_ascii=False, indent=2)}
+
+You must return exactly these canonical facts in the same order. You must not add, delete, reorder, merge, split, or rewrite facts. Preserve `fact_id`, `fact`, and `why_needed` verbatim. Re-evaluate only `visibility`, `confidence`, `source_user`, `original_time_range`, and `visual_description` from the supplied six videos.
+"""
+                fact_generation_rule = (
+                    "- Reuse the supplied canonical needed facts exactly; do not decompose the "
+                    "question again or change fact identity."
+                )
         else:
             media_rules = (
                 "- Evaluate only the videos explicitly listed in this condition. Do not assume "
@@ -1902,12 +1917,15 @@ Generated question:
 Answer options (for judging whether the evidence resolves the question, not for selecting one):
 {options}
 
+{canonical_fact_block}
+
 Rules:
-- Decompose the question into the smallest complete list of answer-relevant facts needed to distinguish one option from the alternatives. Return every fact in `needed_facts`.
+{fact_generation_rule}
 - Mark each fact `VISIBLE` only when this condition directly shows that exact fact. Use `NOT_VISIBLE` when it is absent or occluded, and `AMBIGUOUS` when multiple interpretations remain plausible. Assign `confidence` as HIGH, MEDIUM, or LOW.
 - Be conservative: blur, distance, darkness, occlusion, brief exposure, lookalike objects or people, and uncertain identity should be NOT_VISIBLE or AMBIGUOUS rather than guessed as VISIBLE/HIGH.
 - A needed fact contributes to sufficiency only when it is both `VISIBLE` and `HIGH` confidence. `VISIBLE` with MEDIUM/LOW confidence does not make the condition sufficient.
 - For every `VISIBLE` fact, `source_user` must name one user in this condition, `original_time_range` must identify the visible interval in that user's original video, and `visual_description` must state what is concretely visible.
+- When the same needed fact is equally clear in multiple users, choose `source_user` assignments that minimize the number of distinct source users across the complete `needed_facts` list. Do not add a user unless that view supplies at least one necessary fact.
 - For `NOT_VISIBLE` or `AMBIGUOUS`, set `source_user` and `original_time_range` to null and explain the missing or ambiguous evidence in `visual_description`.
 - Do not select an option. Do not output an A-E letter, the final answer, or the text of the option you think is correct.
 - Judge only the visible videos and supplied condition metadata. Do not use the wording of the question or options as evidence.

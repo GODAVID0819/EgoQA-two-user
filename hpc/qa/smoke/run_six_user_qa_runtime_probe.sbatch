@@ -36,8 +36,11 @@ GENERATOR_TOP_P="${GENERATOR_TOP_P:-0.9}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-2048}"
 FORMALITY_MAX_NEW_TOKENS="${FORMALITY_MAX_NEW_TOKENS:-2048}"
 SIX_USER_TEN_MINUTE_REASONING_PROFILE="${SIX_USER_TEN_MINUTE_REASONING_PROFILE:-0}"
+SIX_USER_TEN_MINUTE_FAST_PROFILE="${SIX_USER_TEN_MINUTE_FAST_PROFILE:-0}"
+FAIL_FAST_REVIEW="${FAIL_FAST_REVIEW:-0}"
 export PRUNING_MAX_CROSS_GAP_SECONDS MAX_NEW_TOKENS FORMALITY_MAX_NEW_TOKENS
 export SIX_USER_TEN_MINUTE_REASONING_PROFILE
+export SIX_USER_TEN_MINUTE_FAST_PROFILE FAIL_FAST_REVIEW
 export EXPECTED_QA_PER_GROUP
 export ONE_CANDIDATE_PER_GROUP
 
@@ -190,6 +193,8 @@ payload = {
     "max_new_tokens": int("${MAX_NEW_TOKENS}"),
     "formality_max_new_tokens": int("${FORMALITY_MAX_NEW_TOKENS}"),
     "ten_minute_reasoning_profile": bool(int("${SIX_USER_TEN_MINUTE_REASONING_PROFILE}")),
+    "ten_minute_fast_profile": bool(int("${SIX_USER_TEN_MINUTE_FAST_PROFILE}")),
+    "fail_fast_review": bool(int("${FAIL_FAST_REVIEW}")),
     "runtime_probe_allow_zero_accepted": bool(int("${RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED}")),
     "selected_count": 6,
     "generator_decode": {
@@ -377,16 +382,6 @@ if len(all_generation_group_ids) != target_generation_groups:
         f"actual={len(all_generation_group_ids)} target={target_generation_groups} "
         f"group_ids={all_generation_group_ids}"
     )
-if one_candidate_per_group:
-    selected_by_group = {}
-    for row in rows:
-        group_id = str(row.get("generation_group_id") or "")
-        selected_by_group.setdefault(group_id, row)
-    rows = [selected_by_group[group_id] for group_id in all_generation_group_ids]
-    path.write_text(
-        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
-        encoding="utf-8",
-    )
 generation_group_ids = sorted(
     {str(row.get("generation_group_id")) for row in rows if row.get("generation_group_id")}
 )
@@ -399,6 +394,7 @@ expected_roles = [
     "provider_similarity_pruned",
     "provider_similarity_pruned",
 ]
+seen_group_speakers = set()
 for row in rows:
     users = row.get("input_users")
     clips = row.get("clips")
@@ -412,6 +408,13 @@ for row in rows:
         raise SystemExit("six media roles are not ordered correctly")
     if row.get("provider_users") != users[1:]:
         raise SystemExit("ordered provider contract mismatch")
+    speaker_index = row.get("speaker_index")
+    if not isinstance(speaker_index, int) or speaker_index not in range(6):
+        raise SystemExit(f"speaker_index must be an integer in 0..5: {speaker_index!r}")
+    group_speaker = (str(row.get("generation_group_id") or ""), speaker_index)
+    if group_speaker in seen_group_speakers:
+        raise SystemExit(f"duplicate generation group speaker candidate: {group_speaker}")
+    seen_group_speakers.add(group_speaker)
     attempts = row.get("speaker_attempts") or []
     if [attempt.get("speaker_index") for attempt in attempts] != list(range(6)):
         raise SystemExit("speaker attempts must visit indexes 0 through 5 in order")
@@ -571,6 +574,12 @@ if [[ "${SIX_USER_TEN_MINUTE_REASONING_PROFILE}" == "1" ]]; then
     --formality-max-new-tokens "${FORMALITY_MAX_NEW_TOKENS}"
   )
 fi
+if [[ "${SIX_USER_TEN_MINUTE_FAST_PROFILE}" == "1" ]]; then
+  QA_PROFILE_ARGS=(--six-user-ten-minute-fast-profile)
+fi
+if [[ "${FAIL_FAST_REVIEW}" == "1" ]]; then
+  QA_PROFILE_ARGS+=(--fail-fast-review)
+fi
 if [[ "${QA_TIME_BUDGET_MODE}" == "1" ]]; then
   QA_TIME_ARGS+=(
     --deadline-epoch-seconds "${QA_DEADLINE_EPOCH_SECONDS}"
@@ -640,7 +649,6 @@ if evidence_duration_seconds <= 0 or evidence_duration_seconds % 30 != 0:
         "evidence_duration_seconds must be a positive multiple of 30: "
         f"actual={evidence_duration_seconds}"
     )
-expected_segments_per_user = int(evidence_duration_seconds / 30)
 pruning_block_seconds = float(sys.argv[7])
 deadline_epoch_seconds = float(sys.argv[8])
 max_generation_slots = int(sys.argv[9]) if sys.argv[9] else None
@@ -670,12 +678,6 @@ time_budget_partials = [
 generation = [row for row in prompts if row.get("stage") == "generation"]
 formality = [row for row in prompts if row.get("stage") == "qa_formality_judge"]
 groundedness = [row for row in prompts if row.get("stage") == "evidence_groundedness_judge"]
-evidence_segments = [
-    row for row in prompts if row.get("stage") == "evidence_segment_observation"
-]
-evidence_aggregations = [
-    row for row in prompts if row.get("stage") == "evidence_groundedness_aggregation"
-]
 answerability = [row for row in prompts if row.get("stage") == "answerability"]
 
 for row in generation:
@@ -693,13 +695,9 @@ by_formality_identity = prompt_rows_by_generation_identity(
     prompts,
     stage="qa_formality_judge",
 )
-by_segment_identity = prompt_rows_by_generation_identity(
+by_groundedness_identity = prompt_rows_by_generation_identity(
     prompts,
-    stage="evidence_segment_observation",
-)
-by_aggregation_identity = prompt_rows_by_generation_identity(
-    prompts,
-    stage="evidence_groundedness_aggregation",
+    stage="evidence_groundedness_judge",
 )
 
 accepted_answerability_call_counts = []
@@ -760,35 +758,41 @@ for row in accepted:
     for key, expected in required.items():
         if gate.get(key) != expected:
             raise SystemExit(f"accepted row has invalid {key}: {gate.get(key)!r}")
-    segment_rows = by_segment_identity.get(identity, [])
-    if len(segment_rows) != 6:
-        raise SystemExit(
-            f"accepted QA must have 6 evidence segment observations: "
-            f"generation_slot_id={generation_slot_id} qa_id={qa_id} "
-            f"attempt={attempt} count={len(segment_rows)}"
-        )
-    segment_users = {str(item.get("user") or "") for item in segment_rows}
-    if segment_users != set(row.get("required_users") or []):
-        raise SystemExit(f"evidence segment users do not match required_users: {qa_id}")
-    if any(
-        len(item.get("video_paths") or []) != expected_segments_per_user
-        or len(item.get("segments") or []) != expected_segments_per_user
-        or item.get("media_role") != "full_original_30s_segments"
-        for item in segment_rows
+    minimum_required_users = row.get("minimum_required_users")
+    required_users = list(row.get("required_users") or [])
+    if (
+        not isinstance(minimum_required_users, list)
+        or not minimum_required_users
+        or len(set(minimum_required_users)) != len(minimum_required_users)
+        or any(user not in required_users for user in minimum_required_users)
     ):
         raise SystemExit(
-            "evidence segment rows must use the duration-derived 30-second segments: "
-            f"qa_id={qa_id} expected={expected_segments_per_user}"
+            "accepted QA minimum_required_users must be a non-empty ordered subset: "
+            f"qa_id={qa_id} minimum={minimum_required_users!r} "
+            f"required_users={required_users!r}"
         )
-    aggregation_rows = by_aggregation_identity.get(identity, [])
-    if len(aggregation_rows) != 1:
+    if gate.get("minimum_required_users") != minimum_required_users:
         raise SystemExit(
-            f"accepted QA must have 1 evidence aggregation: "
-            f"generation_slot_id={generation_slot_id} qa_id={qa_id} "
-            f"attempt={attempt} count={len(aggregation_rows)}"
+            "accepted QA top-level minimum_required_users does not match answerability gate: "
+            f"qa_id={qa_id} top_level={minimum_required_users!r} "
+            f"gate={gate.get('minimum_required_users')!r}"
         )
-    if aggregation_rows[0].get("video_paths") not in ([], None):
-        raise SystemExit(f"evidence aggregation must be text-only: {qa_id}")
+    groundedness_rows = by_groundedness_identity.get(identity, [])
+    if len(groundedness_rows) != 1:
+        raise SystemExit(
+            f"accepted QA must have exactly 1 simple evidence groundedness call: "
+            f"generation_slot_id={generation_slot_id} qa_id={qa_id} "
+            f"attempt={attempt} count={len(groundedness_rows)}"
+        )
+    groundedness_row = groundedness_rows[0]
+    if (
+        len(groundedness_row.get("video_paths") or []) != 6
+        or groundedness_row.get("media_role") != "full"
+    ):
+        raise SystemExit(
+            "accepted QA simple evidence groundedness must use six full videos: "
+            f"qa_id={qa_id}"
+        )
     if len(by_formality_identity.get(identity, [])) != 1:
         raise SystemExit(f"accepted row is missing qa_formality judge prompt: {row.get('qa_id')}")
     formality_check = (
@@ -862,6 +866,30 @@ completed_slots_by_group = {}
 for row in [*accepted, *rejected, *time_budget_partials]:
     group_id = str(row.get("generation_group_id") or "missing-group")
     completed_slots_by_group[group_id] = completed_slots_by_group.get(group_id, 0) + 1
+completed_slots_by_group_and_speaker = {}
+for row in [*accepted, *rejected, *time_budget_partials]:
+    group_id = str(row.get("generation_group_id") or "missing-group")
+    speaker_index = row.get("speaker_index")
+    key = f"{group_id}::speaker_{speaker_index}"
+    completed_slots_by_group_and_speaker[key] = (
+        completed_slots_by_group_and_speaker.get(key, 0) + 1
+    )
+eligible_group_speakers = {
+    f"{str(row.get('generation_group_id') or 'missing-group')}::speaker_{row.get('speaker_index')}"
+    for row in candidates
+}
+minimum_slots_per_eligible_speaker = 2
+speaker_slot_target_reached = (
+    expected_qa_per_group <= 0
+    or (
+        bool(eligible_group_speakers)
+        and all(
+            completed_slots_by_group_and_speaker.get(key, 0)
+            >= minimum_slots_per_eligible_speaker
+            for key in eligible_group_speakers
+        )
+    )
+)
 qa_per_group_target_reached = (
     expected_qa_per_group <= 0
     or (
@@ -878,6 +906,7 @@ if time_budget_mode:
         and generated_count > 0
         and completed_review_count > 0
         and qa_per_group_target_reached
+        and speaker_slot_target_reached
     ):
         status = "partial" if deadline_stop else "completed"
     elif runtime_probe_allow_zero_accepted and completed_review_count > 0:
@@ -909,6 +938,9 @@ result = {
     "pruning_block_seconds": pruning_block_seconds,
     "generation_group_ids": sorted(generation_group_ids),
     "completed_slots_by_group": completed_slots_by_group,
+    "completed_slots_by_group_and_speaker": completed_slots_by_group_and_speaker,
+    "minimum_slots_per_eligible_speaker": minimum_slots_per_eligible_speaker,
+    "speaker_slot_target_reached": speaker_slot_target_reached,
     "expected_qa_per_generation_group": expected_qa_per_group,
     "qa_per_group_target_reached": qa_per_group_target_reached,
     "deadline_stop": deadline_stop,
@@ -929,9 +961,9 @@ result = {
     "target_reached": len(accepted) >= accepted_target,
     "allow_partial": allow_partial,
     "generator_video_count": 6,
-    "groundedness_video_count": 0,
-    "evidence_segment_observation_count": len(evidence_segments),
-    "evidence_groundedness_aggregation_count": len(evidence_aggregations),
+    "groundedness_video_count": 6,
+    "evidence_segment_observation_count": 0,
+    "evidence_groundedness_aggregation_count": 0,
     "answerability_call_count": answerability_call_count,
     "runtime_completed_review_count": completed_review_count,
     "speaker_only_answerable": False if accepted else None,

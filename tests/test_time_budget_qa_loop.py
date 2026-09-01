@@ -2,8 +2,18 @@ from __future__ import annotations
 
 import json
 import argparse
+from collections import Counter
+import sys
+import types
 from pathlib import Path
 from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if "egolife_two_user_qa" not in sys.modules:
+    package = types.ModuleType("egolife_two_user_qa")
+    package.__path__ = [str(ROOT)]
+    sys.modules["egolife_two_user_qa"] = package
 
 from egolife_two_user_qa import video_qa_loop
 from egolife_two_user_qa import qa_generation_schedule
@@ -30,7 +40,40 @@ def test_round_robin_uses_only_available_speakers() -> None:
     slots = list(round_robin_generation_slots(packets(), max_slots=8))
 
     assert [row["speaker_index"] for row in slots] == [0, 2, 5, 0, 2, 5, 0, 2]
-    assert [row["generation_round_index"] for row in slots] == [0, 0, 0, 1, 1, 1, 2, 2]
+    assert [row["generation_round_index"] for row in slots] == list(range(8))
+
+
+def test_round_robin_balances_groups_before_speakers() -> None:
+    group_speakers = {
+        "group-a": [0, 1, 2, 3, 4, 5],
+        "group-b": [0, 2, 5],
+        "group-c": [1, 4],
+    }
+    source_packets = [
+        {
+            "evidence_id": f"{group_id}-speaker-{speaker}",
+            "generation_group_id": group_id,
+            "speaker_index": speaker,
+        }
+        for group_id, speakers in group_speakers.items()
+        for speaker in speakers
+    ]
+
+    slots = list(round_robin_generation_slots(source_packets, max_slots=60))
+
+    assert Counter(slot["generation_group_id"] for slot in slots) == {
+        "group-a": 20,
+        "group-b": 20,
+        "group-c": 20,
+    }
+    for group_id in group_speakers:
+        per_speaker = Counter(
+            slot["speaker_index"]
+            for slot in slots
+            if slot["generation_group_id"] == group_id
+        )
+        assert set(per_speaker) == set(group_speakers[group_id])
+        assert min(per_speaker.values()) >= 2
 
 
 def test_generation_slot_id_is_stable_per_evidence_and_round() -> None:
@@ -238,18 +281,18 @@ def test_time_budget_loop_round_robins_partial_speaker_set_and_ignores_accept_ta
     assert len(runner.prompts) == 5
     assert [row["generation_slot_id"] for row in attempts] == [
         "speaker-0::round_0000",
-        "speaker-2::round_0000",
-        "speaker-5::round_0000",
-        "speaker-0::round_0001",
         "speaker-2::round_0001",
+        "speaker-5::round_0002",
+        "speaker-0::round_0003",
+        "speaker-2::round_0004",
     ]
     assert "Generated question 1?" in runner.prompts[1]
     assert [row["generation_slot_id"] for row in prompt_rows if row["stage"] == "generation"] == [
         "speaker-0::round_0000",
-        "speaker-2::round_0000",
-        "speaker-5::round_0000",
-        "speaker-0::round_0001",
         "speaker-2::round_0001",
+        "speaker-5::round_0002",
+        "speaker-0::round_0003",
+        "speaker-2::round_0004",
     ]
     generation_rows = [row for row in prompt_rows if row["stage"] == "generation"]
     assert "generation_diversity_focus" in generation_rows[0]

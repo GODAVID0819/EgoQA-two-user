@@ -50,12 +50,24 @@ def round_robin_generation_slots(
     if not available:
         return
 
+    grouped_packets: dict[str, list[dict[str, Any]]] = {}
+    for packet in available:
+        group_id = str(
+            packet.get("generation_group_id")
+            or packet.get("evidence_id")
+            or ""
+        )
+        if not group_id:
+            raise ValueError("every generation packet needs a group or evidence ID")
+        grouped_packets.setdefault(group_id, []).append(packet)
+
     emitted = 0
     round_index = 0
     while max_slots is None or emitted < max_slots:
-        for packet in available:
+        for group_packets in grouped_packets.values():
             if max_slots is not None and emitted >= max_slots:
                 return
+            packet = group_packets[round_index % len(group_packets)]
             slot = dict(packet)
             slot["base_evidence_id"] = str(packet["evidence_id"])
             slot["generation_round_index"] = round_index

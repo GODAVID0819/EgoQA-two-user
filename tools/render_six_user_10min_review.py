@@ -176,9 +176,11 @@ def _render_qa_card(
             f"- Answerability：speaker-only=`{_cell(gate.get('speaker_only_answerable'))}`；"
             f"combined-all-six=`{_cell(gate.get('all_six_answerable'))}`；"
             f"条件数=`{_cell(gate.get('answerability_evaluated_condition_count'))}`。",
+            f"- 最小回答视角集：`{_readable_value(qa.get('minimum_required_users') or gate.get('minimum_required_users'))}`；"
+            f"用户数=`{_cell(qa.get('minimum_required_user_count') or gate.get('minimum_required_user_count'))}`。",
         ]
     )
-    rationale = qa.get("generator_rationale") or qa.get("why_two_users_needed")
+    rationale = qa.get("generator_rationale")
     if rationale:
         lines.extend([f"- 生成/多视角理由：{_cell(rationale, 1600)}", ""])
     evidence_rows = qa.get("evidence") or []

@@ -3009,6 +3009,7 @@ def build_candidate_packet(group_result: dict[str, Any]) -> dict[str, Any]:
                 "clip_clock": group_result.get("clip_clock"),
                 "input_users": required_users,
                 "required_users": required_users,
+                "speaker_index": int(selection["speaker_index"]),
                 "speaker_user": required_users[0],
                 "provider_users": required_users[1:],
                 "evidence_provider_user": required_users[1],

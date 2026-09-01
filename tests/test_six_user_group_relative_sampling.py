@@ -599,6 +599,7 @@ class SixUserRoleSelectionTests(unittest.TestCase):
         self.assertEqual(packet["candidate_type"], "six_user_speaker_consensus")
         self.assertEqual(packet["input_users"], users)
         self.assertEqual(packet["required_users"], users)
+        self.assertEqual(packet["speaker_index"], 1)
         self.assertEqual(packet["speaker_user"], users[0])
         self.assertEqual(packet["provider_users"], users[1:])
         self.assertEqual(packet["evidence_provider_user"], users[1])

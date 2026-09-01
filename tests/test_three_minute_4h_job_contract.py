@@ -18,9 +18,16 @@ def test_three_minute_wrapper_reuses_four_hour_keeper_contract() -> None:
     assert 'MAX_ATTEMPTS="3"' in job
     assert 'TARGET_GENERATION_GROUPS="3"' in job
     assert 'SINGLE_CANDIDATE_GROUP="0"' in job
-    assert "MAX_GENERATION_SLOTS=" not in job
+    assert 'MAX_GENERATION_SLOTS="3"' in job
     assert 'CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-1}"' in job
     assert "--nodelist" not in job and "#SBATCH -w" not in job
+
+
+def test_three_minute_wrapper_requests_memory_headroom_after_sigterm() -> None:
+    job = JOB_PATH.read_text(encoding="utf-8")
+    match = re.search(r"^#SBATCH --mem=(\d+)G$", job, flags=re.MULTILINE)
+    assert match is not None
+    assert int(match.group(1)) >= 96
 
 
 def test_three_minute_wrapper_enables_generator_sampling_explicitly() -> None:
@@ -37,7 +44,10 @@ def test_three_minute_wrapper_enables_generator_sampling_explicitly() -> None:
 def test_runtime_finalizer_receives_generator_decode_values_without_literal_shell_tokens() -> None:
     finalizer = RUNTIME.split("runtime_probe_allow_zero_accepted = bool(int(sys.argv[12]))", 1)[1]
     finalizer = finalizer.split('if status == "failed":', 1)[0]
-    assert '"${GENERATOR_DECODE_MODE}" "${GENERATOR_TEMPERATURE}" "${GENERATOR_TOP_P}" <<\'PY\'' in RUNTIME
+    assert '"${GENERATOR_DECODE_MODE}"' in RUNTIME
+    assert '"${GENERATOR_TEMPERATURE}"' in RUNTIME
+    assert '"${GENERATOR_TOP_P}"' in RUNTIME
+    assert '"${EXPECTED_QA_PER_GROUP}" <<\'PY\'' in RUNTIME
     assert "generator_decode_mode = sys.argv[13]" in RUNTIME
     assert "generator_temperature = float(sys.argv[14])" in RUNTIME
     assert "generator_top_p = float(sys.argv[15])" in RUNTIME
@@ -70,25 +80,15 @@ def test_runtime_defaults_remain_thirty_seconds_and_accept_overrides() -> None:
     assert "--single-candidate-group" in RUNTIME
     assert '--target-generation-groups "${TARGET_GENERATION_GROUPS}"' in RUNTIME
     assert 'target_generation_groups = int(sys.argv[2])' in RUNTIME
-    assert 'generation_group_count < target_generation_groups' in RUNTIME
+    assert 'len(all_generation_group_ids) != target_generation_groups' in RUNTIME
     assert 'QWEN_MEMORY_SAFE_VIDEO_FPS="${QWEN_MEMORY_SAFE_VIDEO_FPS:-1.0}"' in RUNTIME
 
 
 def test_qwen_video_preflight_receives_configured_fps_in_its_own_heredoc() -> None:
-    blocks = re.findall(
-        r"python - ([^\n]+) <<'PY'\n(.*?)\nPY",
-        RUNTIME,
-        flags=re.DOTALL,
-    )
-    arguments, body = next(
-        (arguments, body)
-        for arguments, body in blocks
-        if "process_vision_info" in body
-    )
-
-    assert '"${QWEN_MEMORY_SAFE_VIDEO_FPS}"' in arguments
-    assert "video_fps = float(sys.argv[2])" in body
-    assert '"fps": video_fps' in body
+    assert '"${QWEN_MEMORY_SAFE_VIDEO_FPS}"' in RUNTIME
+    assert "video_fps = float(sys.argv[2])" in RUNTIME
+    assert '"fps": video_fps' in RUNTIME
+    assert 'python - "${OUTDIR}/six_user_candidates.jsonl" "${QWEN_MEMORY_SAFE_VIDEO_FPS}"' in RUNTIME
 
 
 def test_time_budget_summary_counts_all_completed_output_classes() -> None:
@@ -112,17 +112,16 @@ def test_runtime_finalizes_partial_results_after_external_sigterm() -> None:
 
 def test_runtime_finalizer_is_slot_aware_for_new_judge_contracts() -> None:
     assert 'by_answerability_identity = prompt_rows_by_generation_identity(' in RUNTIME
-    assert 'by_segment_identity = prompt_rows_by_generation_identity(' in RUNTIME
-    assert 'by_aggregation_identity = prompt_rows_by_generation_identity(' in RUNTIME
+    assert 'by_groundedness_identity = prompt_rows_by_generation_identity(' in RUNTIME
     assert 'identity = (str(row.get("generation_slot_id")), qa_id, attempt)' in RUNTIME
     assert 'accepted QA must have exactly 2 answerability calls' in RUNTIME
     assert 'set(answerability_rows) != {"speaker_only", "combined_all_six_users"}' in RUNTIME
     assert 'speaker_only_answerable' in RUNTIME
     assert 'all_six_answerable' in RUNTIME
-    assert 'evidence_segment_observation' in RUNTIME
-    assert 'evidence_groundedness_aggregation' in RUNTIME
-    assert 'accepted QA must have 6 evidence segment observations' in RUNTIME
-    assert 'accepted QA must have 1 evidence aggregation' in RUNTIME
+    assert 'accepted QA must have exactly 1 simple evidence groundedness call' in RUNTIME
+    assert 'groundedness_video_count": 6' in RUNTIME
+    assert 'evidence_segment_observation_count": 0' in RUNTIME
+    assert 'evidence_groundedness_aggregation_count": 0' in RUNTIME
     assert 'accepted QA must have exactly 1 answerability call' not in RUNTIME
 
 

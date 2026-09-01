@@ -64,7 +64,6 @@ REQUIRED_QA_FIELDS = {
 VIDEO_FIRST_REQUIRED_FIELDS = {
     "question_type",
     "generator_rationale",
-    "why_two_users_needed",
     "per_user_evidence_claims",
     "attempt_count",
     "video_evidence",
@@ -300,6 +299,25 @@ def validate_qa_item(
                 errors.append("review.answerability.gate.passed must be true in strict mode")
             if not isinstance(evaluations, list):
                 errors.append("review.answerability.evaluations must be a list in strict mode")
+            if isinstance(required_users, list) and len(required_users) == 6:
+                minimum_required_users = item.get("minimum_required_users")
+                if (
+                    not isinstance(minimum_required_users, list)
+                    or not minimum_required_users
+                    or len(set(minimum_required_users)) != len(minimum_required_users)
+                    or any(user not in required_users for user in minimum_required_users)
+                ):
+                    errors.append(
+                        "minimum_required_users must be a non-empty ordered subset of "
+                        "required_users in strict six-user mode"
+                    )
+                elif isinstance(gate, dict) and gate.get(
+                    "minimum_required_users"
+                ) != minimum_required_users:
+                    errors.append(
+                        "minimum_required_users must match "
+                        "review.answerability.gate.minimum_required_users"
+                    )
 
         schema_validation = review.get("schema_validation")
         if not isinstance(schema_validation, dict):
@@ -329,6 +347,7 @@ def write_qa_csv(jsonl_path: str | Path, csv_path: str | Path) -> int:
         "correct",
         "answer",
         "required_users",
+        "minimum_required_users",
         "combined_answerability",
         "review_passed",
         "question_type",
@@ -352,6 +371,9 @@ def write_qa_csv(jsonl_path: str | Path, csv_path: str | Path) -> int:
                     "correct": row.get("correct", ""),
                     "answer": row.get("answer", ""),
                     "required_users": ";".join(row.get("required_users", [])),
+                    "minimum_required_users": ";".join(
+                        row.get("minimum_required_users", [])
+                    ),
                     "combined_answerability": row.get("combined_answerability", ""),
                     "review_passed": review.get("review_passed", review.get("status", "")),
                     "question_type": row.get("question_type", ""),
@@ -402,6 +424,7 @@ def write_human_review_sheet(jsonl_path: str | Path, sheet_path: str | Path) -> 
                 f"- Evidence ID: `{row.get('evidence_id', '')}`",
                 f"- Question type: {_markdown_value(row.get('question_type'))}",
                 f"- Required users: {', '.join(row.get('required_users', []))}",
+                f"- Minimum required users: {', '.join(row.get('minimum_required_users', []))}",
                 f"- Review status: {_markdown_value(review.get('status'))}",
                 f"- Review passed: {_markdown_value(review.get('review_passed'))}",
                 f"- Judger gate passed: {_markdown_value((judger.get('gate') or {}).get('passed') if isinstance(judger.get('gate'), dict) else '')}",
@@ -427,10 +450,6 @@ def write_human_review_sheet(jsonl_path: str | Path, sheet_path: str | Path) -> 
                 "### Answer",
                 "",
                 _markdown_value(row.get("answer")),
-                "",
-                "### Why Two Users Are Needed",
-                "",
-                _markdown_value(row.get("why_two_users_needed")),
                 "",
                 "### Combined Answerability",
                 "",

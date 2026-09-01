@@ -129,6 +129,37 @@ def six_user_ten_minute_reasoning_profiles(
     }
 
 
+def six_user_ten_minute_fast_profiles() -> dict[str, GenerationCallProfile]:
+    """Return the approved stage-specific profile for fast 10-minute review."""
+
+    generator = GenerationCallProfile(max_new_tokens=8192, disable_thinking=False)
+    formality = GenerationCallProfile(max_new_tokens=1024, disable_thinking=True)
+    speaker_answerability = GenerationCallProfile(
+        max_new_tokens=2048,
+        disable_thinking=True,
+    )
+    all_six_answerability = GenerationCallProfile(
+        max_new_tokens=4096,
+        disable_thinking=False,
+    )
+    groundedness = GenerationCallProfile(
+        max_new_tokens=4096,
+        disable_thinking=False,
+    )
+    repair = GenerationCallProfile(max_new_tokens=1024, disable_thinking=True)
+    return {
+        "generator": generator,
+        "qa_formality": formality,
+        "speaker_only_answerability": speaker_answerability,
+        "all_six_answerability": all_six_answerability,
+        "answerability": all_six_answerability,
+        "evidence_groundedness": groundedness,
+        "evidence_segment_observation": groundedness,
+        "evidence_groundedness_aggregation": groundedness,
+        "json_repair": repair,
+    }
+
+
 def generate_with_call_profile(
     runner: Any,
     prompt: str,
@@ -684,6 +715,7 @@ def complete_generator_metadata(
     # hallucinated category keys so production artifacts remain category-free.
     qa.pop("category", None)
     qa.pop("category_rationale", None)
+    qa.pop("why_two_users_needed", None)
     required_users = list(packet.get("required_users") or qa.get("required_users") or [])
     role_metadata = six_user_role_metadata(packet, required_users)
     qa["question_type"] = question_type
@@ -749,18 +781,6 @@ def complete_generator_metadata(
             else "The question is framed as a natural first-person memory gap anchored "
             "in the asker's experience and answered with another user's visual evidence."
         )
-    if not qa.get("why_two_users_needed"):
-        if len(required_users) == 6:
-            qa["why_two_users_needed"] = (
-                "The speaker needs at least one external view because the speaker video alone "
-                "does not contain the answer-bearing evidence; the six-video input supplies it."
-            )
-        else:
-            qa["why_two_users_needed"] = (
-                "At least two required users are needed because the first required user supplies "
-                "the speaker-side anchor event while the second required user supplies the missing "
-                "visual detail."
-            )
     claims = qa.get("per_user_evidence_claims")
     if not isinstance(claims, list) or not claims:
         claims = []
@@ -858,7 +878,6 @@ def qa_for_judger_prompt(
         # "evidence",
         # "single_user_answerability",
         # "combined_answerability",
-        # "why_two_users_needed",
         # "per_user_evidence_claims",
         # "referred_timestamps",
         # "review",
@@ -1077,6 +1096,7 @@ def parsed_answerability_sufficiency(
         str(user) for user in (evaluation.get("users") or []) if str(user).strip()
     }
     required_fields = (
+        "fact_id",
         "fact",
         "why_needed",
         "visibility",
@@ -1086,12 +1106,19 @@ def parsed_answerability_sufficiency(
         "visual_description",
     )
     all_visible = True
+    seen_fact_ids: set[str] = set()
     for index, fact in enumerate(facts):
         if not isinstance(fact, dict):
             return None, f"needed_facts[{index}] must be an object"
         missing = [key for key in required_fields if key not in fact]
         if missing:
             return None, f"needed_facts[{index}] missing fields: {', '.join(missing)}"
+        fact_id = str(fact.get("fact_id") or "").strip()
+        if not fact_id:
+            return None, f"needed_facts[{index}].fact_id must be a non-empty string"
+        if fact_id in seen_fact_ids:
+            return None, f"needed_facts[{index}].fact_id is duplicated: {fact_id}"
+        seen_fact_ids.add(fact_id)
         for key in ("fact", "why_needed", "visual_description"):
             if not isinstance(fact.get(key), str) or not fact[key].strip():
                 return None, f"needed_facts[{index}].{key} must be a non-empty string"
@@ -1132,6 +1159,61 @@ def parsed_answerability_sufficiency(
                     f"visibility is {visibility}"
                 )
     return all_visible, None
+
+
+def canonical_fact_contract_errors(
+    speaker_evaluation: dict[str, Any],
+    all_six_evaluation: dict[str, Any],
+) -> list[str]:
+    """Return exact identity changes between speaker and all-six needed facts."""
+
+    speaker_facts = speaker_evaluation.get("needed_facts")
+    all_six_facts = all_six_evaluation.get("needed_facts")
+    if not isinstance(speaker_facts, list) or not isinstance(all_six_facts, list):
+        return ["both conditions must contain needed_facts arrays"]
+    if len(speaker_facts) != len(all_six_facts):
+        return [
+            "fact count changed: "
+            f"speaker={len(speaker_facts)} all_six={len(all_six_facts)}"
+        ]
+
+    errors: list[str] = []
+    seen_fact_ids: set[str] = set()
+    for index, (speaker_fact, all_six_fact) in enumerate(
+        zip(speaker_facts, all_six_facts)
+    ):
+        if not isinstance(speaker_fact, dict) or not isinstance(all_six_fact, dict):
+            errors.append(f"needed_facts[{index}] must be objects")
+            continue
+        fact_id = str(speaker_fact.get("fact_id") or "").strip()
+        if not fact_id:
+            errors.append(
+                f"speaker needed_facts[{index}].fact_id must be non-empty"
+            )
+        elif fact_id in seen_fact_ids:
+            errors.append(f"speaker fact_id is duplicated: {fact_id}")
+        seen_fact_ids.add(fact_id)
+        for key in ("fact_id", "fact", "why_needed"):
+            if all_six_fact.get(key) != speaker_fact.get(key):
+                errors.append(f"needed_facts[{index}].{key} changed")
+    return errors
+
+
+def minimum_required_users_from_fact_sources(
+    evaluation: dict[str, Any],
+    required_users: list[str],
+) -> list[str]:
+    """Return the ordered union of users supplying every visible, high-confidence fact."""
+
+    source_users = {
+        str(fact.get("source_user"))
+        for fact in evaluation.get("needed_facts") or []
+        if isinstance(fact, dict)
+        and fact.get("visibility") == "VISIBLE"
+        and fact.get("confidence") == "HIGH"
+        and str(fact.get("source_user") or "").strip()
+    }
+    return [str(user) for user in required_users if str(user) in source_users]
 
 
 def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1187,6 +1269,20 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "failure_label": "all_six_missing",
                 **metrics,
             }
+        fact_contract_errors = canonical_fact_contract_errors(
+            speaker_rows[-1],
+            all_six_rows[-1],
+        )
+        if fact_contract_errors:
+            return {
+                "passed": False,
+                "reason": (
+                    "all-six answerability changed canonical facts: "
+                    + "; ".join(fact_contract_errors)
+                ),
+                "failure_label": "answerability_fact_contract_mismatch",
+                **metrics,
+            }
         all_six_answerable, all_six_error = parsed_answerability_sufficiency(
             all_six_rows[-1]
         )
@@ -1209,6 +1305,17 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "failure_label": "all_six_not_answerable",
                 **combined_metrics,
             }
+        minimum_required_users = minimum_required_users_from_fact_sources(
+            all_six_rows[-1],
+            required_users,
+        )
+        if not minimum_required_users:
+            return {
+                "passed": False,
+                "reason": "all-six answerability did not identify any fact-source user",
+                "failure_label": "minimum_required_users_missing",
+                **combined_metrics,
+            }
         return {
             "passed": True,
             "reason": (
@@ -1216,6 +1323,11 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "judged sufficient"
             ),
             "failure_label": None,
+            "minimum_required_users": minimum_required_users,
+            "minimum_required_user_count": len(minimum_required_users),
+            "minimum_required_users_basis": (
+                "visible_high_needed_fact_source_union"
+            ),
             **combined_metrics,
         }
 
@@ -2922,7 +3034,6 @@ def dry_run_qa(packet: dict[str, Any], question_type: str, generation_mode: str 
         "single_user_answerability": {user: "insufficient in dry-run mode" for user in users},
         "combined_answerability": "sufficient in dry-run prompt construction only",
         "generator_rationale": "dry-run placeholder",
-        "why_two_users_needed": "dry-run placeholder",
         "per_user_evidence_claims": [{"user": user, "claim": "dry-run placeholder"} for user in users],
         "attempt_count": 0,
         "review": {
@@ -2954,6 +3065,109 @@ def dry_run_qa(packet: dict[str, Any], question_type: str, generation_mode: str 
     }
 
 
+def run_answerability_condition_eval(
+    *,
+    qa_item: dict[str, Any],
+    packet: dict[str, Any],
+    condition: dict[str, Any],
+    runner: Any,
+    media_backend: str,
+    allow_openai_video_input: bool,
+    prompt_rows: list[dict[str, Any]],
+    judge_media_role: str = "full",
+    attempt: int | None = None,
+    call_profile: GenerationCallProfile | None = None,
+    canonical_facts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    reasoning_sufficiency_mode = len(qa_item.get("required_users") or []) == 6
+    clips = clips_for_users(packet, condition["users"])
+    image_paths, video_paths = media_for_clips(
+        clips,
+        backend=media_backend,
+        allow_openai_video_input=allow_openai_video_input,
+        media_role=judge_media_role,
+    )
+    prompt = build_answerability_prompt(
+        qa_item,
+        condition,
+        canonical_facts=canonical_facts,
+    )
+    condition_media = condition_media_for_clips(
+        condition=condition,
+        clips=clips,
+        image_paths=image_paths,
+        video_paths=video_paths,
+        media_role=judge_media_role,
+    )
+    prompt_row = {
+        "stage": "answerability",
+        "generation_slot_id": qa_item.get("generation_slot_id"),
+        "generation_group_id": qa_item.get("generation_group_id"),
+        "qa_id": qa_item.get("qa_id"),
+        "attempt": attempt,
+        "generation_mode": qa_item.get("generation_mode"),
+        "condition_id": condition["condition_id"],
+        "condition_type": condition["condition_type"],
+        "prompt": prompt,
+        "image_paths": image_paths,
+        "video_paths": video_paths,
+        "media_role": judge_media_role,
+        "condition_media": condition_media,
+    }
+    if canonical_facts is not None:
+        prompt_row["canonical_facts"] = canonical_facts
+    if call_profile is not None:
+        prompt_row["reasoning_enabled"] = not call_profile.disable_thinking
+        prompt_row["max_new_tokens"] = call_profile.max_new_tokens
+    prompt_rows.append(prompt_row)
+    stage_start = time.time()
+    print(
+        "qa_stage_start "
+        f"stage=answerability qa_id={qa_item.get('qa_id')} "
+        f"condition_id={condition['condition_id']} "
+        f"images={len(image_paths)} videos={len(video_paths)}",
+        flush=True,
+    )
+    raw = generate_with_call_profile(
+        runner,
+        prompt,
+        image_paths=image_paths,
+        video_paths=video_paths,
+        call_profile=call_profile,
+    )
+    elapsed_seconds = round(time.time() - stage_start, 3)
+    prompt_row["elapsed_seconds"] = elapsed_seconds
+    print(
+        "qa_stage_done "
+        f"stage=answerability qa_id={qa_item.get('qa_id')} "
+        f"condition_id={condition['condition_id']} seconds={elapsed_seconds:.1f}",
+        flush=True,
+    )
+    try:
+        answer = extract_json_object(raw)
+    except Exception as exc:
+        if reasoning_sufficiency_mode:
+            answer = {
+                "reason": f"parse_failed: {exc}",
+                "needed_facts": [],
+            }
+        else:
+            answer = {
+                "choice": None,
+                "answer_text": "",
+                "evidence_used": f"parse_failed: {exc}",
+            }
+    return {
+        **condition,
+        "generation_slot_id": qa_item.get("generation_slot_id"),
+        "generation_group_id": qa_item.get("generation_group_id"),
+        **answer,
+        "raw_output": raw,
+        "elapsed_seconds": elapsed_seconds,
+        "condition_media": condition_media,
+    }
+
+
 def run_answerability_eval(
     *,
     qa_item: dict[str, Any],
@@ -2965,102 +3179,57 @@ def run_answerability_eval(
     judge_media_role: str = "full",
     attempt: int | None = None,
     call_profile: GenerationCallProfile | None = None,
+    condition_call_profiles: dict[str, GenerationCallProfile] | None = None,
 ) -> dict[str, Any]:
-    evaluations = []
-    reasoning_sufficiency_mode = len(qa_item.get("required_users") or []) == 6
-    for condition in build_answerability_conditions(qa_item.get("required_users", [])):
-        clips = clips_for_users(packet, condition["users"])
-        image_paths, video_paths = media_for_clips(
-            clips,
-            backend=media_backend,
+    active_condition_profiles = condition_call_profiles or {}
+    conditions = build_answerability_conditions(qa_item.get("required_users", []))
+
+    def evaluate(
+        condition: dict[str, Any],
+        *,
+        canonical_facts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        condition_profile = active_condition_profiles.get(
+            str(condition.get("condition_type")),
+            call_profile,
+        )
+        return run_answerability_condition_eval(
+            qa_item=qa_item,
+            packet=packet,
+            condition=condition,
+            runner=runner,
+            media_backend=media_backend,
             allow_openai_video_input=allow_openai_video_input,
-            media_role=judge_media_role,
+            prompt_rows=prompt_rows,
+            judge_media_role=judge_media_role,
+            attempt=attempt,
+            call_profile=condition_profile,
+            canonical_facts=canonical_facts,
         )
-        prompt = build_answerability_prompt(qa_item, condition)
-        prompt_row = {
-            "stage": "answerability",
-            "generation_slot_id": qa_item.get("generation_slot_id"),
-            "generation_group_id": qa_item.get("generation_group_id"),
-            "qa_id": qa_item.get("qa_id"),
-            "attempt": attempt,
-            "generation_mode": qa_item.get("generation_mode"),
-            "condition_id": condition["condition_id"],
-            "condition_type": condition["condition_type"],
-            "prompt": prompt,
-            "image_paths": image_paths,
-            "video_paths": video_paths,
-            "media_role": judge_media_role,
-            "condition_media": condition_media_for_clips(
-                condition=condition,
-                clips=clips,
-                image_paths=image_paths,
-                video_paths=video_paths,
-                media_role=judge_media_role,
-            ),
+
+    if len(qa_item.get("required_users") or []) == 6:
+        conditions_by_type = {
+            str(condition.get("condition_type")): condition
+            for condition in conditions
         }
-        if call_profile is not None:
-            prompt_row["reasoning_enabled"] = not call_profile.disable_thinking
-            prompt_row["max_new_tokens"] = call_profile.max_new_tokens
-        prompt_rows.append(prompt_row)
-        stage_start = time.time()
-        print(
-            "qa_stage_start "
-            f"stage=answerability qa_id={qa_item.get('qa_id')} "
-            f"condition_id={condition['condition_id']} "
-            f"images={len(image_paths)} videos={len(video_paths)}",
-            flush=True,
-        )
-        # Archived inactive answerability-logit experiment:
-        # generation = runner.generate_with_choice_logits(..., choices=tuple(OPTION_LETTERS))
-        # choice_signal = generation.get("choice_logits")
-        # choice_uncertainty = answerability_uncertainty_from_choice_logits(choice_signal)
-        # Production answerability now uses ordinary JSON generation only.
-        raw = generate_with_call_profile(
-            runner,
-            prompt,
-            image_paths=image_paths,
-            video_paths=video_paths,
-            call_profile=call_profile,
-        )
-        elapsed_seconds = round(time.time() - stage_start, 3)
-        prompt_row["elapsed_seconds"] = elapsed_seconds
-        print(
-            "qa_stage_done "
-            f"stage=answerability qa_id={qa_item.get('qa_id')} "
-            f"condition_id={condition['condition_id']} seconds={elapsed_seconds:.1f}",
-            flush=True,
-        )
-        try:
-            answer = extract_json_object(raw)
-        except Exception as exc:
-            if reasoning_sufficiency_mode:
-                answer = {
-                    "reason": f"parse_failed: {exc}",
-                    "needed_facts": [],
-                }
-            else:
-                answer = {
-                    "choice": None,
-                    "answer_text": "",
-                    "evidence_used": f"parse_failed: {exc}",
-                }
-        evaluations.append(
+        speaker_evaluation = evaluate(conditions_by_type["speaker_only"])
+        canonical_facts = [
             {
-                **condition,
-                "generation_slot_id": qa_item.get("generation_slot_id"),
-                "generation_group_id": qa_item.get("generation_group_id"),
-                **answer,
-                "raw_output": raw,
-                "elapsed_seconds": elapsed_seconds,
-                "condition_media": condition_media_for_clips(
-                    condition=condition,
-                    clips=clips,
-                    image_paths=image_paths,
-                    video_paths=video_paths,
-                    media_role=judge_media_role,
-                ),
+                key: fact.get(key)
+                for key in ("fact_id", "fact", "why_needed")
             }
-        )
+            for fact in speaker_evaluation.get("needed_facts") or []
+            if isinstance(fact, dict)
+        ]
+        evaluations = [
+            speaker_evaluation,
+            evaluate(
+                conditions_by_type["combined_all_six_users"],
+                canonical_facts=canonical_facts,
+            ),
+        ]
+    else:
+        evaluations = [evaluate(condition) for condition in conditions]
     gate = answerability_gate(qa_item, evaluations)
     return {"evaluations": evaluations, "gate": gate}
 
@@ -3268,6 +3437,326 @@ def run_chunked_evidence_groundedness_eval(
     return result
 
 
+def run_evidence_groundedness_review(
+    *,
+    qa_item: dict[str, Any],
+    packet: dict[str, Any],
+    runner: Any,
+    prompt_rows: list[dict[str, Any]],
+    full_image_paths: list[str],
+    full_video_paths: list[str],
+    attempt: int,
+    judge_media_role: str,
+    stage_profiles: dict[str, GenerationCallProfile] | None = None,
+) -> dict[str, Any]:
+    """Run the existing groundedness contract with one explicit stage profile."""
+
+    active_profiles = stage_profiles or {}
+    qa_for_prompt = qa_for_judger_prompt(qa_item, include_generator_rationale=False)
+    prompt = build_evidence_groundedness_judge_prompt(
+        qa_for_prompt,
+        packet,
+        pass_fail_only=True,
+    )
+    call_profile = active_profiles.get("evidence_groundedness") or active_profiles.get(
+        "evidence_groundedness_aggregation"
+    )
+    prompt_row = {
+        "stage": "evidence_groundedness_judge",
+        "generation_slot_id": qa_item.get("generation_slot_id"),
+        "generation_group_id": qa_item.get("generation_group_id"),
+        "evidence_id": packet.get("evidence_id"),
+        "qa_id": qa_item.get("qa_id"),
+        "question_type": qa_item.get("question_type"),
+        "generation_mode": qa_item.get("generation_mode"),
+        "attempt": attempt,
+        "prompt": prompt,
+        "image_paths": full_image_paths,
+        "video_paths": full_video_paths,
+        "media_role": judge_media_role,
+        "model_id": getattr(runner, "model_id", None),
+        "generator_rationale_included": False,
+        "pass_fail_only": True,
+        "judge_contract": "legacy_review_passed",
+        "decision_entropy_requested": False,
+        "authoritative_for_acceptance": True,
+        "entropy_probe_affects_acceptance": False,
+        "point_scoring": "legacy_archived_not_active",
+    }
+    if call_profile is not None:
+        prompt_row["reasoning_enabled"] = not call_profile.disable_thinking
+        prompt_row["max_new_tokens"] = call_profile.max_new_tokens
+    prompt_rows.append(prompt_row)
+    result = run_model_judge_branch(
+        check_name="evidence_groundedness",
+        prompt=prompt,
+        runner=runner,
+        image_paths=full_image_paths,
+        video_paths=full_video_paths,
+        evidence_id=packet.get("evidence_id"),
+        qa_id=qa_item.get("qa_id"),
+        attempt=attempt,
+        collect_choice_logits=False,
+        minimal_verdict_probe_prompt=None,
+        call_profile=call_profile,
+        repair_call_profile=active_profiles.get("json_repair"),
+    )
+    prompt_row["elapsed_seconds"] = result.get("elapsed_seconds")
+    return result
+
+
+def run_fail_fast_review_judges(
+    *,
+    qa_item: dict[str, Any],
+    packet: dict[str, Any],
+    schema_errors: list[str],
+    runner: Any,
+    media_backend: str,
+    allow_openai_video_input: bool,
+    prompt_rows: list[dict[str, Any]],
+    full_image_paths: list[str],
+    full_video_paths: list[str],
+    attempt: int,
+    max_attempts: int,
+    judge_media_role: str = "full",
+    qa_formality_runner: Any | None = None,
+    stage_profiles: dict[str, GenerationCallProfile] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Run cheap rejecting checks first; force all metrics on the final attempt."""
+
+    active_profiles = stage_profiles or {}
+    active_formality_runner = qa_formality_runner or runner
+    force_complete_review = attempt >= max_attempts
+    participant_names = formality_participant_names(packet, qa_item)
+    schema_errors = qa_formality_errors(
+        qa_item,
+        schema_errors,
+        participant_names=participant_names,
+    )
+    qa_for_prompt = qa_for_judger_prompt(qa_item, include_generator_rationale=False)
+    formality_prompt = build_qa_formality_judge_prompt(
+        qa_for_prompt,
+        packet,
+        schema_errors=schema_errors,
+        pass_fail_only=True,
+    )
+    formality_profile = active_profiles.get("qa_formality")
+    formality_row = {
+        "stage": "qa_formality_judge",
+        "generation_slot_id": qa_item.get("generation_slot_id"),
+        "generation_group_id": qa_item.get("generation_group_id"),
+        "evidence_id": packet.get("evidence_id"),
+        "qa_id": qa_item.get("qa_id"),
+        "question_type": qa_item.get("question_type"),
+        "generation_mode": qa_item.get("generation_mode"),
+        "attempt": attempt,
+        "prompt": formality_prompt,
+        "image_paths": [],
+        "video_paths": [],
+        "media_role": "text_only",
+        "model_id": getattr(active_formality_runner, "model_id", None),
+        "generator_rationale_included": False,
+        "pass_fail_only": True,
+        "judge_contract": "legacy_review_passed",
+        "decision_entropy_requested": False,
+        "authoritative_for_acceptance": True,
+        "entropy_probe_affects_acceptance": False,
+        "point_scoring": "legacy_archived_not_active",
+    }
+    if formality_profile is not None:
+        formality_row["reasoning_enabled"] = not formality_profile.disable_thinking
+        formality_row["max_new_tokens"] = formality_profile.max_new_tokens
+    prompt_rows.append(formality_row)
+    formality_judge = run_model_judge_branch(
+        check_name="qa_formality",
+        prompt=formality_prompt,
+        runner=active_formality_runner,
+        image_paths=[],
+        video_paths=[],
+        evidence_id=packet.get("evidence_id"),
+        qa_id=qa_item.get("qa_id"),
+        attempt=attempt,
+        collect_choice_logits=False,
+        minimal_verdict_probe_prompt=None,
+        call_profile=formality_profile,
+        repair_call_profile=active_profiles.get("json_repair"),
+    )
+    formality_row["elapsed_seconds"] = formality_judge.get("elapsed_seconds")
+
+    passing_evidence = {
+        "checks": {
+            "evidence_groundedness": {
+                "status": "PASS",
+                "reason": "not required before the fail-fast decision",
+                "fix": "",
+            }
+        }
+    }
+    passing_answerability = {
+        "evaluations": [],
+        "gate": {"passed": True, "reason": "not required before the fail-fast decision"},
+    }
+
+    def merge_result(
+        *,
+        evidence: dict[str, Any],
+        answerability: dict[str, Any],
+        skipped_checks: list[str],
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        judge = merge_parallel_judges(
+            qa_formality_judge=formality_judge,
+            evidence_groundedness_judge=evidence,
+            answerability=answerability,
+            schema_errors=schema_errors,
+            qa_item=qa_item,
+            participant_names=participant_names,
+            include_decision_uncertainty=False,
+            quality_quota_by_check=None,
+        )
+        judge["skipped_checks"] = list(skipped_checks)
+        gate = answerability.get("gate")
+        if isinstance(gate, dict):
+            minimum_users = gate.get("minimum_required_users")
+            if isinstance(minimum_users, list) and minimum_users:
+                qa_item["minimum_required_users"] = list(minimum_users)
+                qa_item["minimum_required_user_count"] = len(minimum_users)
+        trace = {
+            "parallel": False,
+            "execution_mode": "fail_fast",
+            "force_complete_review": force_complete_review,
+            "skipped_checks": list(skipped_checks),
+            "qa_formality": {
+                "model_id": getattr(active_formality_runner, "model_id", None),
+                "elapsed_seconds": formality_judge.get("elapsed_seconds"),
+                "prompt": formality_prompt,
+                "raw_output": formality_judge.get("raw_output"),
+                "parsed": formality_judge,
+            },
+            "evidence_groundedness": evidence,
+            "answerability": answerability,
+            "answerability_model_id": getattr(runner, "model_id", None),
+            "merged": judge,
+        }
+        return judge, answerability, trace
+
+    formality_probe = merge_parallel_judges(
+        qa_formality_judge=formality_judge,
+        evidence_groundedness_judge=passing_evidence,
+        answerability=passing_answerability,
+        schema_errors=schema_errors,
+        qa_item=qa_item,
+        participant_names=participant_names,
+        include_decision_uncertainty=False,
+        quality_quota_by_check=None,
+    )
+    formality_failed = (
+        str((formality_probe.get("checks") or {}).get("qa_formality", {}).get("status"))
+        != "PASS"
+    )
+    if formality_failed and not force_complete_review:
+        skipped_answerability = {
+            "evaluations": [],
+            "gate": {
+                "passed": False,
+                "skipped": True,
+                "reason": "answerability skipped after qa_formality failure",
+            },
+        }
+        return merge_result(
+            evidence=passing_evidence,
+            answerability=skipped_answerability,
+            skipped_checks=[
+                "speaker_only_answerability",
+                "all_six_answerability",
+                "evidence_groundedness",
+            ],
+        )
+
+    conditions = build_answerability_conditions(qa_item.get("required_users", []))
+    conditions_by_type = {
+        str(condition.get("condition_type")): condition for condition in conditions
+    }
+    speaker_condition = conditions_by_type["speaker_only"]
+    all_six_condition = conditions_by_type["combined_all_six_users"]
+    evaluations = [
+        run_answerability_condition_eval(
+            qa_item=qa_item,
+            packet=packet,
+            condition=speaker_condition,
+            runner=runner,
+            media_backend=media_backend,
+            allow_openai_video_input=allow_openai_video_input,
+            prompt_rows=prompt_rows,
+            judge_media_role=judge_media_role,
+            attempt=attempt,
+            call_profile=active_profiles.get("speaker_only_answerability"),
+        )
+    ]
+    speaker_gate = answerability_gate(qa_item, evaluations)
+    speaker_failure = speaker_gate.get("failure_label") in {
+        "speaker_only_answerable",
+        "speaker_only_unparsed",
+    }
+    if speaker_failure and not force_complete_review:
+        return merge_result(
+            evidence=passing_evidence,
+            answerability={"evaluations": evaluations, "gate": speaker_gate},
+            skipped_checks=["all_six_answerability", "evidence_groundedness"],
+        )
+
+    canonical_facts = [
+        {
+            key: fact.get(key)
+            for key in ("fact_id", "fact", "why_needed")
+        }
+        for fact in evaluations[0].get("needed_facts") or []
+        if isinstance(fact, dict)
+    ]
+
+    evaluations.append(
+        run_answerability_condition_eval(
+            qa_item=qa_item,
+            packet=packet,
+            condition=all_six_condition,
+            runner=runner,
+            media_backend=media_backend,
+            allow_openai_video_input=allow_openai_video_input,
+            prompt_rows=prompt_rows,
+            judge_media_role=judge_media_role,
+            attempt=attempt,
+            call_profile=active_profiles.get("all_six_answerability"),
+            canonical_facts=canonical_facts,
+        )
+    )
+    answerability = {
+        "evaluations": evaluations,
+        "gate": answerability_gate(qa_item, evaluations),
+    }
+    if answerability["gate"].get("passed") is not True and not force_complete_review:
+        return merge_result(
+            evidence=passing_evidence,
+            answerability=answerability,
+            skipped_checks=["evidence_groundedness"],
+        )
+
+    evidence = run_evidence_groundedness_review(
+        qa_item=qa_item,
+        packet=packet,
+        runner=runner,
+        prompt_rows=prompt_rows,
+        full_image_paths=full_image_paths,
+        full_video_paths=full_video_paths,
+        attempt=attempt,
+        judge_media_role=judge_media_role,
+        stage_profiles=active_profiles,
+    )
+    return merge_result(
+        evidence=evidence,
+        answerability=answerability,
+        skipped_checks=[],
+    )
+
+
 def run_parallel_review_judges(
     *,
     qa_item: dict[str, Any],
@@ -3329,11 +3818,6 @@ def run_parallel_review_judges(
         packet,
         pass_fail_only=True,
     )
-    chunked_evidence_review = (
-        len(packet.get("required_users") or []) == 6
-        and len(packet.get("clips") or []) == 6
-        and all(len(clip.get("segments") or []) == 6 for clip in packet.get("clips") or [])
-    )
     qa_formality_entropy_probe_prompt = None
     evidence_groundedness_entropy_probe_prompt = None
     if record_decision_entropy:
@@ -3372,31 +3856,30 @@ def run_parallel_review_judges(
             "point_scoring": point_scoring_mode,
         }
     )
-    if not chunked_evidence_review:
-        prompt_rows.append(
-            {
-                "stage": "evidence_groundedness_judge",
-                "generation_slot_id": qa_item.get("generation_slot_id"),
-                "generation_group_id": qa_item.get("generation_group_id"),
-                "evidence_id": packet.get("evidence_id"),
-                "qa_id": qa_item.get("qa_id"),
-                "question_type": qa_item.get("question_type"),
-                "generation_mode": qa_item.get("generation_mode"),
-                "attempt": attempt,
-                "prompt": evidence_groundedness_prompt,
-                "image_paths": full_image_paths,
-                "video_paths": full_video_paths,
-                "media_role": judge_media_role,
-                "model_id": getattr(runner, "model_id", None),
-                "generator_rationale_included": include_generator_rationale,
-                "pass_fail_only": True,
-                "judge_contract": "legacy_review_passed",
-                "decision_entropy_requested": False,
-                "authoritative_for_acceptance": True,
-                "entropy_probe_affects_acceptance": False,
-                "point_scoring": point_scoring_mode,
-            }
-        )
+    prompt_rows.append(
+        {
+            "stage": "evidence_groundedness_judge",
+            "generation_slot_id": qa_item.get("generation_slot_id"),
+            "generation_group_id": qa_item.get("generation_group_id"),
+            "evidence_id": packet.get("evidence_id"),
+            "qa_id": qa_item.get("qa_id"),
+            "question_type": qa_item.get("question_type"),
+            "generation_mode": qa_item.get("generation_mode"),
+            "attempt": attempt,
+            "prompt": evidence_groundedness_prompt,
+            "image_paths": full_image_paths,
+            "video_paths": full_video_paths,
+            "media_role": judge_media_role,
+            "model_id": getattr(runner, "model_id", None),
+            "generator_rationale_included": include_generator_rationale,
+            "pass_fail_only": True,
+            "judge_contract": "legacy_review_passed",
+            "decision_entropy_requested": False,
+            "authoritative_for_acceptance": True,
+            "entropy_probe_affects_acceptance": False,
+            "point_scoring": point_scoring_mode,
+        }
+    )
     if record_decision_entropy:
         prompt_rows.extend(
             [
@@ -3442,7 +3925,6 @@ def run_parallel_review_judges(
         )
 
     answerability_prompt_rows: list[dict[str, Any]] = []
-    evidence_chunk_prompt_rows: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=3) as executor:
         qa_formality_future = executor.submit(
             run_model_judge_branch,
@@ -3459,41 +3941,24 @@ def run_parallel_review_judges(
             call_profile=active_stage_profiles.get("qa_formality"),
             repair_call_profile=active_stage_profiles.get("json_repair"),
         )
-        if chunked_evidence_review:
-            evidence_groundedness_future = executor.submit(
-                run_chunked_evidence_groundedness_eval,
-                qa_item=qa_for_prompt,
-                packet=packet,
-                runner=runner,
-                full_video_paths=full_video_paths,
-                prompt_rows=evidence_chunk_prompt_rows,
-                attempt=attempt,
-                segment_call_profile=active_stage_profiles.get(
-                    "evidence_segment_observation"
-                ),
-                aggregation_call_profile=active_stage_profiles.get(
-                    "evidence_groundedness_aggregation"
-                ),
-                repair_call_profile=active_stage_profiles.get("json_repair"),
-            )
-        else:
-            evidence_groundedness_future = executor.submit(
-                run_model_judge_branch,
-                check_name="evidence_groundedness",
-                prompt=evidence_groundedness_prompt,
-                runner=runner,
-                image_paths=full_image_paths,
-                video_paths=full_video_paths,
-                evidence_id=packet.get("evidence_id"),
-                qa_id=qa_item.get("qa_id"),
-                attempt=attempt,
-                collect_choice_logits=record_decision_entropy,
-                minimal_verdict_probe_prompt=evidence_groundedness_entropy_probe_prompt,
-                call_profile=active_stage_profiles.get(
-                    "evidence_groundedness_aggregation"
-                ),
-                repair_call_profile=active_stage_profiles.get("json_repair"),
-            )
+        evidence_groundedness_future = executor.submit(
+            run_model_judge_branch,
+            check_name="evidence_groundedness",
+            prompt=evidence_groundedness_prompt,
+            runner=runner,
+            image_paths=full_image_paths,
+            video_paths=full_video_paths,
+            evidence_id=packet.get("evidence_id"),
+            qa_id=qa_item.get("qa_id"),
+            attempt=attempt,
+            collect_choice_logits=record_decision_entropy,
+            minimal_verdict_probe_prompt=evidence_groundedness_entropy_probe_prompt,
+            call_profile=(
+                active_stage_profiles.get("evidence_groundedness")
+                or active_stage_profiles.get("evidence_groundedness_aggregation")
+            ),
+            repair_call_profile=active_stage_profiles.get("json_repair"),
+        )
         answerability_future = executor.submit(
             run_answerability_eval,
             qa_item=qa_item,
@@ -3535,11 +4000,17 @@ def run_parallel_review_judges(
                 },
             }
 
+    answerability_gate_result = answerability.get("gate")
+    if isinstance(answerability_gate_result, dict):
+        minimum_required_users = answerability_gate_result.get(
+            "minimum_required_users"
+        )
+        if isinstance(minimum_required_users, list) and minimum_required_users:
+            qa_item["minimum_required_users"] = list(minimum_required_users)
+            qa_item["minimum_required_user_count"] = len(minimum_required_users)
+
     for row in answerability_prompt_rows:
         prompt_rows.append(row)
-    for row in evidence_chunk_prompt_rows:
-        prompt_rows.append(row)
-
     judge = merge_parallel_judges(
         qa_formality_judge=qa_formality_judge,
         evidence_groundedness_judge=evidence_groundedness_judge,
@@ -3665,6 +4136,8 @@ def generate_video_qa_loop(
     judge_max_new_tokens: int | None = None,
     judge_reasoning_effort: str | None = None,
     six_user_ten_minute_reasoning_profile: bool = False,
+    six_user_ten_minute_fast_profile: bool = False,
+    fail_fast_review: bool = False,
     formality_max_new_tokens: int = 2048,
     qa_formality_use_generator: bool = False,
     judge_video_source: str = "full",
@@ -3687,13 +4160,14 @@ def generate_video_qa_loop(
     attempts_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     judge_include_generator_rationale = False
-    stage_profiles = (
-        six_user_ten_minute_reasoning_profiles(
+    if six_user_ten_minute_fast_profile:
+        stage_profiles = six_user_ten_minute_fast_profiles()
+    elif six_user_ten_minute_reasoning_profile:
+        stage_profiles = six_user_ten_minute_reasoning_profiles(
             formality_max_new_tokens=formality_max_new_tokens,
         )
-        if six_user_ten_minute_reasoning_profile
-        else {}
-    )
+    else:
+        stage_profiles = {}
     # Archived scored/quota production switch:
     # judge_pass_fail_only = caller-provided value
     # judge_quality_quota = caller-provided value
@@ -4275,7 +4749,6 @@ def generate_video_qa_loop(
                 "required_users": qa.get("required_users"),
                 "question_type": qa.get("question_type"),
                 "generator_rationale": qa.get("generator_rationale"),
-                "why_two_users_needed": qa.get("why_two_users_needed"),
                 "per_user_evidence_claims": qa.get("per_user_evidence_claims"),
                 "referred_timestamps": qa.get("referred_timestamps"),
             }
@@ -4339,7 +4812,6 @@ def generate_video_qa_loop(
                 "single_user_answerability": qa.get("single_user_answerability"),
                 "combined_answerability": qa.get("combined_answerability"),
                 "generator_rationale": qa.get("generator_rationale"),
-                "why_two_users_needed": qa.get("why_two_users_needed"),
                 "per_user_evidence_claims": qa.get("per_user_evidence_claims"),
                 "review": qa.get("review"),
             }
@@ -4353,7 +4825,12 @@ def generate_video_qa_loop(
                 attempt_trace["schema_errors"] = schema_errors
 
             try:
-                judge, answerability, judge_trace = run_parallel_review_judges(
+                review_function = (
+                    run_fail_fast_review_judges
+                    if fail_fast_review
+                    else run_parallel_review_judges
+                )
+                review_kwargs = dict(
                     qa_item=qa,
                     packet=packet,
                     schema_errors=schema_errors,
@@ -4372,6 +4849,13 @@ def generate_video_qa_loop(
                     record_decision_entropy=record_judge_decision_entropy,
                     stage_profiles=stage_profiles,
                 )
+                if fail_fast_review:
+                    review_kwargs["max_attempts"] = max_attempts
+                    review_kwargs.pop("include_generator_rationale", None)
+                    review_kwargs.pop("pass_fail_only", None)
+                    review_kwargs.pop("quality_quota_counts", None)
+                    review_kwargs.pop("record_decision_entropy", None)
+                judge, answerability, judge_trace = review_function(**review_kwargs)
             except OpenRouterRequestError as exc:
                 # This is an infrastructure failure, not a negative judgment. Preserve the
                 # generated candidate for recovery and stop instead of spending a new Qwen
@@ -4585,6 +5069,21 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--six-user-ten-minute-fast-profile",
+        action="store_true",
+        help=(
+            "Use the approved stage-specific fast profile for six-user 10-minute QA."
+        ),
+    )
+    parser.add_argument(
+        "--fail-fast-review",
+        action="store_true",
+        help=(
+            "Short-circuit failed review stages on early attempts and force every metric "
+            "on the final attempt."
+        ),
+    )
+    parser.add_argument(
         "--formality-max-new-tokens",
         type=int,
         default=2048,
@@ -4701,6 +5200,8 @@ def main(argv: list[str] | None = None) -> int:
         six_user_ten_minute_reasoning_profile=(
             args.six_user_ten_minute_reasoning_profile
         ),
+        six_user_ten_minute_fast_profile=args.six_user_ten_minute_fast_profile,
+        fail_fast_review=args.fail_fast_review,
         formality_max_new_tokens=args.formality_max_new_tokens,
         qa_formality_use_generator=args.qa_formality_use_generator,
         judge_video_source=args.judge_video_source,

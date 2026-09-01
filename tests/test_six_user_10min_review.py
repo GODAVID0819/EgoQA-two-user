@@ -19,7 +19,9 @@ def qa_row(slot: str, group: str, *, accepted: bool) -> dict[str, object]:
         "options": ["A object", "B object", "C object", "D object", "E object"],
         "correct": "A",
         "answer": "A object",
-        "generator_rationale": "The provider view supplies the missing detail.",
+        "generator_rationale": "",
+        "why_two_users_needed": "legacy field should not be rendered",
+        "minimum_required_users": ["Katrina", "Ron"],
         "review": {
             "final_decision": {"accepted": accepted, "reason": status},
             "judger": {
@@ -42,6 +44,8 @@ def qa_row(slot: str, group: str, *, accepted: bool) -> dict[str, object]:
                     "speaker_only_answerable": False,
                     "all_six_answerable": True,
                     "answerability_evaluated_condition_count": 2,
+                    "minimum_required_users": ["Katrina", "Ron"],
+                    "minimum_required_user_count": 2,
                 }
             },
         },
@@ -128,6 +132,9 @@ def test_build_report_contains_all_slot_cards_and_statistics(tmp_path: Path) -> 
     assert "QA 001" in text and "QA 002" in text
     assert "Evidence 可见用户数" in text
     assert "speaker-only" in text
+    assert "最小回答视角集" in text
+    assert "Katrina" in text and "Ron" in text
     assert "large model output should not be rendered" not in text
+    assert "legacy field should not be rendered" not in text
     assert "```json" not in text
     assert "<details>" not in text
