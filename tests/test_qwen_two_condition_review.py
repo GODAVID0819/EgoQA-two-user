@@ -361,3 +361,165 @@ def test_runner_error_is_saved_and_stops_following_calls(tmp_path: Path) -> None
     assert row["run_status"] == "error"
     assert row["parse_status"] == "not_parsed"
     assert row["attempt"] == 1
+
+
+def test_prepare_review_writes_selection_dedup_and_media_reports(
+    tmp_path: Path,
+) -> None:
+    from egolife_two_user_qa.qwen_two_condition_review import prepare_review
+
+    markdown = _item("M1", "Question one?")
+    curated = _item("C1", "Question one?", source="curated_trace_v3")
+    missing = _item("C2", "Question two?", source="curated_trace_v3")
+    output_dir = tmp_path / "run"
+    result = prepare_review(
+        [markdown, curated, missing],
+        tmp_path / "media",
+        output_dir,
+    )
+    assert len(result.items) == 2
+    selection = [
+        json.loads(line)
+        for line in (output_dir / "selection.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [row["qa_id"] for row in selection] == ["C1", "C2"]
+    dedup = json.loads(
+        (output_dir / "deduplication_report.json").read_text(encoding="utf-8")
+    )
+    assert dedup["input_count"] == 3
+    assert dedup["selected_count"] == 2
+    media = json.loads(
+        (output_dir / "media_preflight.json").read_text(encoding="utf-8")
+    )
+    assert media["media_ready_count"] == 0
+    assert media["missing_media_count"] == 2
+
+
+def test_pair_results_use_only_two_valid_conditions() -> None:
+    from egolife_two_user_qa.qwen_two_condition_review import (
+        build_paired_results,
+    )
+
+    items = [
+        _item("Q1", "One?"),
+        _item("Q2", "Two?"),
+        _item("Q3", "Three?"),
+    ]
+    predictions = [
+        {
+            "qa_id": "Q1",
+            "condition_id": "minimum_set",
+            "run_status": "ok",
+            "parse_status": "valid",
+            "is_correct": True,
+            "elapsed_seconds": 1.0,
+            "attempt": 1,
+        },
+        {
+            "qa_id": "Q1",
+            "condition_id": "all_six",
+            "run_status": "ok",
+            "parse_status": "valid",
+            "is_correct": False,
+            "elapsed_seconds": 2.0,
+            "attempt": 1,
+        },
+        {
+            "qa_id": "Q2",
+            "condition_id": "minimum_set",
+            "run_status": "ok",
+            "parse_status": "valid",
+            "is_correct": False,
+            "elapsed_seconds": 1.0,
+            "attempt": 1,
+        },
+        {
+            "qa_id": "Q2",
+            "condition_id": "all_six",
+            "run_status": "ok",
+            "parse_status": "valid",
+            "is_correct": True,
+            "elapsed_seconds": 2.0,
+            "attempt": 1,
+        },
+        {
+            "qa_id": "Q3",
+            "condition_id": "minimum_set",
+            "run_status": "ok",
+            "parse_status": "invalid_missing",
+            "is_correct": None,
+            "elapsed_seconds": 1.0,
+            "attempt": 1,
+        },
+    ]
+    paired, summary = build_paired_results(
+        items,
+        predictions,
+        missing_media_qa_ids=set(),
+    )
+    assert summary["gold_count"] == 3
+    assert summary["paired_count"] == 2
+    assert summary["accuracy_minimum"] == 0.5
+    assert summary["accuracy_all_six"] == 0.5
+    assert summary["accuracy_delta"] == 0.0
+    assert summary["pair_categories"] == {
+        "both_correct": 0,
+        "both_wrong": 0,
+        "minimum_only_correct": 1,
+        "all_six_only_correct": 1,
+    }
+    q3 = next(row for row in paired if row["qa_id"] == "Q3")
+    assert q3["unpaired_reason"] == "invalid_or_missing_condition"
+
+
+def test_finalize_review_writes_paired_summary_and_chinese_report(
+    tmp_path: Path,
+) -> None:
+    from egolife_two_user_qa.qwen_two_condition_review import finalize_review
+
+    item = _item("Q1", "Which bottle was selected?")
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    predictions = [
+        {
+            "qa_id": "Q1",
+            "condition_id": "minimum_set",
+            "run_status": "ok",
+            "parse_status": "valid",
+            "predicted_choice": "B",
+            "correct_choice": "B",
+            "is_correct": True,
+            "raw_output": "CHOICE: B",
+            "elapsed_seconds": 1.0,
+            "attempt": 1,
+        },
+        {
+            "qa_id": "Q1",
+            "condition_id": "all_six",
+            "run_status": "ok",
+            "parse_status": "valid",
+            "predicted_choice": "A",
+            "correct_choice": "B",
+            "is_correct": False,
+            "raw_output": "CHOICE: A",
+            "elapsed_seconds": 2.0,
+            "attempt": 1,
+        },
+    ]
+    for row in predictions:
+        with (output_dir / "predictions.jsonl").open(
+            "a",
+            encoding="utf-8",
+        ) as handle:
+            handle.write(json.dumps(row) + "\n")
+    finalize_review([item], output_dir, missing_media_qa_ids=set())
+    assert (output_dir / "paired_results.jsonl").is_file()
+    summary = json.loads(
+        (output_dir / "summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["paired_count"] == 1
+    report = (output_dir / "report_cn.md").read_text(encoding="utf-8")
+    assert "有效配对数：**1**" in report
+    assert "仅 minimum set 正确" in report

@@ -6,6 +6,7 @@ import json
 import re
 import time
 import unicodedata
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -412,3 +413,271 @@ def run_items(
             rows.append(row)
             latest[key] = row
     return read_prediction_rows(predictions_path)
+
+
+def _write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(
+            json.dumps(row, ensure_ascii=False) + "\n"
+            for row in rows
+        ),
+        encoding="utf-8",
+    )
+
+
+def prepare_review(
+    items: Sequence[GoldItem],
+    media_root: str | Path,
+    output_dir: str | Path,
+) -> DeduplicationResult:
+    output_root = Path(output_dir)
+    result = deduplicate_items(items)
+    _write_jsonl(
+        output_root / "selection.jsonl",
+        (item_to_dict(item) for item in result.items),
+    )
+    _write_json(
+        output_root / "deduplication_report.json",
+        {
+            "input_count": len(items),
+            "selected_count": len(result.items),
+            "removed_count": len(result.removed),
+            "removed": list(result.removed),
+            "same_group_nonduplicates": list(
+                result.same_group_nonduplicates
+            ),
+        },
+    )
+    rows: list[dict[str, Any]] = []
+    for item in result.items:
+        specs = build_condition_specs(item, media_root)
+        missing = sorted(
+            {path for spec in specs for path in spec.missing_paths}
+        )
+        rows.append(
+            {
+                "qa_id": item.qa_id,
+                "generation_group_id": item.generation_group_id,
+                "media_ready": not missing,
+                "missing_paths": missing,
+                "conditions": [asdict(spec) for spec in specs],
+            }
+        )
+    _write_json(
+        output_root / "media_preflight.json",
+        {
+            "gold_count": len(result.items),
+            "media_ready_count": sum(
+                bool(row["media_ready"]) for row in rows
+            ),
+            "missing_media_count": sum(
+                not bool(row["media_ready"]) for row in rows
+            ),
+            "items": rows,
+        },
+    )
+    return result
+
+
+def build_paired_results(
+    items: Sequence[GoldItem],
+    predictions: Sequence[dict[str, Any]],
+    *,
+    missing_media_qa_ids: set[str],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    latest = _latest_by_key(predictions)
+    paired_rows: list[dict[str, Any]] = []
+    categories: Counter[str] = Counter()
+    minimum_correct = 0
+    all_six_correct = 0
+    paired_count = 0
+    for item in items:
+        minimum = latest.get((item.qa_id, MINIMUM_SET_CONDITION))
+        all_six = latest.get((item.qa_id, ALL_SIX_CONDITION))
+        valid_minimum = (
+            minimum is not None
+            and minimum.get("run_status") == "ok"
+            and minimum.get("parse_status") == "valid"
+        )
+        valid_all_six = (
+            all_six is not None
+            and all_six.get("run_status") == "ok"
+            and all_six.get("parse_status") == "valid"
+        )
+        category = None
+        unpaired_reason = None
+        if item.qa_id in missing_media_qa_ids:
+            unpaired_reason = "missing_media"
+        elif not valid_minimum or not valid_all_six:
+            unpaired_reason = "invalid_or_missing_condition"
+        else:
+            paired_count += 1
+            minimum_ok = bool(minimum["is_correct"])
+            all_six_ok = bool(all_six["is_correct"])
+            minimum_correct += int(minimum_ok)
+            all_six_correct += int(all_six_ok)
+            category = (
+                "both_correct"
+                if minimum_ok and all_six_ok
+                else "minimum_only_correct"
+                if minimum_ok
+                else "all_six_only_correct"
+                if all_six_ok
+                else "both_wrong"
+            )
+            categories[category] += 1
+        paired_rows.append(
+            {
+                "qa_id": item.qa_id,
+                "question": item.question,
+                "correct_choice": item.correct,
+                "minimum_set": minimum,
+                "all_six": all_six,
+                "paired_valid": unpaired_reason is None,
+                "pair_category": category,
+                "unpaired_reason": unpaired_reason,
+            }
+        )
+    accuracy_minimum = (
+        minimum_correct / paired_count if paired_count else None
+    )
+    accuracy_all_six = (
+        all_six_correct / paired_count if paired_count else None
+    )
+    summary = {
+        "gold_count": len(items),
+        "media_ready_count": len(items) - len(missing_media_qa_ids),
+        "missing_media_count": len(missing_media_qa_ids),
+        "paired_count": paired_count,
+        "unpaired_count": len(items) - paired_count,
+        "accuracy_minimum": accuracy_minimum,
+        "accuracy_all_six": accuracy_all_six,
+        "accuracy_delta": (
+            accuracy_all_six - accuracy_minimum
+            if accuracy_minimum is not None
+            and accuracy_all_six is not None
+            else None
+        ),
+        "pair_categories": {
+            name: categories[name]
+            for name in (
+                "both_correct",
+                "both_wrong",
+                "minimum_only_correct",
+                "all_six_only_correct",
+            )
+        },
+        "parse_failure_count": sum(
+            row.get("run_status") == "ok"
+            and row.get("parse_status") != "valid"
+            for row in latest.values()
+        ),
+        "inference_error_count": sum(
+            row.get("run_status") == "error"
+            for row in latest.values()
+        ),
+        "elapsed_seconds_total": sum(
+            float(row.get("elapsed_seconds", 0.0))
+            for row in latest.values()
+        ),
+    }
+    return paired_rows, summary
+
+
+def render_cn_report(
+    paired_rows: Sequence[dict[str, Any]],
+    summary: dict[str, Any],
+) -> str:
+    def percent(value: float | None) -> str:
+        return "不可计算" if value is None else f"{value * 100:.2f}%"
+
+    lines = [
+        "# Qwen 双条件视频 QA 配对评审报告",
+        "",
+        "## 统计摘要",
+        "",
+        f"- Gold 题数：**{summary['gold_count']}**",
+        f"- 媒体完整题数：**{summary['media_ready_count']}**",
+        f"- 有效配对数：**{summary['paired_count']}**",
+        (
+            "- Minimum set 准确率："
+            f"**{percent(summary['accuracy_minimum'])}**"
+        ),
+        (
+            "- All six 准确率："
+            f"**{percent(summary['accuracy_all_six'])}**"
+        ),
+        (
+            "- All six 减 minimum set："
+            f"**{percent(summary['accuracy_delta'])}**"
+        ),
+        (
+            "- 两个条件都正确："
+            f"**{summary['pair_categories']['both_correct']}**"
+        ),
+        (
+            "- 两个条件都错误："
+            f"**{summary['pair_categories']['both_wrong']}**"
+        ),
+        (
+            "- 仅 minimum set 正确："
+            f"**{summary['pair_categories']['minimum_only_correct']}**"
+        ),
+        (
+            "- 仅 all six 正确："
+            f"**{summary['pair_categories']['all_six_only_correct']}**"
+        ),
+        f"- 解析失败：**{summary['parse_failure_count']}**",
+        f"- 推理异常：**{summary['inference_error_count']}**",
+        "",
+        (
+            "准确率只使用两个条件均成功且解析有效的同一批 QA。"
+            "一次小样本运行不证明差异稳定或具有统计显著性。"
+        ),
+        "",
+        "## 逐题结果",
+    ]
+    for row in paired_rows:
+        lines.extend(
+            [
+                "",
+                f"### {row['qa_id']}",
+                "",
+                f"- 问题：{row['question']}",
+                f"- 正确选项：{row['correct_choice']}",
+                f"- 配对有效：{'是' if row['paired_valid'] else '否'}",
+                f"- 分类：{row['pair_category'] or row['unpaired_reason']}",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def finalize_review(
+    items: Sequence[GoldItem],
+    output_dir: str | Path,
+    *,
+    missing_media_qa_ids: set[str],
+) -> dict[str, Any]:
+    output_root = Path(output_dir)
+    predictions = read_prediction_rows(output_root / "predictions.jsonl")
+    paired, summary = build_paired_results(
+        items,
+        predictions,
+        missing_media_qa_ids=missing_media_qa_ids,
+    )
+    _write_jsonl(output_root / "paired_results.jsonl", paired)
+    _write_json(output_root / "summary.json", summary)
+    (output_root / "report_cn.md").write_text(
+        render_cn_report(paired, summary),
+        encoding="utf-8",
+    )
+    return summary
