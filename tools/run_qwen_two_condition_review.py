@@ -13,6 +13,7 @@ from egolife_two_user_qa.qwen3vl_runner import (
     make_runner,
 )
 from egolife_two_user_qa.qwen_two_condition_review import (
+    deduplicate_items,
     finalize_review,
     load_approved_markdown,
     load_curated_jsonl,
@@ -29,6 +30,7 @@ BASE_CONTRACT_KEYS = (
     "model_id",
     "backend",
     "decoding_mode",
+    "qa_limit",
 )
 MODEL_CONTRACT_KEYS = (
     "max_new_tokens",
@@ -60,6 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.set_defaults(disable_thinking=None)
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--rerun-nonvalid", action="store_true")
+    parser.add_argument("--qa-limit", type=int)
     return parser
 
 
@@ -115,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         "max_image_pixels": args.max_image_pixels,
         "disable_thinking": args.disable_thinking,
         "decoding_mode": "greedy",
+        "qa_limit": args.qa_limit,
     }
     existing_manifest = _validate_existing_manifest(
         output_dir / "run_manifest.json",
@@ -122,8 +126,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     approved = load_approved_markdown(args.approved_markdown)
     curated = load_curated_jsonl(args.curated_jsonl)
+    input_items = [*approved, *curated]
+    if args.qa_limit is not None:
+        if args.qa_limit <= 0:
+            raise SystemExit("--qa-limit must be positive")
+        input_items = list(
+            deduplicate_items(input_items).items[: args.qa_limit]
+        )
     prepared = prepare_review(
-        [*approved, *curated],
+        input_items,
         args.media_root,
         output_dir,
     )

@@ -678,3 +678,54 @@ def test_cli_rejects_changed_contract_in_existing_model_run(
                 "--disable-thinking",
             ]
         )
+
+
+def test_cli_qa_limit_applies_after_deduplication(tmp_path: Path) -> None:
+    from egolife_two_user_qa.tools import run_qwen_two_condition_review as cli
+
+    markdown = tmp_path / "QA.md"
+    _write_cli_markdown(markdown)
+    curated = tmp_path / "curated.jsonl"
+    curated.write_text(
+        json.dumps(
+            {
+                "qa_id": "CURATED_Q01",
+                "evidence_id": "E1",
+                "generation_group": "DAY1::17200000",
+                "original_item_number": 1,
+                "question": "Which bottle was selected?",
+                "options": ["red", "silver", "gold", "blue", "green"],
+                "correct": "C",
+                "answer": "gold",
+                "required_users": ["Jake", "Lucia"],
+                "review_status": "pass",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "run"
+    rc = cli.main(
+        [
+            "--approved-markdown",
+            str(markdown),
+            "--curated-jsonl",
+            str(curated),
+            "--media-root",
+            str(tmp_path / "media"),
+            "--output-dir",
+            str(output_dir),
+            "--qa-limit",
+            "1",
+            "--prepare-only",
+        ]
+    )
+    assert rc == 0
+    selection = [
+        json.loads(line)
+        for line in (output_dir / "selection.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert len(selection) == 1
+    assert selection[0]["qa_id"] == "CURATED_Q01"
