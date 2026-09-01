@@ -581,10 +581,33 @@ def build_paired_results(
             and row.get("parse_status") != "valid"
             for row in latest.values()
         ),
+        "parse_failures_by_condition": {
+            condition_id: sum(
+                row.get("condition_id") == condition_id
+                and row.get("run_status") == "ok"
+                and row.get("parse_status") != "valid"
+                for row in latest.values()
+            )
+            for condition_id in (
+                MINIMUM_SET_CONDITION,
+                ALL_SIX_CONDITION,
+            )
+        },
         "inference_error_count": sum(
             row.get("run_status") == "error"
             for row in latest.values()
         ),
+        "inference_errors_by_condition": {
+            condition_id: sum(
+                row.get("condition_id") == condition_id
+                and row.get("run_status") == "error"
+                for row in latest.values()
+            )
+            for condition_id in (
+                MINIMUM_SET_CONDITION,
+                ALL_SIX_CONDITION,
+            )
+        },
         "elapsed_seconds_total": sum(
             float(row.get("elapsed_seconds", 0.0))
             for row in latest.values()
@@ -637,6 +660,14 @@ def render_cn_report(
             f"**{summary['pair_categories']['all_six_only_correct']}**"
         ),
         f"- 解析失败：**{summary['parse_failure_count']}**",
+        (
+            "- Minimum set 解析失败："
+            f"**{summary['parse_failures_by_condition']['minimum_set']}**"
+        ),
+        (
+            "- All six 解析失败："
+            f"**{summary['parse_failures_by_condition']['all_six']}**"
+        ),
         f"- 推理异常：**{summary['inference_error_count']}**",
         "",
         (
@@ -647,6 +678,23 @@ def render_cn_report(
         "## 逐题结果",
     ]
     for row in paired_rows:
+        minimum = row["minimum_set"] or {}
+        all_six = row["all_six"] or {}
+
+        def predicted(value: dict[str, Any]) -> str:
+            return str(value.get("predicted_choice") or "未产生")
+
+        def users(value: dict[str, Any]) -> str:
+            names = value.get("input_users") or []
+            return "、".join(str(name) for name in names) or "未运行"
+
+        def elapsed(value: dict[str, Any]) -> str:
+            seconds = value.get("elapsed_seconds")
+            return "不可用" if seconds is None else f"{float(seconds):.3f} 秒"
+
+        def parse_status(value: dict[str, Any]) -> str:
+            return str(value.get("parse_status") or "未运行")
+
         lines.extend(
             [
                 "",
@@ -656,6 +704,14 @@ def render_cn_report(
                 f"- 正确选项：{row['correct_choice']}",
                 f"- 配对有效：{'是' if row['paired_valid'] else '否'}",
                 f"- 分类：{row['pair_category'] or row['unpaired_reason']}",
+                f"- Minimum set 预测：{predicted(minimum)}",
+                f"- Minimum set 解析：{parse_status(minimum)}",
+                f"- Minimum set 用户：{users(minimum)}",
+                f"- Minimum set 耗时：{elapsed(minimum)}",
+                f"- All six 预测：{predicted(all_six)}",
+                f"- All six 解析：{parse_status(all_six)}",
+                f"- All six 用户：{users(all_six)}",
+                f"- All six 耗时：{elapsed(all_six)}",
             ]
         )
     return "\n".join(lines) + "\n"

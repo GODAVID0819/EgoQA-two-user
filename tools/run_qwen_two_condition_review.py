@@ -21,6 +21,20 @@ from egolife_two_user_qa.qwen_two_condition_review import (
 )
 
 DEFAULT_MODEL_ID = "Qwen/Qwen3.8-27B"
+BASE_CONTRACT_KEYS = (
+    "approved_markdown",
+    "curated_jsonl",
+    "media_root",
+    "output_dir",
+    "model_id",
+    "backend",
+    "decoding_mode",
+)
+MODEL_CONTRACT_KEYS = (
+    "max_new_tokens",
+    "max_image_pixels",
+    "disable_thinking",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,11 +71,57 @@ def _write_manifest(path: Path, value: dict) -> None:
     )
 
 
+def _validate_existing_manifest(
+    path: Path,
+    requested: dict,
+) -> dict | None:
+    if not path.is_file():
+        return None
+    existing = json.loads(path.read_text(encoding="utf-8"))
+    existing_mode = existing.get("mode")
+    requested_mode = requested.get("mode")
+    if existing_mode == "model_review" and requested_mode == "prepare_only":
+        raise SystemExit(
+            "existing run contract differs: model_review directory "
+            "cannot be reused for prepare_only"
+        )
+    keys = list(BASE_CONTRACT_KEYS)
+    if existing_mode == requested_mode == "model_review":
+        keys.extend(MODEL_CONTRACT_KEYS)
+    differences = [
+        key
+        for key in keys
+        if existing.get(key) != requested.get(key)
+    ]
+    if differences:
+        raise SystemExit(
+            "existing run contract differs: " + ", ".join(differences)
+        )
+    return existing
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    output_dir = Path(args.output_dir)
+    requested_contract = {
+        "mode": "prepare_only" if args.prepare_only else "model_review",
+        "approved_markdown": str(Path(args.approved_markdown).resolve()),
+        "curated_jsonl": str(Path(args.curated_jsonl).resolve()),
+        "media_root": str(Path(args.media_root).resolve()),
+        "output_dir": str(output_dir.resolve()),
+        "model_id": args.model_id,
+        "backend": MEMORY_SAFE_BACKEND,
+        "max_new_tokens": args.max_new_tokens,
+        "max_image_pixels": args.max_image_pixels,
+        "disable_thinking": args.disable_thinking,
+        "decoding_mode": "greedy",
+    }
+    existing_manifest = _validate_existing_manifest(
+        output_dir / "run_manifest.json",
+        requested_contract,
+    )
     approved = load_approved_markdown(args.approved_markdown)
     curated = load_curated_jsonl(args.curated_jsonl)
-    output_dir = Path(args.output_dir)
     prepared = prepare_review(
         [*approved, *curated],
         args.media_root,
@@ -76,20 +136,15 @@ def main(argv: list[str] | None = None) -> int:
         if not row["media_ready"]
     }
     manifest = {
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "mode": "prepare_only" if args.prepare_only else "model_review",
-        "approved_markdown": str(Path(args.approved_markdown).resolve()),
-        "curated_jsonl": str(Path(args.curated_jsonl).resolve()),
-        "media_root": str(Path(args.media_root).resolve()),
-        "output_dir": str(output_dir.resolve()),
+        "created_at_utc": (
+            existing_manifest.get("created_at_utc")
+            if existing_manifest is not None
+            and existing_manifest.get("mode") == requested_contract["mode"]
+            else datetime.now(timezone.utc).isoformat()
+        ),
+        **requested_contract,
         "selected_count": len(prepared.items),
         "media_ready_count": media_report["media_ready_count"],
-        "model_id": args.model_id,
-        "backend": MEMORY_SAFE_BACKEND,
-        "max_new_tokens": args.max_new_tokens,
-        "max_image_pixels": args.max_image_pixels,
-        "disable_thinking": args.disable_thinking,
-        "decoding_mode": "greedy",
     }
     if args.prepare_only:
         _write_manifest(output_dir / "run_manifest.json", manifest)

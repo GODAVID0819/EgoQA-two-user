@@ -464,6 +464,10 @@ def test_pair_results_use_only_two_valid_conditions() -> None:
     assert summary["accuracy_minimum"] == 0.5
     assert summary["accuracy_all_six"] == 0.5
     assert summary["accuracy_delta"] == 0.0
+    assert summary["parse_failures_by_condition"] == {
+        "minimum_set": 1,
+        "all_six": 0,
+    }
     assert summary["pair_categories"] == {
         "both_correct": 0,
         "both_wrong": 0,
@@ -492,6 +496,7 @@ def test_finalize_review_writes_paired_summary_and_chinese_report(
             "correct_choice": "B",
             "is_correct": True,
             "raw_output": "CHOICE: B",
+            "input_users": ["Jake", "Lucia"],
             "elapsed_seconds": 1.0,
             "attempt": 1,
         },
@@ -504,6 +509,14 @@ def test_finalize_review_writes_paired_summary_and_chinese_report(
             "correct_choice": "B",
             "is_correct": False,
             "raw_output": "CHOICE: A",
+            "input_users": [
+                "Jake",
+                "Alice",
+                "Tasha",
+                "Lucia",
+                "Katrina",
+                "Shure",
+            ],
             "elapsed_seconds": 2.0,
             "attempt": 1,
         },
@@ -523,6 +536,10 @@ def test_finalize_review_writes_paired_summary_and_chinese_report(
     report = (output_dir / "report_cn.md").read_text(encoding="utf-8")
     assert "有效配对数：**1**" in report
     assert "仅 minimum set 正确" in report
+    assert "Minimum set 预测：B" in report
+    assert "All six 预测：A" in report
+    assert "Minimum set 用户：Jake、Lucia" in report
+    assert "All six 耗时：2.000 秒" in report
 
 
 def _write_cli_markdown(path: Path) -> None:
@@ -602,5 +619,62 @@ def test_cli_model_mode_requires_explicit_inference_contract(
                 str(tmp_path / "media"),
                 "--output-dir",
                 str(tmp_path / "run"),
+            ]
+        )
+
+
+def test_cli_rejects_changed_contract_in_existing_model_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from egolife_two_user_qa.tools import run_qwen_two_condition_review as cli
+
+    markdown = tmp_path / "QA.md"
+    _write_cli_markdown(markdown)
+    curated = tmp_path / "curated.jsonl"
+    curated.write_text("", encoding="utf-8")
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    existing = {
+        "created_at_utc": "2026-09-01T00:00:00+00:00",
+        "mode": "model_review",
+        "approved_markdown": str(markdown.resolve()),
+        "curated_jsonl": str(curated.resolve()),
+        "media_root": str((tmp_path / "media").resolve()),
+        "output_dir": str(output_dir.resolve()),
+        "selected_count": 1,
+        "media_ready_count": 0,
+        "model_id": "Qwen/Qwen3.8-27B",
+        "backend": "transformers-local-memory-safe",
+        "max_new_tokens": 256,
+        "max_image_pixels": 65536,
+        "disable_thinking": True,
+        "decoding_mode": "greedy",
+    }
+    (output_dir / "run_manifest.json").write_text(
+        json.dumps(existing),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli,
+        "make_runner",
+        lambda *args, **kwargs: pytest.fail("incompatible run must stop first"),
+    )
+    with pytest.raises(SystemExit, match="existing run contract differs"):
+        cli.main(
+            [
+                "--approved-markdown",
+                str(markdown),
+                "--curated-jsonl",
+                str(curated),
+                "--media-root",
+                str(tmp_path / "media"),
+                "--output-dir",
+                str(output_dir),
+                "--max-new-tokens",
+                "512",
+                "--max-image-pixels",
+                "65536",
+                "--disable-thinking",
             ]
         )
