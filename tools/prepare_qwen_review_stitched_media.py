@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import time
 import urllib.request
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -35,6 +36,10 @@ class MediaTask:
     agent_dir: str
     urls: tuple[str, ...]
     output_path: Path
+
+
+class MissingSourceError(RuntimeError):
+    """公开数据集中不存在计划内源片段。"""
 
 
 def segment_timestamps(start_code: str) -> tuple[str, ...]:
@@ -146,6 +151,14 @@ def _download_segment(url: str, destination: Path, timeout: int) -> None:
                 raise RuntimeError(f"empty download: {url}")
             os.replace(temporary, destination)
             return
+        except urllib.error.HTTPError as exc:
+            if temporary.exists():
+                temporary.unlink()
+            if exc.code == 404:
+                raise MissingSourceError(url) from exc
+            last_error = exc
+            if attempt < 3:
+                time.sleep(2 * attempt)
         except Exception as exc:
             last_error = exc
             if temporary.exists():
@@ -245,19 +258,47 @@ def prepare_media(
                 segment_paths = tuple(
                     segment_root / Path(url).name for url in task.urls
                 )
-                with ThreadPoolExecutor(max_workers=workers) as executor:
-                    futures = [
-                        executor.submit(_download_segment, url, path, timeout)
-                        for url, path in zip(task.urls, segment_paths, strict=True)
-                    ]
-                    for future in futures:
-                        future.result()
-                duration = _concat_segments(
-                    ffmpeg,
-                    ffprobe,
-                    segment_paths,
-                    task.output_path,
-                )
+                try:
+                    with ThreadPoolExecutor(max_workers=workers) as executor:
+                        futures = [
+                            executor.submit(_download_segment, url, path, timeout)
+                            for url, path in zip(task.urls, segment_paths, strict=True)
+                        ]
+                        for future in futures:
+                            future.result()
+                    duration = _concat_segments(
+                        ffmpeg,
+                        ffprobe,
+                        segment_paths,
+                        task.output_path,
+                    )
+                except MissingSourceError as exc:
+                    shutil.rmtree(segment_root, ignore_errors=True)
+                    result = {
+                        "index": index,
+                        "group_id": task.group_id,
+                        "user": task.user,
+                        "status": "missing_source",
+                        "source_segment_count": len(task.urls),
+                        "output_path": str(task.output_path),
+                        "duration_seconds": None,
+                        "bytes": 0,
+                        "error": str(exc),
+                    }
+                    results.append(result)
+                    _write_manifest(
+                        manifest_path,
+                        "running",
+                        results,
+                        None,
+                        len(task_list),
+                    )
+                    print(
+                        f"MEDIA_TASK_MISSING index={index}/{len(task_list)} "
+                        f"group={task.group_id} user={task.user}",
+                        flush=True,
+                    )
+                    continue
                 shutil.rmtree(segment_root)
             result = {
                 "index": index,
@@ -292,9 +333,14 @@ def prepare_media(
             len(task_list),
         )
         raise
+    final_status = (
+        "partial_missing_sources"
+        if any(result["status"] == "missing_source" for result in results)
+        else "passed"
+    )
     _write_manifest(
         manifest_path,
-        "passed",
+        final_status,
         results,
         None,
         len(task_list),

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from egolife_two_user_qa.tools.prepare_qwen_review_stitched_media import (
     MediaTask,
+    MissingSourceError,
     build_media_tasks,
     prepare_media,
     segment_timestamps,
@@ -87,3 +88,42 @@ def test_prepare_media_manifest_uses_actual_task_count(
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload["expected_task_count"] == 1
     assert payload["completed_task_count"] == 1
+
+
+def test_prepare_media_records_missing_source_and_continues(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from egolife_two_user_qa.tools import prepare_qwen_review_stitched_media as module
+
+    task = MediaTask(
+        group_id="DAY6::15523000",
+        group_dir="DAY6_15523000",
+        day="DAY6",
+        user="Shure",
+        agent_dir="A6_SHURE",
+        urls=("https://example.invalid/missing.mp4",),
+        output_path=tmp_path / "stitched" / "DAY6_15523000" / "Shure.mp4",
+    )
+    monkeypatch.setattr(module, "_usable_output", lambda ffprobe, path: (False, None))
+    monkeypatch.setattr(
+        module,
+        "_download_segment",
+        lambda url, destination, timeout: (_ for _ in ()).throw(
+            MissingSourceError(url)
+        ),
+    )
+    manifest = tmp_path / "media_manifest.json"
+    results = prepare_media(
+        [task],
+        work_root=tmp_path / "work",
+        ffmpeg="ffmpeg",
+        ffprobe="ffprobe",
+        workers=1,
+        timeout=1,
+        manifest_path=manifest,
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["status"] == "partial_missing_sources"
+    assert results[0]["status"] == "missing_source"
+    assert results[0]["output_path"].endswith("Shure.mp4")

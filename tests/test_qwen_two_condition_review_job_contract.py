@@ -21,6 +21,7 @@ def test_media_job_uses_cpu_job_specific_storage_and_real_preflight() -> None:
     assert "storage_preflight.json" in text
     assert "pip_check.txt" in text
     assert "media_manifest.json" in text
+    assert "partial_missing_sources" in text
 
 
 def test_review_job_keeps_smoke_and_formal_in_job_specific_outputs() -> None:
@@ -45,3 +46,4 @@ def test_review_job_keeps_smoke_and_formal_in_job_specific_outputs() -> None:
     assert "summary.json" in text
     assert "job_result.json" in text
     assert "pip_check.txt" in text
+    assert 'summary.get("media_ready_count")' in text

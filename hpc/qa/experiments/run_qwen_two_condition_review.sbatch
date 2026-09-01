@@ -159,17 +159,23 @@ predictions = [
     for line in (output_dir / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
     if line.strip()
 ]
-expected_predictions = expected_selected * 2
+media_ready_count = int(summary.get("media_ready_count") or 0)
+expected_predictions = media_ready_count * 2
 base_valid = (
     summary.get("gold_count") == expected_selected
     and len(predictions) == expected_predictions
     and summary.get("inference_error_count") == 0
+    and media_ready_count > 0
 )
 smoke_valid = base_valid and summary.get("paired_count") == 1
 valid = smoke_valid if mode == "smoke" else base_valid
 status = (
     "passed"
     if valid and summary.get("paired_count") == expected_selected
+    else "completed_with_missing_media_and_parse_failures"
+    if valid and summary.get("missing_media_count") and summary.get("parse_failure_count")
+    else "completed_with_missing_media"
+    if valid and summary.get("missing_media_count")
     else "completed_with_parse_failures"
     if valid
     else "failed"
@@ -180,6 +186,8 @@ result = {
     "review_mode": mode,
     "output_dir": str(output_dir),
     "expected_selected": expected_selected,
+    "media_ready_count": media_ready_count,
+    "missing_media_count": summary.get("missing_media_count"),
     "prediction_count": len(predictions),
     "paired_count": summary.get("paired_count"),
     "parse_failure_count": summary.get("parse_failure_count"),

@@ -102,18 +102,23 @@ media_root = Path(sys.argv[2])
 result_path = Path(sys.argv[3])
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 items = manifest.get("items") or []
+ready = [item for item in items if item.get("status") in {"prepared", "reused"}]
+missing = [item for item in items if item.get("status") == "missing_source"]
 valid = (
-    manifest.get("status") == "passed"
+    manifest.get("status") in {"passed", "partial_missing_sources"}
     and len(items) == 60
-    and all(590.0 <= float(item["duration_seconds"]) <= 615.0 for item in items)
-    and all(Path(item["output_path"]).is_file() for item in items)
+    and len(ready) + len(missing) == 60
+    and all(590.0 <= float(item["duration_seconds"]) <= 615.0 for item in ready)
+    and all(Path(item["output_path"]).is_file() for item in ready)
+    and all(not Path(item["output_path"]).exists() for item in missing)
 )
 result = {
-    "status": "passed" if valid else "failed",
+    "status": "partial" if valid and missing else "passed" if valid else "failed",
     "job_id": __import__("os").environ["SLURM_JOB_ID"],
     "media_root": str(media_root),
-    "stitched_video_count": len(items),
-    "expected_stitched_video_count": 60,
+    "stitched_video_count": len(ready),
+    "missing_source_count": len(missing),
+    "expected_task_count": 60,
     "media_manifest": str(manifest_path),
 }
 result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
