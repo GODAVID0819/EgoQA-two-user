@@ -7,11 +7,13 @@ import re
 import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 SIX_USERS = ("Jake", "Alice", "Tasha", "Lucia", "Katrina", "Shure")
 CHOICES = ("A", "B", "C", "D", "E")
 SOURCE_PRIORITY = {"approved_markdown": 1, "curated_trace_v3": 2}
+MINIMUM_SET_CONDITION = "minimum_set"
+ALL_SIX_CONDITION = "all_six"
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,20 @@ class DeduplicationResult:
     items: tuple[GoldItem, ...]
     removed: tuple[dict[str, str], ...]
     same_group_nonduplicates: tuple[dict[str, str], ...]
+
+
+@dataclass(frozen=True)
+class ConditionSpec:
+    condition_id: str
+    input_users: tuple[str, ...]
+    video_paths: tuple[str, ...]
+    missing_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ChoiceParse:
+    choice: str | None
+    status: str
 
 
 def normalize_text(value: str) -> str:
@@ -194,3 +210,69 @@ def item_to_dict(item: GoldItem) -> dict[str, Any]:
     value["options"] = list(item.options)
     value["minimum_required_users"] = list(item.minimum_required_users)
     return value
+
+
+def generation_group_directory(generation_group_id: str) -> str:
+    if not re.fullmatch(r"DAY\d+::\d+", generation_group_id):
+        raise ValueError("invalid generation_group_id")
+    return generation_group_id.replace("::", "_")
+
+
+def build_condition_specs(
+    item: GoldItem,
+    media_root: str | Path,
+) -> tuple[ConditionSpec, ...]:
+    group_root = Path(media_root) / generation_group_directory(
+        item.generation_group_id
+    )
+    specs: list[ConditionSpec] = []
+    for condition_id, users in (
+        (MINIMUM_SET_CONDITION, item.minimum_required_users),
+        (ALL_SIX_CONDITION, SIX_USERS),
+    ):
+        paths = tuple(str(group_root / f"{user}.mp4") for user in users)
+        missing = tuple(path for path in paths if not Path(path).is_file())
+        specs.append(ConditionSpec(condition_id, tuple(users), paths, missing))
+    return tuple(specs)
+
+
+def build_prompt(question: str, options: Sequence[str]) -> str:
+    if len(options) != 5:
+        raise ValueError("prompt requires exactly five options")
+    option_lines = "\n".join(
+        f"{choice}. {option}"
+        for choice, option in zip(CHOICES, options, strict=True)
+    )
+    return (
+        "You are given one or more videos and a multiple-choice question.\n"
+        "Answer the question using only the provided videos.\n\n"
+        f"Question:\n{question}\n\n"
+        f"Options:\n{option_lines}\n\n"
+        "Select exactly one option.\n"
+        "Output exactly two lines:\n"
+        "CHOICE: <A, B, C, D, or E>\n"
+        "ANSWER: <brief answer>"
+    )
+
+
+def parse_choice(raw_output: str) -> ChoiceParse:
+    declared = re.findall(
+        r"(?im)^\s*CHOICE\s*:\s*([A-E])\s*$",
+        raw_output,
+    )
+    distinct = tuple(dict.fromkeys(value.upper() for value in declared))
+    if len(distinct) > 1:
+        return ChoiceParse(None, "invalid_ambiguous")
+    if len(distinct) == 1:
+        return ChoiceParse(distinct[0], "valid")
+    fallback = re.fullmatch(
+        r"\s*(?:\(([A-E])\)|([A-E])\.?)\s*",
+        raw_output,
+        re.IGNORECASE,
+    )
+    if fallback is None:
+        return ChoiceParse(None, "invalid_missing")
+    return ChoiceParse(
+        (fallback.group(1) or fallback.group(2)).upper(),
+        "valid",
+    )

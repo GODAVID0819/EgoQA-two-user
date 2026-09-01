@@ -6,10 +6,15 @@ from pathlib import Path
 import pytest
 
 from egolife_two_user_qa.qwen_two_condition_review import (
+    ALL_SIX_CONDITION,
+    MINIMUM_SET_CONDITION,
     GoldItem,
+    build_condition_specs,
+    build_prompt,
     deduplicate_items,
     load_approved_markdown,
     load_curated_jsonl,
+    parse_choice,
     validate_gold_item,
 )
 
@@ -153,3 +158,71 @@ def test_current_approved_inputs_deduplicate_to_21() -> None:
     )
     assert len(result.items) == 21
     assert len(result.removed) == 3
+
+
+def test_build_conditions_changes_only_video_collection(tmp_path: Path) -> None:
+    item = _item("Q1", "Which bottle was selected?")
+    group = tmp_path / "DAY1_17200000"
+    group.mkdir()
+    for user in ("Jake", "Alice", "Tasha", "Lucia", "Katrina", "Shure"):
+        (group / f"{user}.mp4").write_bytes(b"video")
+    specs = build_condition_specs(item, tmp_path)
+    assert [spec.condition_id for spec in specs] == [
+        MINIMUM_SET_CONDITION,
+        ALL_SIX_CONDITION,
+    ]
+    assert specs[0].input_users == ("Jake", "Lucia")
+    assert specs[1].input_users == (
+        "Jake",
+        "Alice",
+        "Tasha",
+        "Lucia",
+        "Katrina",
+        "Shure",
+    )
+    assert len(specs[0].video_paths) == 2
+    assert len(specs[1].video_paths) == 6
+    assert specs[0].missing_paths == ()
+    assert specs[1].missing_paths == ()
+
+
+def test_missing_media_is_explicit(tmp_path: Path) -> None:
+    item = _item("Q1", "Which bottle was selected?")
+    specs = build_condition_specs(item, tmp_path)
+    assert len(specs[0].missing_paths) == 2
+    assert len(specs[1].missing_paths) == 6
+
+
+def test_prompt_uses_question_and_options_only() -> None:
+    item = _item("SECRET_GOLD_ID", "Which bottle was selected?")
+    prompt = build_prompt(item.question, item.options)
+    assert "SECRET_GOLD_ID" not in prompt
+    assert "minimum_required_users" not in prompt
+    assert "correct" not in prompt.casefold()
+    assert "Which bottle was selected?" in prompt
+    assert "B. two" in prompt
+    assert prompt.endswith("ANSWER: <brief answer>")
+
+
+@pytest.mark.parametrize("raw", ["CHOICE: B\nANSWER: two", "B", "B.", "(B)"])
+def test_parse_choice_accepts_one_unambiguous_choice(raw: str) -> None:
+    parsed = parse_choice(raw)
+    assert parsed.choice == "B"
+    assert parsed.status == "valid"
+
+
+@pytest.mark.parametrize(
+    "raw, status",
+    [
+        ("I cannot tell.", "invalid_missing"),
+        ("CHOICE: A\nCHOICE: B", "invalid_ambiguous"),
+        ("A or B", "invalid_missing"),
+    ],
+)
+def test_parse_choice_rejects_missing_or_conflicting_output(
+    raw: str,
+    status: str,
+) -> None:
+    parsed = parse_choice(raw)
+    assert parsed.choice is None
+    assert parsed.status == status
