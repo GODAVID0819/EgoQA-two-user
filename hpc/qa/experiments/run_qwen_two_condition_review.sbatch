@@ -34,7 +34,7 @@ if [[ "${REVIEW_MODE}" == "smoke" ]]; then
   EXPECTED_SELECTED=1
 elif [[ "${REVIEW_MODE}" == "formal" ]]; then
   QA_LIMIT_ARGS=()
-  EXPECTED_SELECTED=21
+  EXPECTED_SELECTED="${EXPECTED_SELECTED:-21}"
 else
   echo "STOP: REVIEW_MODE must be smoke or formal" >&2
   exit 2

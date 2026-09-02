@@ -47,3 +47,5 @@ def test_review_job_keeps_smoke_and_formal_in_job_specific_outputs() -> None:
     assert "job_result.json" in text
     assert "pip_check.txt" in text
     assert 'summary.get("media_ready_count")' in text
+    assert 'EXPECTED_SELECTED="${EXPECTED_SELECTED:-21}"' in text
+    assert 'summary.get("gold_count") == expected_selected' in text
