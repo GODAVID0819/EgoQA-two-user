@@ -54,6 +54,8 @@ def write_one_pass_evidence(asset_paths: Iterable[str | Path], *, compact_output
 **Files:**
 - Modify: `qwen3vl_runner.py`
 - Modify: `video_qa_loop.py`
+- Modify: `cli.py`
+- Modify: `tests/test_qwen_runner_compat.py`
 - Modify: `tests/test_six_user_video_qa_loop.py`
 
 - [ ] **Step 1: 写失败测试，验证 profile 和单次内容参数**
@@ -80,7 +82,9 @@ def write_one_pass_evidence(asset_paths: Iterable[str | Path], *, compact_output
 
 **Files:**
 - Create: `tools/summarize_six_user_one_pass.py`
+- Create: `one_pass_summary.py`
 - Modify: `video_qa_loop.py`
+- Modify: `cli.py`
 - Modify: `hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch`
 - Modify: `tests/test_six_user_one_pass.py`
 - Modify: `tests/test_ten_minute_reasoning_job_contract.py`

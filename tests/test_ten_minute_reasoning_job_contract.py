@@ -10,6 +10,9 @@ QWEN38_FAST_FORMAL_JOB = (
 QWEN38_FAST_FIX_FORMAL_JOB = (
     ROOT / "hpc/qa/experiments/run_six_user_qa_10min_3groups_x20_qwen38_fast_fix.sbatch"
 )
+ONE_PASS_FORMAL_JOB = (
+    ROOT / "hpc/qa/experiments/run_six_user_qa_10min_one_pass_30.sbatch"
+)
 QWEN38_DOWNLOAD_JOB = ROOT / "hpc/qa/experiments/download_qwen38_27b.sbatch"
 RUNTIME_PATH = ROOT / "hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch"
 CLI_PATH = ROOT / "cli.py"
@@ -32,7 +35,7 @@ def test_ten_minute_reasoning_wrapper_contract() -> None:
     assert 'MAX_NEW_TOKENS="16384"' in job
     assert 'FORMALITY_MAX_NEW_TOKENS="2048"' in job
     assert 'SIX_USER_TEN_MINUTE_REASONING_PROFILE="1"' in job
-    assert 'CUDA_KEEPER_START_USED_MIB="${CUDA_KEEPER_START_USED_MIB:-0}"' in job
+    assert 'CUDA_KEEPER_START_AFTER_SECONDS="${CUDA_KEEPER_START_AFTER_SECONDS:-7200}"' in job
     assert 'PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-six-user-10min-20260829}"' in job
     assert 'QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS="65536"' in job
     assert 'QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS="131072"' in job
@@ -56,6 +59,9 @@ def test_runtime_propagates_cross_gap_and_reasoning_profile() -> None:
         in runtime
     )
     assert '--max-new-tokens "${MAX_NEW_TOKENS}"' in runtime
+    assert 'CUDA_KEEPER_START_AFTER_SECONDS="${CUDA_KEEPER_START_AFTER_SECONDS:-7200}"' in runtime
+    assert '--start-after-seconds "${CUDA_KEEPER_START_AFTER_SECONDS}"' in runtime
+    assert 'CUDA_KEEPER_START_USED_MIB' not in runtime
     assert '--formality-max-new-tokens "${FORMALITY_MAX_NEW_TOKENS}"' in runtime
     assert "--six-user-ten-minute-reasoning-profile" in runtime
     assert 'QA_PROFILE_ARGS=(--disable-thinking)' in runtime
@@ -80,6 +86,20 @@ def test_runtime_propagates_fast_profile_and_fail_fast_review() -> None:
     assert "--fail-fast-review" in runtime
     assert '"ten_minute_fast_profile": bool(int("${SIX_USER_TEN_MINUTE_FAST_PROFILE}"))' in runtime
     assert '"fail_fast_review": bool(int("${FAIL_FAST_REVIEW}"))' in runtime
+
+
+def test_runtime_supports_precomputed_one_pass_evidence_without_mining() -> None:
+    runtime = runtime_text()
+
+    assert 'ONE_PASS_30_SLOT_MODE="${ONE_PASS_30_SLOT_MODE:-0}"' in runtime
+    assert 'PRECOMPUTED_CANDIDATE_ASSETS_ROOT="${PRECOMPUTED_CANDIDATE_ASSETS_ROOT:-}"' in runtime
+    assert 'tools/build_six_user_one_pass_evidence.py' in runtime
+    assert 'one_pass_evidence.jsonl' in runtime
+    assert 'tools/summarize_six_user_one_pass.py' in runtime
+    assert 'if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then' in runtime
+    assert 'stage=mine_six_user_candidates' in runtime
+    assert '--six-user-one-pass-profile' in runtime
+    assert '--repeat-evidence' in runtime
 
 
 def test_cli_forwards_fast_profile_and_fail_fast_review_to_generation_loop() -> None:
@@ -147,6 +167,40 @@ def test_runtime_cleanup_preserves_original_failure_status() -> None:
     assert 'return "${cleanup_status}"' in runtime
 
 
+def test_one_pass_formal_wrapper_reuses_mined_assets_and_runs_30_slots() -> None:
+    job = ONE_PASS_FORMAL_JOB.read_text(encoding="utf-8")
+
+    assert '#SBATCH --job-name=egoqa_6u_10min_onepass30' in job
+    assert '#SBATCH --account=torch_pr_674_tandon_advanced' in job
+    assert '#SBATCH --gres=gpu:1' in job
+    assert '#SBATCH --constraint=h100' in job
+    assert '#SBATCH --mem=96G' in job
+    assert '#SBATCH --time=2-00:00:00' in job
+    assert 'RUN_MODE="six_user_qa_10min_one_pass_30"' in job
+    assert 'ACCEPTED_TARGET="30"' in job
+    assert 'TARGET_GENERATION_GROUPS="3"' in job
+    assert 'EXPECTED_QA_PER_GROUP="10"' in job
+    assert 'MAX_GENERATION_SLOTS="30"' in job
+    assert 'MAX_ATTEMPTS="1"' in job
+    assert 'ONE_PASS_30_SLOT_MODE="1"' in job
+    assert 'FAIL_FAST_REVIEW="0"' in job
+    assert 'SIX_USER_ONE_PASS_PROFILE="1"' in job
+    assert 'QWEN_MEMORY_SAFE_VIDEO_FPS="0.5"' in job
+    assert 'QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS="65536"' in job
+    assert 'MAX_NEW_TOKENS="4096"' in job
+    assert 'PRECOMPUTED_SOURCE_JOB_ID="16699348"' in job
+    assert 'PRECOMPUTED_CANDIDATE_ASSETS_ROOT="${PROJECT_ROOT}/outputs/six_user_qa/' in job
+    assert 'CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-1}"' in job
+    assert 'CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/hpc/shared/cuda.py}"' in job
+    assert 'CUDA_KEEPER_START_AFTER_SECONDS="${CUDA_KEEPER_START_AFTER_SECONDS:-7200}"' in job
+    assert '--nodelist' not in job
+    assert '#SBATCH -w' not in job
+    runtime = runtime_text()
+    assert 'DAY1_17200000_group_relative_clip.json' in runtime
+    assert 'DAY3_17000000_group_relative_clip.json' in runtime
+    assert 'DAY4_21400000_group_relative_clip.json' in runtime
+
+
 def test_formal_wrapper_targets_three_distinct_groups_and_twenty_slots_each() -> None:
     job = FORMAL_JOB.read_text(encoding="utf-8")
 
@@ -160,7 +214,7 @@ def test_formal_wrapper_targets_three_distinct_groups_and_twenty_slots_each() ->
     assert 'QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS="65536"' in job
     assert 'QA_TIME_BUDGET_MODE="1"' in job
     assert 'SIX_USER_TEN_MINUTE_REASONING_PROFILE="1"' in job
-    assert 'CUDA_KEEPER_START_USED_MIB="${CUDA_KEEPER_START_USED_MIB:-0}"' in job
+    assert 'CUDA_KEEPER_START_AFTER_SECONDS="${CUDA_KEEPER_START_AFTER_SECONDS:-7200}"' in job
     assert "--nodelist" not in job
     assert "#SBATCH -w" not in job
 

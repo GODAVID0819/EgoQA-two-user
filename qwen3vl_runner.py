@@ -57,10 +57,16 @@ DEFAULT_DECISION_CHOICES = ("pass", "fail")
 class GenerationCallProfile:
     max_new_tokens: int
     disable_thinking: bool
+    video_fps: float | None = None
+    max_image_pixels: int | None = None
 
     def __post_init__(self) -> None:
         if self.max_new_tokens <= 0:
             raise ValueError("max_new_tokens must be positive")
+        if self.video_fps is not None and self.video_fps <= 0:
+            raise ValueError("video_fps must be positive when set")
+        if self.max_image_pixels is not None and self.max_image_pixels <= 0:
+            raise ValueError("max_image_pixels must be positive when set")
 
 
 class OpenRouterRequestError(RuntimeError):
@@ -680,17 +686,27 @@ class Qwen3VLTransformersRunner:
     ) -> dict[str, Any]:
         image_paths = image_paths or []
         video_paths = video_paths or []
+        effective_max_image_pixels = (
+            call_profile.max_image_pixels
+            if call_profile is not None and call_profile.max_image_pixels is not None
+            else self.max_image_pixels
+        )
+        effective_video_fps = (
+            call_profile.video_fps
+            if call_profile is not None and call_profile.video_fps is not None
+            else getattr(self, "video_fps", DEFAULT_VIDEO_FPS)
+        )
         if multimodal_content is None:
             content: list[dict[str, Any]] = [
-                {"type": "image", "image": image_path, "max_pixels": self.max_image_pixels}
+                {"type": "image", "image": image_path, "max_pixels": effective_max_image_pixels}
                 for image_path in image_paths
             ]
             for video_path in video_paths:
                 video_content = {
                     "type": "video",
                     "video": video_path,
-                    "max_pixels": self.max_image_pixels,
-                    "fps": getattr(self, "video_fps", DEFAULT_VIDEO_FPS),
+                    "max_pixels": effective_max_image_pixels,
+                    "fps": effective_video_fps,
                 }
                 if self.min_video_pixels is not None:
                     video_content["min_pixels"] = self.min_video_pixels
@@ -1032,10 +1048,18 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
             flush=True,
         )
 
-    def _prepare_video_for_memory_safe_decode(self, path: str | Path) -> str:
+    def _prepare_video_for_memory_safe_decode(
+        self,
+        path: str | Path,
+        *,
+        video_fps: float | None = None,
+    ) -> str:
         source = Path(path).resolve()
         if not self.transcode_local_videos:
             return str(source)
+        effective_video_fps = self.video_fps if video_fps is None else float(video_fps)
+        if effective_video_fps <= 0:
+            raise ValueError("video_fps must be positive")
         stat = source.stat()
         cache_label = ".".join(
             (
@@ -1043,7 +1067,7 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
                 f"{stat.st_ino:x}",
                 str(stat.st_size),
                 str(stat.st_mtime_ns),
-                f"fps-{self.video_fps:g}",
+                f"fps-{effective_video_fps:g}",
                 f"edge-{self.transcode_max_edge}",
                 f"crf-{self.transcode_crf}",
             )
@@ -1056,7 +1080,7 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
             f".{source.stem}.{cache_label}.{threading.get_ident()}.tmp.mp4"
         )
         filters = (
-            f"fps={self.video_fps:g}",
+            f"fps={effective_video_fps:g}",
             (
                 f"scale={self.transcode_max_edge}:{self.transcode_max_edge}:"
                 "force_original_aspect_ratio=decrease"
@@ -1091,7 +1115,7 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
         print(
             "qwen_memory_safe_video_transcode_start "
             f"source={source} source_bytes={stat.st_size} "
-            f"fps={self.video_fps:g} max_edge={self.transcode_max_edge} "
+            f"fps={effective_video_fps:g} max_edge={self.transcode_max_edge} "
             f"crf={self.transcode_crf}",
             flush=True,
         )
@@ -1118,16 +1142,35 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
         return str(output)
 
     def _generate(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        call_profile = kwargs.get("call_profile")
+        profile_video_fps = (
+            call_profile.video_fps
+            if isinstance(call_profile, GenerationCallProfile)
+            and call_profile.video_fps is not None
+            else getattr(self, "video_fps", DEFAULT_VIDEO_FPS)
+        )
+        profile_max_image_pixels = (
+            call_profile.max_image_pixels
+            if isinstance(call_profile, GenerationCallProfile)
+            and call_profile.max_image_pixels is not None
+            else getattr(self, "max_image_pixels", DEFAULT_MAX_IMAGE_PIXELS)
+        )
+        runner_video_fps = float(getattr(self, "video_fps", DEFAULT_VIDEO_FPS))
+        runner_max_image_pixels = int(
+            getattr(self, "max_image_pixels", DEFAULT_MAX_IMAGE_PIXELS)
+        )
+        effective_video_fps = min(float(profile_video_fps), runner_video_fps)
+        effective_max_image_pixels = min(int(profile_max_image_pixels), runner_max_image_pixels)
         multimodal_content = kwargs.get("multimodal_content")
         if multimodal_content is not None:
             guarded_content = []
             for original_item in multimodal_content:
                 item = dict(original_item)
                 if item.get("type") == "video":
-                    requested_fps = float(item.get("fps", self.video_fps))
-                    requested_pixels = int(item.get("max_pixels", self.max_image_pixels))
-                    item["fps"] = min(requested_fps, self.video_fps)
-                    item["max_pixels"] = min(requested_pixels, self.max_image_pixels)
+                    requested_fps = float(item.get("fps", effective_video_fps))
+                    requested_pixels = int(item.get("max_pixels", effective_max_image_pixels))
+                    item["fps"] = min(requested_fps, effective_video_fps)
+                    item["max_pixels"] = min(requested_pixels, effective_max_image_pixels)
                 guarded_content.append(item)
             kwargs = {**kwargs, "multimodal_content": guarded_content}
         queued_at = time.time()
@@ -1137,13 +1180,20 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
             args = list(args)
             if len(args) > 2 and args[2]:
                 args[2] = [
-                    self._prepare_video_for_memory_safe_decode(path) for path in args[2]
+                    self._prepare_video_for_memory_safe_decode(
+                        path,
+                        video_fps=effective_video_fps,
+                    )
+                    for path in args[2]
                 ]
             elif kwargs.get("video_paths"):
                 kwargs = {
                     **kwargs,
                     "video_paths": [
-                        self._prepare_video_for_memory_safe_decode(path)
+                        self._prepare_video_for_memory_safe_decode(
+                            path,
+                            video_fps=effective_video_fps,
+                        )
                         for path in kwargs["video_paths"]
                     ],
                 }
@@ -1153,7 +1203,8 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
                     item = dict(original_item)
                     if item.get("type") == "video" and item.get("video"):
                         item["video"] = self._prepare_video_for_memory_safe_decode(
-                            item["video"]
+                            item["video"],
+                            video_fps=effective_video_fps,
                         )
                     prepared_content.append(item)
                 kwargs = {**kwargs, "multimodal_content": prepared_content}

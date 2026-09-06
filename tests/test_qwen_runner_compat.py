@@ -34,6 +34,18 @@ def test_generation_call_profile_validates_output_budget() -> None:
     assert profile.disable_thinking is False
 
 
+def test_generation_call_profile_can_override_video_quality_per_stage() -> None:
+    profile = GenerationCallProfile(
+        max_new_tokens=8192,
+        disable_thinking=True,
+        video_fps=0.5,
+        max_image_pixels=131_072,
+    )
+
+    assert profile.video_fps == 0.5
+    assert profile.max_image_pixels == 131_072
+
+
 def test_generation_call_profile_rejects_non_positive_budget() -> None:
     with pytest.raises(ValueError, match="max_new_tokens must be positive"):
         GenerationCallProfile(max_new_tokens=0, disable_thinking=False)
@@ -256,14 +268,20 @@ def test_memory_safe_runner_caps_explicit_multimodal_video_budget(monkeypatch) -
             {"type": "video", "video": "one.mp4", "fps": 1.0, "max_pixels": 262_144},
             {"type": "text", "text": "Question"},
         ],
+        call_profile=GenerationCallProfile(
+            max_new_tokens=2048,
+            disable_thinking=True,
+            video_fps=0.25,
+            max_image_pixels=65_536,
+        ),
     )
 
     assert result["content"] == [
         {
             "type": "video",
             "video": str(Path("one.mp4").resolve()),
-            "fps": 0.5,
-            "max_pixels": 131_072,
+            "fps": 0.25,
+            "max_pixels": 65_536,
         },
         {"type": "text", "text": "Question"},
     ]

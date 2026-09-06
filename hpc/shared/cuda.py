@@ -218,7 +218,8 @@ class Controller(threading.Thread):
         threshold: int,
         reserve_mem_gb: float,
         max_prealloc_gb: float,
-        start_used_mib: int,
+        start_after_seconds: float,
+        job_start_epoch_seconds: float = 0.0,
     ) -> None:
         super().__init__(daemon=True)
         self.gpu = gpu_idx
@@ -226,7 +227,8 @@ class Controller(threading.Thread):
         self.target_margin = 8
         self.reserve = reserve_mem_gb
         self.max_prealloc = max_prealloc_gb
-        self.start_used_mib = start_used_mib
+        self.start_after_seconds = max(0.0, float(start_after_seconds))
+        self.job_start_epoch_seconds = max(0.0, float(job_start_epoch_seconds))
         # Thread.join() calls Thread._stop(); never shadow that internal method.
         self._stop_event = threading.Event()
 
@@ -246,6 +248,8 @@ class Controller(threading.Thread):
         last_pick = 0.0
         last_control = 0.0
         last_sample = 0.0
+        keeper_started_monotonic = time.monotonic()
+        activation_logged = False
 
         while not self._stop_event.is_set():
             current = time.time()
@@ -253,17 +257,28 @@ class Controller(threading.Thread):
                 time.sleep(0.05)
                 continue
             last_sample = current
-            total_util = nv.util_total()
-            total, used, free = nv.mem()
-            used_mib = used // (1024**2)
-            if used_mib < self.start_used_mib:
+            if self.job_start_epoch_seconds > 0:
+                elapsed_seconds = max(0.0, current - self.job_start_epoch_seconds)
+            else:
+                elapsed_seconds = max(0.0, time.monotonic() - keeper_started_monotonic)
+            if elapsed_seconds < self.start_after_seconds:
                 print(
-                    f"[{now_hms()}] gpu:{self.gpu} | waiting_for_model_memory "
-                    f"used:{used_mib} MiB < start:{self.start_used_mib} MiB",
+                    f"[{now_hms()}] gpu:{self.gpu} | waiting_for_start_time "
+                    f"elapsed:{elapsed_seconds:.1f}s < start:{self.start_after_seconds:.1f}s",
                     flush=True,
                 )
                 time.sleep(self.SAMPLE_INTERVAL)
                 continue
+            if not activation_logged:
+                print(
+                    f"[{now_hms()}] gpu:{self.gpu} | start_time_reached "
+                    f"elapsed:{elapsed_seconds:.1f}s start:{self.start_after_seconds:.1f}s",
+                    flush=True,
+                )
+                activation_logged = True
+            total_util = nv.util_total()
+            total, used, free = nv.mem()
+            used_mib = used // (1024**2)
             if burner is None:
                 burner = Burner(
                     device,
@@ -348,10 +363,15 @@ def main() -> None:
     parser.add_argument("--gpus", default="all")
     parser.add_argument("--reserve", default="5.0")
     parser.add_argument("--max-prealloc", type=float, default=2.5)
-    parser.add_argument("--start-used-mib", type=int, default=8192)
+    parser.add_argument("--start-after-seconds", type=float, default=7200.0)
+    parser.add_argument("--job-start-epoch-seconds", type=float, default=0.0)
     args = parser.parse_args()
     if not torch.cuda.is_available():
         raise SystemExit("CUDA not available")
+    if args.start_after_seconds < 0:
+        raise SystemExit("--start-after-seconds must be non-negative")
+    if args.job_start_epoch_seconds < 0:
+        raise SystemExit("--job-start-epoch-seconds must be non-negative")
     gpu_list = parse_gpus_arg(args.gpus, torch.cuda.device_count())
     if not gpu_list:
         raise SystemExit("No GPUs selected")
@@ -362,7 +382,8 @@ def main() -> None:
             args.threshold,
             reserve,
             max_prealloc_gb=args.max_prealloc,
-            start_used_mib=args.start_used_mib,
+            start_after_seconds=args.start_after_seconds,
+            job_start_epoch_seconds=args.job_start_epoch_seconds,
         )
         for gpu, reserve in zip(gpu_list, reserves)
     ]

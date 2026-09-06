@@ -130,9 +130,9 @@ def six_user_ten_minute_reasoning_profiles(
 
 
 def six_user_ten_minute_fast_profiles() -> dict[str, GenerationCallProfile]:
-    """Return the approved stage-specific profile for fast 10-minute review."""
+    """Return the fast profile with thinking disabled for every model stage."""
 
-    generator = GenerationCallProfile(max_new_tokens=8192, disable_thinking=False)
+    generator = GenerationCallProfile(max_new_tokens=8192, disable_thinking=True)
     formality = GenerationCallProfile(max_new_tokens=1024, disable_thinking=True)
     speaker_answerability = GenerationCallProfile(
         max_new_tokens=2048,
@@ -140,11 +140,11 @@ def six_user_ten_minute_fast_profiles() -> dict[str, GenerationCallProfile]:
     )
     all_six_answerability = GenerationCallProfile(
         max_new_tokens=4096,
-        disable_thinking=False,
+        disable_thinking=True,
     )
     groundedness = GenerationCallProfile(
         max_new_tokens=4096,
-        disable_thinking=False,
+        disable_thinking=True,
     )
     repair = GenerationCallProfile(max_new_tokens=1024, disable_thinking=True)
     return {
@@ -157,6 +157,49 @@ def six_user_ten_minute_fast_profiles() -> dict[str, GenerationCallProfile]:
         "evidence_segment_observation": groundedness,
         "evidence_groundedness_aggregation": groundedness,
         "json_repair": repair,
+    }
+
+
+def six_user_one_pass_profiles() -> dict[str, GenerationCallProfile]:
+    """Return the one-pass profile with higher-quality generator media."""
+
+    generator = GenerationCallProfile(
+        max_new_tokens=4096,
+        disable_thinking=True,
+        video_fps=0.5,
+        max_image_pixels=65_536,
+    )
+    judge = GenerationCallProfile(
+        max_new_tokens=4096,
+        disable_thinking=True,
+        video_fps=0.25,
+        max_image_pixels=65_536,
+    )
+    return {
+        "generator": generator,
+        "qa_formality": GenerationCallProfile(
+            max_new_tokens=1024,
+            disable_thinking=True,
+            video_fps=0.25,
+            max_image_pixels=65_536,
+        ),
+        "speaker_only_answerability": GenerationCallProfile(
+            max_new_tokens=2048,
+            disable_thinking=True,
+            video_fps=0.25,
+            max_image_pixels=65_536,
+        ),
+        "all_six_answerability": judge,
+        "answerability": judge,
+        "evidence_groundedness": judge,
+        "evidence_segment_observation": judge,
+        "evidence_groundedness_aggregation": judge,
+        "json_repair": GenerationCallProfile(
+            max_new_tokens=1024,
+            disable_thinking=True,
+            video_fps=0.25,
+            max_image_pixels=65_536,
+        ),
     }
 
 
@@ -3119,6 +3162,8 @@ def run_answerability_condition_eval(
     if call_profile is not None:
         prompt_row["reasoning_enabled"] = not call_profile.disable_thinking
         prompt_row["max_new_tokens"] = call_profile.max_new_tokens
+        prompt_row["video_fps"] = call_profile.video_fps
+        prompt_row["max_image_pixels"] = call_profile.max_image_pixels
     prompt_rows.append(prompt_row)
     stage_start = time.time()
     print(
@@ -3870,6 +3915,16 @@ def run_parallel_review_judges(
             "image_paths": full_image_paths,
             "video_paths": full_video_paths,
             "media_role": judge_media_role,
+            "video_fps": (
+                active_stage_profiles.get("evidence_groundedness").video_fps
+                if active_stage_profiles.get("evidence_groundedness") is not None
+                else None
+            ),
+            "max_image_pixels": (
+                active_stage_profiles.get("evidence_groundedness").max_image_pixels
+                if active_stage_profiles.get("evidence_groundedness") is not None
+                else None
+            ),
             "model_id": getattr(runner, "model_id", None),
             "generator_rationale_included": include_generator_rationale,
             "pass_fail_only": True,
@@ -4137,6 +4192,7 @@ def generate_video_qa_loop(
     judge_reasoning_effort: str | None = None,
     six_user_ten_minute_reasoning_profile: bool = False,
     six_user_ten_minute_fast_profile: bool = False,
+    six_user_one_pass_profile: bool = False,
     fail_fast_review: bool = False,
     formality_max_new_tokens: int = 2048,
     qa_formality_use_generator: bool = False,
@@ -4160,7 +4216,9 @@ def generate_video_qa_loop(
     attempts_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     judge_include_generator_rationale = False
-    if six_user_ten_minute_fast_profile:
+    if six_user_one_pass_profile:
+        stage_profiles = six_user_one_pass_profiles()
+    elif six_user_ten_minute_fast_profile:
         stage_profiles = six_user_ten_minute_fast_profiles()
     elif six_user_ten_minute_reasoning_profile:
         stage_profiles = six_user_ten_minute_reasoning_profiles(
@@ -4272,8 +4330,12 @@ def generate_video_qa_loop(
     print(
         "qa_runner_config "
         f"generator_backend={active_backend} generator_model={runner.model_id} "
+        f"generator_video_fps={getattr(stage_profiles.get('generator'), 'video_fps', None)} "
+        f"generator_max_image_pixels={getattr(stage_profiles.get('generator'), 'max_image_pixels', None)} "
         f"qa_formality_model={qa_formality_runner.model_id} "
         f"visual_judge_backend={active_judge_backend} visual_judge_model={judge_runner.model_id} "
+        f"judge_video_fps={getattr(stage_profiles.get('all_six_answerability'), 'video_fps', None)} "
+        f"judge_max_image_pixels={getattr(stage_profiles.get('all_six_answerability'), 'max_image_pixels', None)} "
         f"judge_runner_shared_with_generator={judge_runner is runner} "
         f"visual_judge_reasoning_effort={judge_reasoning_effort or 'provider_default'} "
         f"judge_video_source={judge_video_source} "
@@ -4681,6 +4743,14 @@ def generate_video_qa_loop(
                     "image_paths": image_paths,
                     "video_paths": video_paths,
                     "generator_decode": decode_config,
+                    **(
+                        {
+                            "video_fps": stage_profiles["generator"].video_fps,
+                            "max_image_pixels": stage_profiles["generator"].max_image_pixels,
+                        }
+                        if "generator" in stage_profiles
+                        else {}
+                    ),
                 }
             )
             stage_start = time.time()
@@ -5076,6 +5146,13 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--six-user-one-pass-profile",
+        action="store_true",
+        help=(
+            "Use the one-pass profile: higher-quality generator video media and lower-cost judge media."
+        ),
+    )
+    parser.add_argument(
         "--fail-fast-review",
         action="store_true",
         help=(
@@ -5201,6 +5278,7 @@ def main(argv: list[str] | None = None) -> int:
             args.six_user_ten_minute_reasoning_profile
         ),
         six_user_ten_minute_fast_profile=args.six_user_ten_minute_fast_profile,
+        six_user_one_pass_profile=args.six_user_one_pass_profile,
         fail_fast_review=args.fail_fast_review,
         formality_max_new_tokens=args.formality_max_new_tokens,
         qa_formality_use_generator=args.qa_formality_use_generator,

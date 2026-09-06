@@ -14,6 +14,7 @@
 set -euo pipefail
 
 RUN_MODE="${RUN_MODE:-six_user_qa_runtime_probe}"
+JOB_START_EPOCH_SECONDS="${JOB_START_EPOCH_SECONDS:-$(date +%s)}"
 ACCEPTED_TARGET="${ACCEPTED_TARGET:-1}"
 EVIDENCE_TARGET="${EVIDENCE_TARGET:-1}"
 MAX_GROUPS="${MAX_GROUPS:-16}"
@@ -30,6 +31,9 @@ SINGLE_CANDIDATE_GROUP="${SINGLE_CANDIDATE_GROUP:-0}"
 TARGET_GENERATION_GROUPS="${TARGET_GENERATION_GROUPS:-1}"
 EXPECTED_QA_PER_GROUP="${EXPECTED_QA_PER_GROUP:-0}"
 ONE_CANDIDATE_PER_GROUP="${ONE_CANDIDATE_PER_GROUP:-0}"
+ONE_PASS_30_SLOT_MODE="${ONE_PASS_30_SLOT_MODE:-0}"
+PRECOMPUTED_CANDIDATE_ASSETS_ROOT="${PRECOMPUTED_CANDIDATE_ASSETS_ROOT:-}"
+PRECOMPUTED_SOURCE_JOB_ID="${PRECOMPUTED_SOURCE_JOB_ID:-16699348}"
 GENERATOR_DECODE_MODE="${GENERATOR_DECODE_MODE:-greedy}"
 GENERATOR_TEMPERATURE="${GENERATOR_TEMPERATURE:-0.7}"
 GENERATOR_TOP_P="${GENERATOR_TOP_P:-0.9}"
@@ -37,12 +41,14 @@ MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-2048}"
 FORMALITY_MAX_NEW_TOKENS="${FORMALITY_MAX_NEW_TOKENS:-2048}"
 SIX_USER_TEN_MINUTE_REASONING_PROFILE="${SIX_USER_TEN_MINUTE_REASONING_PROFILE:-0}"
 SIX_USER_TEN_MINUTE_FAST_PROFILE="${SIX_USER_TEN_MINUTE_FAST_PROFILE:-0}"
+SIX_USER_ONE_PASS_PROFILE="${SIX_USER_ONE_PASS_PROFILE:-0}"
 FAIL_FAST_REVIEW="${FAIL_FAST_REVIEW:-0}"
 export PRUNING_MAX_CROSS_GAP_SECONDS MAX_NEW_TOKENS FORMALITY_MAX_NEW_TOKENS
 export SIX_USER_TEN_MINUTE_REASONING_PROFILE
-export SIX_USER_TEN_MINUTE_FAST_PROFILE FAIL_FAST_REVIEW
+export SIX_USER_TEN_MINUTE_FAST_PROFILE SIX_USER_ONE_PASS_PROFILE FAIL_FAST_REVIEW
 export EXPECTED_QA_PER_GROUP
-export ONE_CANDIDATE_PER_GROUP
+export ONE_CANDIDATE_PER_GROUP ONE_PASS_30_SLOT_MODE
+export PRECOMPUTED_CANDIDATE_ASSETS_ROOT PRECOMPUTED_SOURCE_JOB_ID
 
 PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/outputs/six_user_qa}"
@@ -61,7 +67,7 @@ CUDA_KEEPER_THRESHOLD="${CUDA_KEEPER_THRESHOLD:-60}"
 CUDA_KEEPER_GPUS="${CUDA_KEEPER_GPUS:-0}"
 CUDA_KEEPER_RESERVE="${CUDA_KEEPER_RESERVE:-8.0}"
 CUDA_KEEPER_MAX_PREALLOC="${CUDA_KEEPER_MAX_PREALLOC:-2.5}"
-CUDA_KEEPER_START_USED_MIB="${CUDA_KEEPER_START_USED_MIB:-8192}"
+CUDA_KEEPER_START_AFTER_SECONDS="${CUDA_KEEPER_START_AFTER_SECONDS:-7200}"
 CUDA_KEEPER_AUTO_INSTALL="${CUDA_KEEPER_AUTO_INSTALL:-0}"
 CUDA_KEEPER_PID=""
 TERMINATION_REQUESTED="0"
@@ -194,6 +200,10 @@ payload = {
     "formality_max_new_tokens": int("${FORMALITY_MAX_NEW_TOKENS}"),
     "ten_minute_reasoning_profile": bool(int("${SIX_USER_TEN_MINUTE_REASONING_PROFILE}")),
     "ten_minute_fast_profile": bool(int("${SIX_USER_TEN_MINUTE_FAST_PROFILE}")),
+    "one_pass_30_slot_mode": bool(int("${ONE_PASS_30_SLOT_MODE}")),
+    "one_pass_profile": bool(int("${SIX_USER_ONE_PASS_PROFILE}")),
+    "precomputed_candidate_assets_root": "${PRECOMPUTED_CANDIDATE_ASSETS_ROOT}",
+    "precomputed_source_job_id": "${PRECOMPUTED_SOURCE_JOB_ID}",
     "fail_fast_review": bool(int("${FAIL_FAST_REVIEW}")),
     "runtime_probe_allow_zero_accepted": bool(int("${RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED}")),
     "selected_count": 6,
@@ -207,10 +217,11 @@ payload = {
         "script": "${CUDA_KEEPER_SCRIPT}",
         "threshold": int("${CUDA_KEEPER_THRESHOLD}"),
         "gpus": "${CUDA_KEEPER_GPUS}",
-        "reserve_gb": float("${CUDA_KEEPER_RESERVE}"),
-        "max_prealloc_gb": float("${CUDA_KEEPER_MAX_PREALLOC}"),
-        "start_used_mib": int("${CUDA_KEEPER_START_USED_MIB}"),
-        "log_path": "${OUTDIR}/cuda_keeper_${SLURM_JOB_ID}.log",
+    "reserve_gb": float("${CUDA_KEEPER_RESERVE}"),
+    "max_prealloc_gb": float("${CUDA_KEEPER_MAX_PREALLOC}"),
+    "start_after_seconds": float("${CUDA_KEEPER_START_AFTER_SECONDS}"),
+    "job_start_epoch_seconds": float("${JOB_START_EPOCH_SECONDS}"),
+    "log_path": "${OUTDIR}/cuda_keeper_${SLURM_JOB_ID}.log",
     },
 }
 path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -291,7 +302,8 @@ PY
         --gpus "${CUDA_KEEPER_GPUS}" \
         --reserve "${CUDA_KEEPER_RESERVE}" \
         --max-prealloc "${CUDA_KEEPER_MAX_PREALLOC}" \
-        --start-used-mib "${CUDA_KEEPER_START_USED_MIB}" \
+        --start-after-seconds "${CUDA_KEEPER_START_AFTER_SECONDS}" \
+        --job-start-epoch-seconds "${JOB_START_EPOCH_SECONDS}" \
         > "${OUTDIR}/cuda_keeper_${SLURM_JOB_ID:-local}.log" 2>&1 &
       CUDA_KEEPER_PID=$!
       sleep 2
@@ -322,7 +334,21 @@ payload["pip_check_status"] = "${PIP_CHECK_STATUS}"
 path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
 
-echo "stage=build_manifest"
+if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then
+  if [[ -z "${PRECOMPUTED_CANDIDATE_ASSETS_ROOT}" ]]; then
+    echo "STOP: one-pass mode requires PRECOMPUTED_CANDIDATE_ASSETS_ROOT" >&2
+    exit 1
+  fi
+  echo "stage=restore_precomputed_speaker_candidates source_job=${PRECOMPUTED_SOURCE_JOB_ID}"
+  "${PYTHON}" "${PROJECT_ROOT}/tools/build_six_user_one_pass_evidence.py" \
+    --asset "${PRECOMPUTED_CANDIDATE_ASSETS_ROOT}/DAY1_17200000_group_relative_clip.json" \
+    --asset "${PRECOMPUTED_CANDIDATE_ASSETS_ROOT}/DAY3_17000000_group_relative_clip.json" \
+    --asset "${PRECOMPUTED_CANDIDATE_ASSETS_ROOT}/DAY4_21400000_group_relative_clip.json" \
+    --compact-output "${OUTDIR}/six_user_candidates.jsonl" \
+    --expanded-output "${OUTDIR}/one_pass_evidence.jsonl" \
+    --source-job-id "${PRECOMPUTED_SOURCE_JOB_ID}"
+else
+  echo "stage=build_manifest"
 python -m egolife_two_user_qa build_manifest \
   --output "${OUTDIR}/manifest.json" \
   --no-overlays
@@ -361,6 +387,7 @@ python "${PROJECT_ROOT}/group_relative_clip_sampling.py" \
   --random-seed 42 \
   --download-media \
   "${CANDIDATE_MODE_ARGS[@]}"
+fi
 
 python - "${OUTDIR}/six_user_candidates.jsonl" "${TARGET_GENERATION_GROUPS}" "${ONE_CANDIDATE_PER_GROUP}" <<'PY'
 import json
@@ -567,8 +594,11 @@ PY
 
 echo "stage=generate_six_user_qa"
 QA_TIME_ARGS=()
+EVIDENCE_INPUT_PATH="${OUTDIR}/six_user_candidates.jsonl"
 QA_PROFILE_ARGS=(--disable-thinking)
-if [[ "${SIX_USER_TEN_MINUTE_REASONING_PROFILE}" == "1" ]]; then
+if [[ "${SIX_USER_ONE_PASS_PROFILE}" == "1" ]]; then
+  QA_PROFILE_ARGS=(--six-user-one-pass-profile)
+elif [[ "${SIX_USER_TEN_MINUTE_REASONING_PROFILE}" == "1" ]]; then
   QA_PROFILE_ARGS=(
     --six-user-ten-minute-reasoning-profile
     --formality-max-new-tokens "${FORMALITY_MAX_NEW_TOKENS}"
@@ -590,9 +620,13 @@ if [[ "${QA_TIME_BUDGET_MODE}" == "1" ]]; then
     QA_TIME_ARGS+=(--max-generation-slots "${MAX_GENERATION_SLOTS}")
   fi
 fi
+if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then
+  EVIDENCE_INPUT_PATH="${OUTDIR}/one_pass_evidence.jsonl"
+  QA_TIME_ARGS+=(--attempts-output "${OUTDIR}/qa_mcq.attempts.jsonl")
+fi
 set +e
 python -m egolife_two_user_qa generate_video_qa_loop \
-  --evidence "${OUTDIR}/six_user_candidates.jsonl" \
+  --evidence "${EVIDENCE_INPUT_PATH}" \
   --output "${OUTDIR}/qa_mcq.jsonl" \
   --prompts-output "${OUTDIR}/video_first_prompts.jsonl" \
   --rejected-output "${OUTDIR}/qa_mcq.rejected.jsonl" \
@@ -616,11 +650,23 @@ python -m egolife_two_user_qa generate_video_qa_loop \
 GENERATION_EXIT_CODE="$?"
 set -e
 
-if [[ "${GENERATION_EXIT_CODE}" -ne 0 && "${TERMINATION_REQUESTED}" != "1" ]]; then
+if [[ "${GENERATION_EXIT_CODE}" -ne 0 && "${TERMINATION_REQUESTED}" != "1" && "${ONE_PASS_30_SLOT_MODE}" != "1" ]]; then
   echo "STOP: QA generation failed exit_code=${GENERATION_EXIT_CODE}"
   exit "${GENERATION_EXIT_CODE}"
 fi
 
+if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then
+  "${PYTHON}" "${PROJECT_ROOT}/tools/summarize_six_user_one_pass.py" \
+    --evidence "${OUTDIR}/one_pass_evidence.jsonl" \
+    --accepted "${OUTDIR}/qa_mcq.jsonl" \
+    --rejected "${OUTDIR}/qa_mcq.rejected.jsonl" \
+    --prompts "${OUTDIR}/video_first_prompts.jsonl" \
+    --attempts "${OUTDIR}/qa_mcq.attempts.jsonl" \
+    --output "${OUTDIR}/six_user_qa_result.json" \
+    --manifest "${OUTDIR}/job_manifest.json" \
+    --expected-slots 30 \
+    --generation-exit-code "${GENERATION_EXIT_CODE}"
+else
 python - "${OUTDIR}" "${ACCEPTED_TARGET}" "${ALLOW_PARTIAL}" "${MAX_ATTEMPTS}" \
   "${QA_TIME_BUDGET_MODE}" "${EVIDENCE_DURATION_SECONDS}" "${PRUNING_BLOCK_SECONDS}" \
   "${QA_DEADLINE_EPOCH_SECONDS}" "${MAX_GENERATION_SLOTS}" \
@@ -991,6 +1037,8 @@ if status == "failed":
         "inspect rejected and intermediate rows before another GPU submission"
     )
 PY
+
+fi
 
 if [[ -s "${OUTDIR}/qa_mcq.jsonl" ]]; then
   python -m egolife_two_user_qa validate_outputs \

@@ -977,6 +977,7 @@ def main(argv: list[str] | None = None) -> int:
             judge_max_new_tokens=args.judge_max_new_tokens,
             judge_reasoning_effort=args.judge_reasoning_effort,
             six_user_ten_minute_fast_profile=args.six_user_ten_minute_fast_profile,
+            six_user_one_pass_profile=args.six_user_one_pass_profile,
             fail_fast_review=args.fail_fast_review,
             qa_formality_use_generator=args.qa_formality_use_generator,
             judge_video_source=args.judge_video_source,

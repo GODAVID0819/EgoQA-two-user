@@ -65,12 +65,12 @@ def test_six_user_ten_minute_reasoning_profiles_allow_formality_token_override()
     assert profiles["json_repair"] is profiles["qa_formality"]
 
 
-def test_six_user_ten_minute_fast_profiles_match_approved_stage_contract() -> None:
+def test_six_user_ten_minute_fast_profiles_disable_thinking_stage_contract() -> None:
     profiles = video_qa_loop.six_user_ten_minute_fast_profiles()
 
     assert (profiles["generator"].max_new_tokens, profiles["generator"].disable_thinking) == (
         8192,
-        False,
+        True,
     )
     assert (
         profiles["qa_formality"].max_new_tokens,
@@ -83,15 +83,37 @@ def test_six_user_ten_minute_fast_profiles_match_approved_stage_contract() -> No
     assert (
         profiles["all_six_answerability"].max_new_tokens,
         profiles["all_six_answerability"].disable_thinking,
-    ) == (4096, False)
+    ) == (4096, True)
     assert (
         profiles["evidence_groundedness"].max_new_tokens,
         profiles["evidence_groundedness"].disable_thinking,
-    ) == (4096, False)
+    ) == (4096, True)
     assert (profiles["json_repair"].max_new_tokens, profiles["json_repair"].disable_thinking) == (
         1024,
         True,
     )
+
+
+def test_six_user_one_pass_profiles_use_stage_specific_video_quality() -> None:
+    profiles = video_qa_loop.six_user_one_pass_profiles()
+
+    assert (profiles["generator"].max_new_tokens, profiles["generator"].video_fps, profiles["generator"].max_image_pixels) == (
+        4096,
+        0.5,
+        65_536,
+    )
+    for name in (
+        "qa_formality",
+        "speaker_only_answerability",
+        "all_six_answerability",
+        "evidence_groundedness",
+        "json_repair",
+    ):
+        assert (profiles[name].video_fps, profiles[name].max_image_pixels) == (
+            0.25,
+            65_536,
+        )
+        assert profiles[name].disable_thinking is True
 
 
 def test_video_first_schema_does_not_require_why_two_users_needed() -> None:
