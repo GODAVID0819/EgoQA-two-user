@@ -184,7 +184,7 @@ def test_reasoned_then_finalize_reserves_independent_final_budget() -> None:
     assert "reasoning draft" in str(runner.calls[1]["prompt"])
 
 
-def test_generator_stage_uses_reasoning_sampling_then_greedy_finalizer() -> None:
+def test_generator_stage_uses_text_only_greedy_finalizer() -> None:
     class Runner:
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
@@ -221,7 +221,7 @@ def test_generator_stage_uses_reasoning_sampling_then_greedy_finalizer() -> None
     assert runner.calls[0]["call_profile"] is profiles["generator_reasoning"]
     assert runner.calls[1]["kwargs"] == {}
     assert runner.calls[1]["call_profile"] is profiles["generator_finalizer"]
-    assert runner.calls[1]["image_paths"] == ["speaker.jpg", "provider.jpg"]
+    assert runner.calls[1]["image_paths"] == []
 
 
 def test_generator_output_repair_is_text_only_and_no_thinking() -> None:

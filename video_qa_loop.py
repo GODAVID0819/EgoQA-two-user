@@ -372,7 +372,7 @@ def run_generator_stage(
             video_paths=video_paths,
             reasoning_profile=reasoning_profile,
             finalizer_profile=finalizer_profile,
-            finalizer_reuses_media=True,
+            finalizer_reuses_media=False,
             reasoning_generation_kwargs=generation_kwargs,
         )
         return {
