@@ -754,6 +754,9 @@ fi
 if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then
   EVIDENCE_INPUT_PATH="${OUTDIR}/one_pass_evidence.jsonl"
   QA_TIME_ARGS+=(--attempts-output "${OUTDIR}/qa_mcq.attempts.jsonl")
+  if [[ -n "${MAX_GENERATION_SLOTS}" ]]; then
+    QA_TIME_ARGS+=(--max-generation-slots "${MAX_GENERATION_SLOTS}")
+  fi
 fi
 set +e
 python -m egolife_two_user_qa generate_video_qa_loop \

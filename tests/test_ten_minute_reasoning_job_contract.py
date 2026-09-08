@@ -100,6 +100,10 @@ def test_runtime_supports_precomputed_one_pass_evidence_without_mining() -> None
     assert 'stage=mine_six_user_candidates' in runtime
     assert '--six-user-one-pass-profile' in runtime
     assert '--repeat-evidence' in runtime
+    final_one_pass_block = runtime.partition(
+        'if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then\n  EVIDENCE_INPUT_PATH='
+    )[2].partition("set +e")[0]
+    assert '--max-generation-slots "${MAX_GENERATION_SLOTS}"' in final_one_pass_block
 
 
 def test_cli_forwards_fast_profile_and_fail_fast_review_to_generation_loop() -> None:
