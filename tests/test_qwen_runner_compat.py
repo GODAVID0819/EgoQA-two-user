@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
+import sys
 import threading
 import time
 
@@ -62,6 +63,161 @@ def test_api_runners_accept_per_call_profile() -> None:
         OpenAICompatibleLocalRunner.generate
     ).parameters
     assert "call_profile" in inspect.signature(GeminiRunner.generate).parameters
+
+
+def test_vllm_runner_uses_flash_kernels_batching_and_per_call_profile(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runner_class = getattr(qwen_runner_module, "Qwen3VLLocalVLLMRunner")
+    captured = {}
+
+    class FakeSamplingParams:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeLLM:
+        def __init__(self, **kwargs):
+            captured["engine_kwargs"] = kwargs
+            captured["engine"] = self
+            self.enqueue_calls = []
+            self.pending = []
+            self.wait_batch_sizes = []
+
+        def get_tokenizer(self):
+            return SimpleNamespace(name="fake-tokenizer")
+
+        def enqueue_chat(self, messages, **kwargs):
+            external_request_id = str(len(self.enqueue_calls))
+            self.enqueue_calls.append((messages, kwargs))
+            self.pending.append(
+                SimpleNamespace(
+                    request_id=external_request_id,
+                    prompt_token_ids=[1, 2, 3],
+                    outputs=[SimpleNamespace(text="  accepted  ", token_ids=[4, 5])],
+                )
+            )
+            return [f"{external_request_id}-deadbeef"]
+
+        def wait_for_completion(self, **kwargs):
+            self.wait_batch_sizes.append(len(self.pending))
+            outputs = self.pending
+            self.pending = []
+            return outputs
+
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm",
+        SimpleNamespace(LLM=FakeLLM, SamplingParams=FakeSamplingParams),
+    )
+    monkeypatch.setattr(qwen_runner_module, "cuda_available", lambda: True)
+    environment = {
+        "VLLM_ALLOWED_LOCAL_MEDIA_PATH": str(tmp_path),
+        "VLLM_TENSOR_PARALLEL_SIZE": "2",
+        "VLLM_GPU_MEMORY_UTILIZATION": "0.9",
+        "VLLM_MAX_MODEL_LEN": "262144",
+        "VLLM_MAX_NUM_SEQS": "8",
+        "VLLM_BATCH_WAIT_MS": "100",
+        "VLLM_MAX_NUM_BATCHED_TOKENS": "32768",
+        "VLLM_MAX_IMAGES": "3600",
+        "VLLM_MAX_VIDEOS": "20",
+        "VLLM_MM_PROCESSOR_CACHE_GB": "8",
+        "VLLM_MM_PROCESSOR_CACHE_TYPE": "shm",
+        "VLLM_MM_ENCODER_TP_MODE": "data",
+        "VLLM_ATTENTION_BACKEND": "FLASH_ATTN",
+        "VLLM_MM_ENCODER_ATTN_BACKEND": "FLASH_ATTN",
+        "VLLM_GDN_PREFILL_BACKEND": "flashinfer",
+        "VLLM_MTP_SPECULATIVE_TOKENS": "1",
+        "VLLM_ENABLE_PREFIX_CACHING": "0",
+        "VLLM_VIDEO_FPS": "0.5",
+        "VLLM_MIN_IMAGE_PIXELS": "3136",
+    }
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    image = tmp_path / "frame.png"
+    video = tmp_path / "segment.mp4"
+    image.write_bytes(b"image")
+    video.write_bytes(b"video")
+    runner = runner_class(
+        "Qwen/Qwen3.8-27B",
+        max_new_tokens=128,
+        max_image_pixels=65_536,
+        dtype="bfloat16",
+        disable_thinking=False,
+    )
+
+    engine_kwargs = captured["engine_kwargs"]
+    assert runner.supports_vllm_randomized_request_ids is True
+    assert runner.caps_video_pixels_per_frame is True
+    assert engine_kwargs["tensor_parallel_size"] == 2
+    assert engine_kwargs["attention_backend"] == "FLASH_ATTN"
+    assert engine_kwargs["mm_encoder_attn_backend"] == "FLASH_ATTN"
+    assert engine_kwargs["gdn_prefill_backend"] == "flashinfer"
+    assert engine_kwargs["enable_chunked_prefill"] is True
+    assert engine_kwargs["skip_mm_profiling"] is True
+    assert engine_kwargs["mm_processor_kwargs"]["cap_pixels_per_frame"] is True
+    assert engine_kwargs["speculative_config"] == {
+        "method": "mtp",
+        "num_speculative_tokens": 1,
+    }
+
+    profile = GenerationCallProfile(
+        max_new_tokens=64,
+        disable_thinking=True,
+        video_fps=0.25,
+        max_image_pixels=32_768,
+    )
+    assert runner.generate(
+        "Review this evidence.",
+        image_paths=[str(image)],
+        video_paths=[str(video)],
+        decoding_mode="sampling",
+        temperature=0.7,
+        top_p=0.9,
+        top_k=40,
+        call_profile=profile,
+    ) == "accepted"
+
+    messages, call_kwargs = captured["engine"].enqueue_calls[0]
+    content = messages[0]["content"]
+    assert content[0]["uuid"] == runner._media_uuid(
+        image.resolve(), modality="image", video_fps=0.25, max_pixels=32_768
+    )
+    assert content[0]["uuid"] != runner._media_uuid(
+        image.resolve(), modality="image", video_fps=0.5, max_pixels=65_536
+    )
+    assert call_kwargs["chat_template_kwargs"] == {"enable_thinking": False}
+    assert call_kwargs["mm_processor_kwargs"]["fps"] == 0.25
+    assert call_kwargs["mm_processor_kwargs"]["max_pixels"] == 32_768
+    assert call_kwargs["sampling_params"].kwargs == {
+        "max_tokens": 64,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "top_k": 40,
+    }
+
+    assert runner.begin_concurrent_batch(3) is True
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [
+            executor.submit(runner.generate, f"Judge branch {index}.")
+            for index in range(3)
+        ]
+        release = runner.release_concurrent_batch(timeout_seconds=2.0)
+        results = [future.result() for future in futures]
+
+    assert release == 3
+    assert results == ["accepted", "accepted", "accepted"]
+    assert captured["engine"].wait_batch_sizes == [1, 3]
+
+
+def test_make_runner_registers_vllm_backend(monkeypatch) -> None:
+    sentinel = object()
+    runner_class = getattr(qwen_runner_module, "Qwen3VLLocalVLLMRunner")
+    monkeypatch.setattr(qwen_runner_module, "Qwen3VLLocalVLLMRunner", lambda *a, **k: sentinel)
+
+    assert qwen_runner_module.make_runner("vllm-local") is sentinel
+    assert runner_class is not None
 
 
 def test_memory_safe_vram_estimate_uses_per_call_output_budget() -> None:

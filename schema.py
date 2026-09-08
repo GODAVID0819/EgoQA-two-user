@@ -325,6 +325,26 @@ def validate_qa_item(
         elif schema_validation.get("passed") is not True:
             errors.append("review.schema_validation.passed must be true in strict mode")
 
+    minimum_status = item.get("minimum_required_users_status")
+    if minimum_status is not None and minimum_status not in {
+        "confirmed",
+        "not_determined",
+        "not_applicable",
+    }:
+        errors.append(
+            "minimum_required_users_status must be confirmed, not_determined, or not_applicable"
+        )
+    if minimum_status == "confirmed" and not item.get("minimum_required_users"):
+        errors.append(
+            "confirmed minimum_required_users_status requires a non-empty minimum_required_users"
+        )
+    if minimum_status in {"not_determined", "not_applicable"} and item.get(
+        "minimum_required_users"
+    ):
+        errors.append(
+            "non-confirmed minimum_required_users_status requires an empty minimum_required_users"
+        )
+
     return errors
 
 
@@ -348,6 +368,9 @@ def write_qa_csv(jsonl_path: str | Path, csv_path: str | Path) -> int:
         "answer",
         "required_users",
         "minimum_required_users",
+        "minimum_required_users_status",
+        "minimum_required_users_reason",
+        "minimum_required_users_basis",
         "combined_answerability",
         "review_passed",
         "question_type",
@@ -373,6 +396,15 @@ def write_qa_csv(jsonl_path: str | Path, csv_path: str | Path) -> int:
                     "required_users": ";".join(row.get("required_users", [])),
                     "minimum_required_users": ";".join(
                         row.get("minimum_required_users", [])
+                    ),
+                    "minimum_required_users_status": row.get(
+                        "minimum_required_users_status", ""
+                    ),
+                    "minimum_required_users_reason": row.get(
+                        "minimum_required_users_reason", ""
+                    ),
+                    "minimum_required_users_basis": row.get(
+                        "minimum_required_users_basis", ""
                     ),
                     "combined_answerability": row.get("combined_answerability", ""),
                     "review_passed": review.get("review_passed", review.get("status", "")),
@@ -425,6 +457,9 @@ def write_human_review_sheet(jsonl_path: str | Path, sheet_path: str | Path) -> 
                 f"- Question type: {_markdown_value(row.get('question_type'))}",
                 f"- Required users: {', '.join(row.get('required_users', []))}",
                 f"- Minimum required users: {', '.join(row.get('minimum_required_users', []))}",
+                f"- Minimum set status: {_markdown_value(row.get('minimum_required_users_status'))}",
+                f"- Minimum set reason: {_markdown_value(row.get('minimum_required_users_reason'))}",
+                f"- Minimum set basis: {_markdown_value(row.get('minimum_required_users_basis'))}",
                 f"- Review status: {_markdown_value(review.get('status'))}",
                 f"- Review passed: {_markdown_value(review.get('review_passed'))}",
                 f"- Judger gate passed: {_markdown_value((judger.get('gate') or {}).get('passed') if isinstance(judger.get('gate'), dict) else '')}",

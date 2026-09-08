@@ -25,11 +25,13 @@ from .evidence_chunk_review import (
 )
 from .qa_generation_schedule import deadline_reached, round_robin_generation_slots
 from .prompts import (
+    ANSWERABILITY_SUFFICIENCY_SCHEMA,
     DEFAULT_QUALITY_QUOTA,
     EVIDENCE_AGGREGATION_SCHEMA,
     GENERATION_MODES,
     JUDGE_OUTPUT_SCHEMA_MARKER,
     QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
+    VIDEO_GENERATION_SCHEMA,
     build_answerability_prompt,
     build_judge_minimal_verdict_probe_prompt,
     build_evidence_groundedness_judge_prompt,
@@ -37,6 +39,7 @@ from .prompts import (
     build_evidence_segment_observation_prompt,
     build_judge_json_repair_prompt,
     build_qa_formality_judge_prompt,
+    build_reasoned_finalizer_prompt,
     build_video_generation_prompt,
     formality_participant_names,
     judge_schema_for_check,
@@ -163,43 +166,105 @@ def six_user_ten_minute_fast_profiles() -> dict[str, GenerationCallProfile]:
 def six_user_one_pass_profiles() -> dict[str, GenerationCallProfile]:
     """Return the one-pass profile with higher-quality generator media."""
 
-    generator = GenerationCallProfile(
-        max_new_tokens=4096,
+    generator_reasoning = GenerationCallProfile(
+        max_new_tokens=6144,
+        disable_thinking=False,
+        video_fps=1.0,
+        max_image_pixels=131_072,
+    )
+    generator_finalizer = GenerationCallProfile(
+        max_new_tokens=2048,
+        disable_thinking=True,
+        video_fps=1.0,
+        max_image_pixels=131_072,
+    )
+    groundedness_reasoning = GenerationCallProfile(
+        max_new_tokens=5120,
+        disable_thinking=False,
+        video_fps=0.5,
+        max_image_pixels=131_072,
+    )
+    groundedness_finalizer = GenerationCallProfile(
+        max_new_tokens=1024,
         disable_thinking=True,
         video_fps=0.5,
-        max_image_pixels=65_536,
+        max_image_pixels=131_072,
     )
-    judge = GenerationCallProfile(
+    speaker_reasoning = GenerationCallProfile(
         max_new_tokens=4096,
+        disable_thinking=False,
+        video_fps=0.5,
+        max_image_pixels=131_072,
+    )
+    speaker_finalizer = GenerationCallProfile(
+        max_new_tokens=1536,
         disable_thinking=True,
-        video_fps=0.25,
-        max_image_pixels=65_536,
+        video_fps=0.5,
+        max_image_pixels=131_072,
+    )
+    all_six_reasoning = GenerationCallProfile(
+        max_new_tokens=6144,
+        disable_thinking=False,
+        video_fps=0.5,
+        max_image_pixels=131_072,
+    )
+    all_six_finalizer = GenerationCallProfile(
+        max_new_tokens=2048,
+        disable_thinking=True,
+        video_fps=0.5,
+        max_image_pixels=131_072,
+    )
+    minimum_set_reasoning = GenerationCallProfile(
+        max_new_tokens=3072,
+        disable_thinking=False,
+        video_fps=0.5,
+        max_image_pixels=131_072,
+    )
+    minimum_set_finalizer = GenerationCallProfile(
+        max_new_tokens=1536,
+        disable_thinking=True,
+        video_fps=0.5,
+        max_image_pixels=131_072,
+    )
+    formality = GenerationCallProfile(
+        max_new_tokens=1024,
+        disable_thinking=True,
+        video_fps=0.5,
+        max_image_pixels=131_072,
+    )
+    repair = GenerationCallProfile(
+        max_new_tokens=1024,
+        disable_thinking=True,
+        video_fps=0.5,
+        max_image_pixels=131_072,
     )
     return {
-        "generator": generator,
-        "qa_formality": GenerationCallProfile(
-            max_new_tokens=1024,
+        "generator": generator_reasoning,
+        "generator_reasoning": generator_reasoning,
+        "generator_finalizer": generator_finalizer,
+        "generator_json_repair": GenerationCallProfile(
+            max_new_tokens=1536,
             disable_thinking=True,
-            video_fps=0.25,
-            max_image_pixels=65_536,
+            video_fps=1.0,
+            max_image_pixels=131_072,
         ),
-        "speaker_only_answerability": GenerationCallProfile(
-            max_new_tokens=2048,
-            disable_thinking=True,
-            video_fps=0.25,
-            max_image_pixels=65_536,
-        ),
-        "all_six_answerability": judge,
-        "answerability": judge,
-        "evidence_groundedness": judge,
-        "evidence_segment_observation": judge,
-        "evidence_groundedness_aggregation": judge,
-        "json_repair": GenerationCallProfile(
-            max_new_tokens=1024,
-            disable_thinking=True,
-            video_fps=0.25,
-            max_image_pixels=65_536,
-        ),
+        "qa_formality": formality,
+        "speaker_only_answerability": speaker_reasoning,
+        "speaker_only_answerability_reasoning": speaker_reasoning,
+        "speaker_only_answerability_finalizer": speaker_finalizer,
+        "all_six_answerability": all_six_reasoning,
+        "all_six_answerability_reasoning": all_six_reasoning,
+        "all_six_answerability_finalizer": all_six_finalizer,
+        "minimum_set_answerability": minimum_set_reasoning,
+        "minimum_set_answerability_reasoning": minimum_set_reasoning,
+        "minimum_set_answerability_finalizer": minimum_set_finalizer,
+        "answerability": all_six_reasoning,
+        "evidence_groundedness": groundedness_reasoning,
+        "evidence_groundedness_reasoning": groundedness_reasoning,
+        "evidence_groundedness_finalizer": groundedness_finalizer,
+        "evidence_segment_observation": groundedness_reasoning,
+        "evidence_groundedness_aggregation": groundedness_finalizer,
+        "json_repair": repair,
     }
 
 
@@ -220,6 +285,155 @@ def generate_with_call_profile(
     if call_profile is not None:
         kwargs["call_profile"] = call_profile
     return runner.generate(prompt, **kwargs)
+
+
+def reasoned_then_finalize(
+    *,
+    runner: Any,
+    task_prompt: str,
+    output_schema: dict[str, Any],
+    stage_name: str,
+    image_paths: list[str],
+    video_paths: list[str],
+    reasoning_profile: GenerationCallProfile,
+    finalizer_profile: GenerationCallProfile,
+    finalizer_reuses_media: bool,
+    reasoning_generation_kwargs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    reasoning_start = time.time()
+    reasoning_output = generate_with_call_profile(
+        runner,
+        task_prompt,
+        image_paths=image_paths,
+        video_paths=video_paths,
+        call_profile=reasoning_profile,
+        **dict(reasoning_generation_kwargs or {}),
+    )
+    reasoning_elapsed_seconds = round(time.time() - reasoning_start, 3)
+    finalizer_prompt = build_reasoned_finalizer_prompt(
+        task_prompt=task_prompt,
+        reasoning_output=reasoning_output,
+        output_schema=output_schema,
+        stage_name=stage_name,
+    )
+    finalizer_start = time.time()
+    final_output = generate_with_call_profile(
+        runner,
+        finalizer_prompt,
+        image_paths=image_paths if finalizer_reuses_media else [],
+        video_paths=video_paths if finalizer_reuses_media else [],
+        call_profile=finalizer_profile,
+    )
+    finalizer_elapsed_seconds = round(time.time() - finalizer_start, 3)
+    return {
+        "reasoning_output": reasoning_output,
+        "final_output": final_output,
+        "finalizer_prompt": finalizer_prompt,
+        "reasoning_elapsed_seconds": reasoning_elapsed_seconds,
+        "finalizer_elapsed_seconds": finalizer_elapsed_seconds,
+        "elapsed_seconds": round(
+            reasoning_elapsed_seconds + finalizer_elapsed_seconds,
+            3,
+        ),
+    }
+
+
+def run_generator_stage(
+    *,
+    runner: Any,
+    prompt: str,
+    image_paths: list[str],
+    video_paths: list[str],
+    stage_profiles: dict[str, GenerationCallProfile],
+    decode_mode: str,
+    temperature: float,
+    top_p: float,
+    top_k: int | None,
+) -> dict[str, Any]:
+    reasoning_profile = stage_profiles.get("generator_reasoning")
+    finalizer_profile = stage_profiles.get("generator_finalizer")
+    generation_kwargs = (
+        {
+            "decoding_mode": decode_mode,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+        }
+        if decode_mode == "sampling"
+        else {}
+    )
+    if reasoning_profile is not None and finalizer_profile is not None:
+        result = reasoned_then_finalize(
+            runner=runner,
+            task_prompt=prompt,
+            output_schema=VIDEO_GENERATION_SCHEMA,
+            stage_name="generation",
+            image_paths=image_paths,
+            video_paths=video_paths,
+            reasoning_profile=reasoning_profile,
+            finalizer_profile=finalizer_profile,
+            finalizer_reuses_media=True,
+            reasoning_generation_kwargs=generation_kwargs,
+        )
+        return {
+            **result,
+            "raw_output": result["final_output"],
+            "execution_mode": "reasoned_then_finalize",
+        }
+    stage_start = time.time()
+    raw_output = generate_with_call_profile(
+        runner,
+        prompt,
+        image_paths=image_paths,
+        video_paths=video_paths,
+        call_profile=stage_profiles.get("generator"),
+        **generation_kwargs,
+    )
+    return {
+        "raw_output": raw_output,
+        "reasoning_output": None,
+        "final_output": raw_output,
+        "finalizer_prompt": None,
+        "reasoning_elapsed_seconds": None,
+        "finalizer_elapsed_seconds": None,
+        "elapsed_seconds": round(time.time() - stage_start, 3),
+        "execution_mode": "single_call",
+    }
+
+
+def parse_generator_output_with_repair(
+    *,
+    raw_output: str,
+    runner: Any,
+    repair_profile: GenerationCallProfile | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    try:
+        return extract_json_object(raw_output), {
+            "attempted": False,
+            "succeeded": False,
+        }
+    except Exception as initial_exc:
+        if repair_profile is None:
+            raise
+        repair_prompt = build_judge_json_repair_prompt(
+            raw_output,
+            VIDEO_GENERATION_SCHEMA,
+        )
+        repaired_output = generate_with_call_profile(
+            runner,
+            repair_prompt,
+            image_paths=[],
+            video_paths=[],
+            call_profile=repair_profile,
+        )
+        qa = extract_json_object(repaired_output)
+        return qa, {
+            "attempted": True,
+            "succeeded": True,
+            "initial_error": f"{type(initial_exc).__name__}: {initial_exc}",
+            "prompt": repair_prompt,
+            "raw_output": repaired_output,
+        }
 
 
 def prompt_rows_by_generation_identity(
@@ -1259,7 +1473,69 @@ def minimum_required_users_from_fact_sources(
     return [str(user) for user in required_users if str(user) in source_users]
 
 
-def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]]) -> dict[str, Any]:
+def _minimum_set_not_determined(
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "minimum_required_users": [],
+        "minimum_required_user_count": 0,
+        "minimum_required_users_status": "not_determined",
+        "minimum_required_users_reason": reason,
+    }
+
+
+def _minimum_set_confirmed(
+    users: list[str],
+    *,
+    basis: str,
+) -> dict[str, Any]:
+    return {
+        "minimum_required_users": list(users),
+        "minimum_required_user_count": len(users),
+        "minimum_required_users_status": "confirmed",
+        "minimum_required_users_reason": "judge_confirmed_minimum_set",
+        "minimum_required_users_basis": basis,
+    }
+
+
+def _attach_minimum_set_metadata(
+    qa_item: dict[str, Any],
+    answerability: dict[str, Any],
+) -> None:
+    required_users = list(qa_item.get("required_users") or [])
+    if len(required_users) != 6:
+        return
+    gate = answerability.get("gate")
+    if not isinstance(gate, dict):
+        metadata = _minimum_set_not_determined("answerability_gate_missing")
+    else:
+        metadata = {
+            key: gate[key]
+            for key in (
+                "minimum_required_users",
+                "minimum_required_user_count",
+                "minimum_required_users_status",
+                "minimum_required_users_reason",
+                "minimum_required_users_basis",
+            )
+            if key in gate
+        }
+        if "minimum_required_users" not in metadata:
+            metadata.update(
+                _minimum_set_not_determined(
+                    str(gate.get("failure_label") or "minimum_set_missing")
+                )
+            )
+    for key, value in metadata.items():
+        qa_item[key] = list(value) if key == "minimum_required_users" else value
+
+
+def answerability_gate(
+    qa_item: dict[str, Any],
+    evaluations: list[dict[str, Any]],
+    *,
+    minimum_set_audit: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     required_users = list(qa_item.get("required_users") or [])
     if len(required_users) == 6:
         speaker_rows = [
@@ -1279,6 +1555,7 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "passed": False,
                 "reason": "missing speaker-only evaluation",
                 "failure_label": "speaker_only_missing",
+                **_minimum_set_not_determined("speaker_only_missing"),
                 **base,
             }
 
@@ -1291,6 +1568,7 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "reason": f"invalid speaker-only sufficiency evaluation: {speaker_error}",
                 "failure_label": "speaker_only_unparsed",
                 "speaker_only_answerable": None,
+                **_minimum_set_not_determined("speaker_only_unparsed"),
                 **base,
             }
 
@@ -1303,6 +1581,7 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "passed": False,
                 "reason": "speaker-only videos were judged sufficient to answer the question",
                 "failure_label": "speaker_only_answerable",
+                **_minimum_set_not_determined("speaker_only_answerable"),
                 **metrics,
             }
         if not all_six_rows:
@@ -1310,6 +1589,7 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "passed": False,
                 "reason": "missing all-six evaluation",
                 "failure_label": "all_six_missing",
+                **_minimum_set_not_determined("all_six_missing"),
                 **metrics,
             }
         fact_contract_errors = canonical_fact_contract_errors(
@@ -1324,6 +1604,7 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                     + "; ".join(fact_contract_errors)
                 ),
                 "failure_label": "answerability_fact_contract_mismatch",
+                **_minimum_set_not_determined("answerability_fact_contract_mismatch"),
                 **metrics,
             }
         all_six_answerable, all_six_error = parsed_answerability_sufficiency(
@@ -1335,6 +1616,7 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "reason": f"invalid all-six sufficiency evaluation: {all_six_error}",
                 "failure_label": "all_six_unparsed",
                 "all_six_answerable": None,
+                **_minimum_set_not_determined("all_six_unparsed"),
                 **metrics,
             }
         combined_metrics = {
@@ -1346,6 +1628,42 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "passed": False,
                 "reason": "all-six videos were judged insufficient to answer the question",
                 "failure_label": "all_six_not_answerable",
+                **_minimum_set_not_determined("all_six_not_answerable"),
+                **combined_metrics,
+            }
+        if minimum_set_audit is not None:
+            selected_users = minimum_set_audit.get("selected_users")
+            if minimum_set_audit.get("status") != "confirmed" or not isinstance(
+                selected_users, list
+            ) or not selected_users:
+                return {
+                    "passed": False,
+                    "reason": (
+                        "all-six evidence passed, but no judge-verified minimum user subset "
+                        "was confirmed"
+                    ),
+                    "failure_label": "minimum_required_users_unverified",
+                    **_minimum_set_not_determined(
+                        str(
+                            minimum_set_audit.get("reason")
+                            or "minimum_required_users_unverified"
+                        )
+                    ),
+                    "minimum_set_audit": minimum_set_audit,
+                    **combined_metrics,
+                }
+            return {
+                "passed": True,
+                "reason": (
+                    "speaker-only evidence was judged insufficient, all-six evidence was "
+                    "judged sufficient, and the minimum user subset passed a judge audit"
+                ),
+                "failure_label": None,
+                **_minimum_set_confirmed(
+                    [str(user) for user in selected_users],
+                    basis="judge_verified_subset",
+                ),
+                "minimum_set_audit": minimum_set_audit,
                 **combined_metrics,
             }
         minimum_required_users = minimum_required_users_from_fact_sources(
@@ -1357,6 +1675,7 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "passed": False,
                 "reason": "all-six answerability did not identify any fact-source user",
                 "failure_label": "minimum_required_users_missing",
+                **_minimum_set_not_determined("minimum_required_users_missing"),
                 **combined_metrics,
             }
         return {
@@ -1366,10 +1685,9 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 "judged sufficient"
             ),
             "failure_label": None,
-            "minimum_required_users": minimum_required_users,
-            "minimum_required_user_count": len(minimum_required_users),
-            "minimum_required_users_basis": (
-                "visible_high_needed_fact_source_union"
+            **_minimum_set_confirmed(
+                minimum_required_users,
+                basis="visible_high_needed_fact_source_union",
             ),
             **combined_metrics,
         }
@@ -1470,6 +1788,90 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
         )
         gate["warning"] = "evidence_provider_alone_can_answer"
     return gate
+
+
+def _judge_minimum_set_from_user_audits(
+    *,
+    candidate_users: list[str],
+    speaker_evaluation: dict[str, Any],
+    canonical_facts: list[dict[str, Any]],
+    evaluate: Any,
+) -> dict[str, Any]:
+    fact_ids = [str(fact.get("fact_id") or "") for fact in canonical_facts]
+    required_fact_ids = {fact_id for fact_id in fact_ids if fact_id}
+    audit = {
+        "status": "not_determined",
+        "selected_users": [],
+        "candidate_users": list(candidate_users),
+        "attempts": [],
+        "reason": "minimum_set_audit_not_run",
+    }
+    if not required_fact_ids:
+        audit["reason"] = "canonical_facts_missing"
+        return audit
+
+    visible_by_user: dict[str, set[str]] = {}
+    for user in candidate_users:
+        condition = {
+            "condition_id": f"minimum_required_users::{user}",
+            "condition_type": "minimum_required_users",
+            "users": [user],
+        }
+        evaluation = evaluate(condition, canonical_facts=canonical_facts)
+        answerable, parse_error = parsed_answerability_sufficiency(evaluation)
+        contract_errors = canonical_fact_contract_errors(
+            speaker_evaluation,
+            evaluation,
+        )
+        visible_fact_ids = {
+            str(fact.get("fact_id"))
+            for fact in evaluation.get("needed_facts") or []
+            if isinstance(fact, dict)
+            and fact.get("visibility") == "VISIBLE"
+            and fact.get("confidence") == "HIGH"
+        }
+        visible_by_user[user] = (
+            visible_fact_ids if not contract_errors and not parse_error else set()
+        )
+        audit["attempts"].append(
+            {
+                "audit_type": "per_user_fact_audit",
+                "users": [user],
+                "answerable": answerable,
+                "parse_error": parse_error,
+                "canonical_fact_contract_errors": contract_errors,
+                "visible_fact_ids": sorted(visible_by_user[user]),
+                "evaluation": evaluation,
+            }
+        )
+
+    for subset_size in range(1, len(candidate_users) + 1):
+        for subset in itertools.combinations(candidate_users, subset_size):
+            subset_users = [str(user) for user in subset]
+            covered = set().union(
+                *(visible_by_user.get(user, set()) for user in subset_users)
+            )
+            passed = required_fact_ids.issubset(covered)
+            audit["attempts"].append(
+                {
+                    "audit_type": "text_only_fact_cover_check",
+                    "users": subset_users,
+                    "covered_fact_ids": sorted(covered),
+                    "required_fact_ids": fact_ids,
+                    "passed": passed,
+                }
+            )
+            if passed:
+                audit.update(
+                    {
+                        "status": "confirmed",
+                        "selected_users": subset_users,
+                        "reason": "judge_confirmed_minimum_set",
+                    }
+                )
+                return audit
+    audit["reason"] = "no_judge_verified_subset"
+    return audit
 
 
 def judge_gate(judge: dict[str, Any]) -> dict[str, Any]:
@@ -2296,6 +2698,8 @@ def run_model_judge_branch(
     collect_choice_logits: bool = False,
     minimal_verdict_probe_prompt: str | None = None,
     call_profile: GenerationCallProfile | None = None,
+    reasoning_call_profile: GenerationCallProfile | None = None,
+    finalizer_call_profile: GenerationCallProfile | None = None,
     repair_call_profile: GenerationCallProfile | None = None,
 ) -> dict[str, Any]:
     """Run one model judge.
@@ -2314,13 +2718,28 @@ def run_model_judge_branch(
         f"images={len(image_paths)} videos={len(video_paths)}",
         flush=True,
     )
-    raw = generate_with_call_profile(
-        runner,
-        prompt,
-        image_paths=image_paths,
-        video_paths=video_paths,
-        call_profile=call_profile,
-    )
+    reasoned_result = None
+    if reasoning_call_profile is not None and finalizer_call_profile is not None:
+        reasoned_result = reasoned_then_finalize(
+            runner=runner,
+            task_prompt=prompt,
+            output_schema=judge_schema_for_check(check_name, pass_fail_only=True),
+            stage_name=check_name,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            reasoning_profile=reasoning_call_profile,
+            finalizer_profile=finalizer_call_profile,
+            finalizer_reuses_media=False,
+        )
+        raw = str(reasoned_result["final_output"])
+    else:
+        raw = generate_with_call_profile(
+            runner,
+            prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            call_profile=call_profile,
+        )
     print(
         "qa_stage_done "
         f"stage={stage} evidence_id={evidence_id} "
@@ -2383,6 +2802,16 @@ def run_model_judge_branch(
             flush=True,
         )
     judge["raw_output"] = final_raw
+    if reasoned_result is not None:
+        judge["reasoning_output"] = reasoned_result["reasoning_output"]
+        judge["finalizer_prompt"] = reasoned_result["finalizer_prompt"]
+        judge["reasoning_elapsed_seconds"] = reasoned_result[
+            "reasoning_elapsed_seconds"
+        ]
+        judge["finalizer_elapsed_seconds"] = reasoned_result[
+            "finalizer_elapsed_seconds"
+        ]
+        judge["execution_mode"] = "reasoned_then_finalize"
     if format_repair["attempted"]:
         judge["initial_raw_output"] = initial_raw
         judge["format_repair"] = format_repair
@@ -3120,6 +3549,9 @@ def run_answerability_condition_eval(
     judge_media_role: str = "full",
     attempt: int | None = None,
     call_profile: GenerationCallProfile | None = None,
+    reasoning_call_profile: GenerationCallProfile | None = None,
+    finalizer_call_profile: GenerationCallProfile | None = None,
+    repair_call_profile: GenerationCallProfile | None = None,
     canonical_facts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     reasoning_sufficiency_mode = len(qa_item.get("required_users") or []) == 6
@@ -3159,11 +3591,16 @@ def run_answerability_condition_eval(
     }
     if canonical_facts is not None:
         prompt_row["canonical_facts"] = canonical_facts
-    if call_profile is not None:
-        prompt_row["reasoning_enabled"] = not call_profile.disable_thinking
-        prompt_row["max_new_tokens"] = call_profile.max_new_tokens
-        prompt_row["video_fps"] = call_profile.video_fps
-        prompt_row["max_image_pixels"] = call_profile.max_image_pixels
+    active_reasoning_profile = reasoning_call_profile or call_profile
+    if active_reasoning_profile is not None:
+        prompt_row["reasoning_enabled"] = not active_reasoning_profile.disable_thinking
+        prompt_row["max_new_tokens"] = active_reasoning_profile.max_new_tokens
+        prompt_row["video_fps"] = active_reasoning_profile.video_fps
+        prompt_row["max_image_pixels"] = active_reasoning_profile.max_image_pixels
+    if reasoning_call_profile is not None and finalizer_call_profile is not None:
+        prompt_row["execution_mode"] = "reasoned_then_finalize"
+        prompt_row["reasoning_max_new_tokens"] = reasoning_call_profile.max_new_tokens
+        prompt_row["finalizer_max_new_tokens"] = finalizer_call_profile.max_new_tokens
     prompt_rows.append(prompt_row)
     stage_start = time.time()
     print(
@@ -3173,14 +3610,30 @@ def run_answerability_condition_eval(
         f"images={len(image_paths)} videos={len(video_paths)}",
         flush=True,
     )
-    raw = generate_with_call_profile(
-        runner,
-        prompt,
-        image_paths=image_paths,
-        video_paths=video_paths,
-        call_profile=call_profile,
-    )
-    elapsed_seconds = round(time.time() - stage_start, 3)
+    reasoned_result = None
+    if reasoning_call_profile is not None and finalizer_call_profile is not None:
+        reasoned_result = reasoned_then_finalize(
+            runner=runner,
+            task_prompt=prompt,
+            output_schema=ANSWERABILITY_SUFFICIENCY_SCHEMA,
+            stage_name="answerability",
+            image_paths=image_paths,
+            video_paths=video_paths,
+            reasoning_profile=reasoning_call_profile,
+            finalizer_profile=finalizer_call_profile,
+            finalizer_reuses_media=False,
+        )
+        raw = str(reasoned_result["final_output"])
+        elapsed_seconds = float(reasoned_result["elapsed_seconds"])
+    else:
+        raw = generate_with_call_profile(
+            runner,
+            prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            call_profile=call_profile,
+        )
+        elapsed_seconds = round(time.time() - stage_start, 3)
     prompt_row["elapsed_seconds"] = elapsed_seconds
     print(
         "qa_stage_done "
@@ -3191,18 +3644,39 @@ def run_answerability_condition_eval(
     try:
         answer = extract_json_object(raw)
     except Exception as exc:
-        if reasoning_sufficiency_mode:
-            answer = {
-                "reason": f"parse_failed: {exc}",
-                "needed_facts": [],
+        try:
+            if repair_call_profile is None:
+                raise
+            repair_prompt = build_judge_json_repair_prompt(
+                raw,
+                ANSWERABILITY_SUFFICIENCY_SCHEMA,
+            )
+            raw = generate_with_call_profile(
+                runner,
+                repair_prompt,
+                image_paths=[],
+                video_paths=[],
+                call_profile=repair_call_profile,
+            )
+            answer = extract_json_object(raw)
+            prompt_row["format_repair"] = {
+                "attempted": True,
+                "succeeded": True,
+                "prompt": repair_prompt,
             }
-        else:
-            answer = {
-                "choice": None,
-                "answer_text": "",
-                "evidence_used": f"parse_failed: {exc}",
-            }
-    return {
+        except Exception as repair_exc:
+            if reasoning_sufficiency_mode:
+                answer = {
+                    "reason": f"parse_failed: {repair_exc}",
+                    "needed_facts": [],
+                }
+            else:
+                answer = {
+                    "choice": None,
+                    "answer_text": "",
+                    "evidence_used": f"parse_failed: {repair_exc}",
+                }
+    result = {
         **condition,
         "generation_slot_id": qa_item.get("generation_slot_id"),
         "generation_group_id": qa_item.get("generation_group_id"),
@@ -3211,6 +3685,21 @@ def run_answerability_condition_eval(
         "elapsed_seconds": elapsed_seconds,
         "condition_media": condition_media,
     }
+    if reasoned_result is not None:
+        result.update(
+            {
+                "reasoning_output": reasoned_result["reasoning_output"],
+                "finalizer_prompt": reasoned_result["finalizer_prompt"],
+                "reasoning_elapsed_seconds": reasoned_result[
+                    "reasoning_elapsed_seconds"
+                ],
+                "finalizer_elapsed_seconds": reasoned_result[
+                    "finalizer_elapsed_seconds"
+                ],
+                "execution_mode": "reasoned_then_finalize",
+            }
+        )
+    return result
 
 
 def run_answerability_eval(
@@ -3234,10 +3723,45 @@ def run_answerability_eval(
         *,
         canonical_facts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        condition_profile = active_condition_profiles.get(
-            str(condition.get("condition_type")),
-            call_profile,
-        )
+        condition_type = str(condition.get("condition_type"))
+        condition_profile = active_condition_profiles.get(condition_type, call_profile)
+        reasoning_profile = None
+        finalizer_profile = None
+        if condition_type == "speaker_only":
+            reasoning_profile = active_condition_profiles.get(
+                "speaker_only_answerability_reasoning"
+            )
+            finalizer_profile = active_condition_profiles.get(
+                "speaker_only_answerability_finalizer"
+            )
+        elif condition_type == "combined_all_six_users":
+            reasoning_profile = active_condition_profiles.get(
+                "all_six_answerability_reasoning"
+            )
+            finalizer_profile = active_condition_profiles.get(
+                "all_six_answerability_finalizer"
+            )
+        elif condition_type == "minimum_required_users":
+            reasoning_profile = active_condition_profiles.get(
+                "minimum_set_answerability_reasoning"
+            )
+            finalizer_profile = active_condition_profiles.get(
+                "minimum_set_answerability_finalizer"
+            )
+        if finalizer_profile is not None and canonical_facts:
+            fact_count = len(canonical_facts)
+            requested_budget = 512 + 256 * fact_count
+            if condition_type == "combined_all_six_users":
+                requested_budget = max(1536, min(2048, requested_budget))
+            elif condition_type == "minimum_required_users":
+                requested_budget = max(1024, min(1536, requested_budget))
+            if requested_budget != finalizer_profile.max_new_tokens:
+                finalizer_profile = GenerationCallProfile(
+                    max_new_tokens=requested_budget,
+                    disable_thinking=True,
+                    video_fps=finalizer_profile.video_fps,
+                    max_image_pixels=finalizer_profile.max_image_pixels,
+                )
         return run_answerability_condition_eval(
             qa_item=qa_item,
             packet=packet,
@@ -3249,6 +3773,9 @@ def run_answerability_eval(
             judge_media_role=judge_media_role,
             attempt=attempt,
             call_profile=condition_profile,
+            reasoning_call_profile=reasoning_profile,
+            finalizer_call_profile=finalizer_profile,
+            repair_call_profile=active_condition_profiles.get("json_repair"),
             canonical_facts=canonical_facts,
         )
 
@@ -3266,17 +3793,62 @@ def run_answerability_eval(
             for fact in speaker_evaluation.get("needed_facts") or []
             if isinstance(fact, dict)
         ]
-        evaluations = [
-            speaker_evaluation,
-            evaluate(
-                conditions_by_type["combined_all_six_users"],
-                canonical_facts=canonical_facts,
-            ),
-        ]
+        all_six_evaluation = evaluate(
+            conditions_by_type["combined_all_six_users"],
+            canonical_facts=canonical_facts,
+        )
+        evaluations = [speaker_evaluation, all_six_evaluation]
+
+        minimum_set_audit: dict[str, Any] = {
+            "status": "not_determined",
+            "selected_users": [],
+            "candidate_users": [],
+            "attempts": [],
+            "reason": "minimum_set_audit_not_run",
+        }
+        all_six_answerable, all_six_error = parsed_answerability_sufficiency(
+            all_six_evaluation
+        )
+        if all_six_error:
+            minimum_set_audit["reason"] = f"all_six_unparsed: {all_six_error}"
+        elif not all_six_answerable:
+            minimum_set_audit["reason"] = "all_six_not_answerable"
+        elif not canonical_facts:
+            minimum_set_audit["reason"] = "canonical_facts_missing"
+        else:
+            candidate_users = minimum_required_users_from_fact_sources(
+                all_six_evaluation,
+                list(qa_item.get("required_users") or []),
+            )
+            minimum_set_audit["candidate_users"] = list(candidate_users)
+            if not candidate_users:
+                minimum_set_audit["reason"] = "minimum_required_users_missing"
+            else:
+                minimum_set_audit = _judge_minimum_set_from_user_audits(
+                    candidate_users=candidate_users,
+                    speaker_evaluation=speaker_evaluation,
+                    canonical_facts=canonical_facts,
+                    evaluate=evaluate,
+                )
     else:
         evaluations = [evaluate(condition) for condition in conditions]
-    gate = answerability_gate(qa_item, evaluations)
-    return {"evaluations": evaluations, "gate": gate}
+        minimum_set_audit = {
+            "status": "not_applicable",
+            "selected_users": [],
+            "candidate_users": [],
+            "attempts": [],
+            "reason": "not_a_six_user_question",
+        }
+    gate = answerability_gate(
+        qa_item,
+        evaluations,
+        minimum_set_audit=minimum_set_audit if len(qa_item.get("required_users") or []) == 6 else None,
+    )
+    return {
+        "evaluations": evaluations,
+        "gate": gate,
+        "minimum_set_audit": minimum_set_audit,
+    }
 
 
 def run_chunked_evidence_groundedness_eval(
@@ -3506,6 +4078,8 @@ def run_evidence_groundedness_review(
     call_profile = active_profiles.get("evidence_groundedness") or active_profiles.get(
         "evidence_groundedness_aggregation"
     )
+    reasoning_profile = active_profiles.get("evidence_groundedness_reasoning")
+    finalizer_profile = active_profiles.get("evidence_groundedness_finalizer")
     prompt_row = {
         "stage": "evidence_groundedness_judge",
         "generation_slot_id": qa_item.get("generation_slot_id"),
@@ -3531,6 +4105,10 @@ def run_evidence_groundedness_review(
     if call_profile is not None:
         prompt_row["reasoning_enabled"] = not call_profile.disable_thinking
         prompt_row["max_new_tokens"] = call_profile.max_new_tokens
+    if reasoning_profile is not None and finalizer_profile is not None:
+        prompt_row["execution_mode"] = "reasoned_then_finalize"
+        prompt_row["reasoning_max_new_tokens"] = reasoning_profile.max_new_tokens
+        prompt_row["finalizer_max_new_tokens"] = finalizer_profile.max_new_tokens
     prompt_rows.append(prompt_row)
     result = run_model_judge_branch(
         check_name="evidence_groundedness",
@@ -3544,9 +4122,18 @@ def run_evidence_groundedness_review(
         collect_choice_logits=False,
         minimal_verdict_probe_prompt=None,
         call_profile=call_profile,
+        reasoning_call_profile=reasoning_profile,
+        finalizer_call_profile=finalizer_profile,
         repair_call_profile=active_profiles.get("json_repair"),
     )
     prompt_row["elapsed_seconds"] = result.get("elapsed_seconds")
+    prompt_row["format_repair"] = result.get("format_repair")
+    prompt_row["reasoning_elapsed_seconds"] = result.get(
+        "reasoning_elapsed_seconds"
+    )
+    prompt_row["finalizer_elapsed_seconds"] = result.get(
+        "finalizer_elapsed_seconds"
+    )
     return result
 
 
@@ -3661,10 +4248,7 @@ def run_fail_fast_review_judges(
         judge["skipped_checks"] = list(skipped_checks)
         gate = answerability.get("gate")
         if isinstance(gate, dict):
-            minimum_users = gate.get("minimum_required_users")
-            if isinstance(minimum_users, list) and minimum_users:
-                qa_item["minimum_required_users"] = list(minimum_users)
-                qa_item["minimum_required_user_count"] = len(minimum_users)
+            _attach_minimum_set_metadata(qa_item, answerability)
         trace = {
             "parallel": False,
             "execution_mode": "fail_fast",
@@ -3705,6 +4289,9 @@ def run_fail_fast_review_judges(
                 "passed": False,
                 "skipped": True,
                 "reason": "answerability skipped after qa_formality failure",
+                **_minimum_set_not_determined(
+                    "answerability_skipped_after_formality_failure"
+                ),
             },
         }
         return merge_result(
@@ -3735,6 +4322,13 @@ def run_fail_fast_review_judges(
             judge_media_role=judge_media_role,
             attempt=attempt,
             call_profile=active_profiles.get("speaker_only_answerability"),
+            reasoning_call_profile=active_profiles.get(
+                "speaker_only_answerability_reasoning"
+            ),
+            finalizer_call_profile=active_profiles.get(
+                "speaker_only_answerability_finalizer"
+            ),
+            repair_call_profile=active_profiles.get("json_repair"),
         )
     ]
     speaker_gate = answerability_gate(qa_item, evaluations)
@@ -3757,6 +4351,16 @@ def run_fail_fast_review_judges(
         for fact in evaluations[0].get("needed_facts") or []
         if isinstance(fact, dict)
     ]
+    all_six_finalizer = active_profiles.get("all_six_answerability_finalizer")
+    if all_six_finalizer is not None and canonical_facts:
+        all_six_budget = max(1536, min(2048, 512 + 256 * len(canonical_facts)))
+        if all_six_budget != all_six_finalizer.max_new_tokens:
+            all_six_finalizer = GenerationCallProfile(
+                max_new_tokens=all_six_budget,
+                disable_thinking=True,
+                video_fps=all_six_finalizer.video_fps,
+                max_image_pixels=all_six_finalizer.max_image_pixels,
+            )
 
     evaluations.append(
         run_answerability_condition_eval(
@@ -3770,12 +4374,72 @@ def run_fail_fast_review_judges(
             judge_media_role=judge_media_role,
             attempt=attempt,
             call_profile=active_profiles.get("all_six_answerability"),
+            reasoning_call_profile=active_profiles.get(
+                "all_six_answerability_reasoning"
+            ),
+            finalizer_call_profile=all_six_finalizer,
+            repair_call_profile=active_profiles.get("json_repair"),
             canonical_facts=canonical_facts,
         )
     )
+    preliminary_gate = answerability_gate(qa_item, evaluations)
+    minimum_set_audit = None
+    if preliminary_gate.get("passed") is True:
+        candidate_users = minimum_required_users_from_fact_sources(
+            evaluations[-1],
+            list(qa_item.get("required_users") or []),
+        )
+
+        def evaluate_minimum_set(
+            condition: dict[str, Any],
+            *,
+            canonical_facts: list[dict[str, Any]],
+        ) -> dict[str, Any]:
+            finalizer_profile = active_profiles.get(
+                "minimum_set_answerability_finalizer"
+            )
+            if finalizer_profile is not None:
+                budget = max(1024, min(1536, 512 + 256 * len(canonical_facts)))
+                if budget != finalizer_profile.max_new_tokens:
+                    finalizer_profile = GenerationCallProfile(
+                        max_new_tokens=budget,
+                        disable_thinking=True,
+                        video_fps=finalizer_profile.video_fps,
+                        max_image_pixels=finalizer_profile.max_image_pixels,
+                    )
+            return run_answerability_condition_eval(
+                qa_item=qa_item,
+                packet=packet,
+                condition=condition,
+                runner=runner,
+                media_backend=media_backend,
+                allow_openai_video_input=allow_openai_video_input,
+                prompt_rows=prompt_rows,
+                judge_media_role=judge_media_role,
+                attempt=attempt,
+                call_profile=active_profiles.get("minimum_set_answerability"),
+                reasoning_call_profile=active_profiles.get(
+                    "minimum_set_answerability_reasoning"
+                ),
+                finalizer_call_profile=finalizer_profile,
+                repair_call_profile=active_profiles.get("json_repair"),
+                canonical_facts=canonical_facts,
+            )
+
+        minimum_set_audit = _judge_minimum_set_from_user_audits(
+            candidate_users=candidate_users,
+            speaker_evaluation=evaluations[0],
+            canonical_facts=canonical_facts,
+            evaluate=evaluate_minimum_set,
+        )
     answerability = {
         "evaluations": evaluations,
-        "gate": answerability_gate(qa_item, evaluations),
+        "gate": answerability_gate(
+            qa_item,
+            evaluations,
+            minimum_set_audit=minimum_set_audit,
+        ),
+        "minimum_set_audit": minimum_set_audit,
     }
     if answerability["gate"].get("passed") is not True and not force_complete_review:
         return merge_result(
@@ -3925,6 +4589,24 @@ def run_parallel_review_judges(
                 if active_stage_profiles.get("evidence_groundedness") is not None
                 else None
             ),
+            "execution_mode": (
+                "reasoned_then_finalize"
+                if active_stage_profiles.get("evidence_groundedness_reasoning")
+                is not None
+                and active_stage_profiles.get("evidence_groundedness_finalizer")
+                is not None
+                else "single_call"
+            ),
+            "reasoning_max_new_tokens": getattr(
+                active_stage_profiles.get("evidence_groundedness_reasoning"),
+                "max_new_tokens",
+                None,
+            ),
+            "finalizer_max_new_tokens": getattr(
+                active_stage_profiles.get("evidence_groundedness_finalizer"),
+                "max_new_tokens",
+                None,
+            ),
             "model_id": getattr(runner, "model_id", None),
             "generator_rationale_included": include_generator_rationale,
             "pass_fail_only": True,
@@ -3980,52 +4662,83 @@ def run_parallel_review_judges(
         )
 
     answerability_prompt_rows: list[dict[str, Any]] = []
+    branch_runners = [active_qa_formality_runner, runner, runner]
+    held_batch_releases = []
+    unique_runners: list[Any] = []
+    for branch_runner in branch_runners:
+        if not any(branch_runner is existing for existing in unique_runners):
+            unique_runners.append(branch_runner)
+    for branch_runner in unique_runners:
+        expected_requests = sum(
+            branch_runner is candidate for candidate in branch_runners
+        )
+        begin_batch = getattr(branch_runner, "begin_concurrent_batch", None)
+        release_batch = getattr(branch_runner, "release_concurrent_batch", None)
+        if (
+            expected_requests >= 2
+            and callable(begin_batch)
+            and callable(release_batch)
+            and begin_batch(expected_requests)
+        ):
+            held_batch_releases.append(release_batch)
+
     with ThreadPoolExecutor(max_workers=3) as executor:
-        qa_formality_future = executor.submit(
-            run_model_judge_branch,
-            check_name="qa_formality",
-            prompt=qa_formality_prompt,
-            runner=active_qa_formality_runner,
-            image_paths=[],
-            video_paths=[],
-            evidence_id=packet.get("evidence_id"),
-            qa_id=qa_item.get("qa_id"),
-            attempt=attempt,
-            collect_choice_logits=record_decision_entropy,
-            minimal_verdict_probe_prompt=qa_formality_entropy_probe_prompt,
-            call_profile=active_stage_profiles.get("qa_formality"),
-            repair_call_profile=active_stage_profiles.get("json_repair"),
-        )
-        evidence_groundedness_future = executor.submit(
-            run_model_judge_branch,
-            check_name="evidence_groundedness",
-            prompt=evidence_groundedness_prompt,
-            runner=runner,
-            image_paths=full_image_paths,
-            video_paths=full_video_paths,
-            evidence_id=packet.get("evidence_id"),
-            qa_id=qa_item.get("qa_id"),
-            attempt=attempt,
-            collect_choice_logits=record_decision_entropy,
-            minimal_verdict_probe_prompt=evidence_groundedness_entropy_probe_prompt,
-            call_profile=(
-                active_stage_profiles.get("evidence_groundedness")
-                or active_stage_profiles.get("evidence_groundedness_aggregation")
-            ),
-            repair_call_profile=active_stage_profiles.get("json_repair"),
-        )
-        answerability_future = executor.submit(
-            run_answerability_eval,
-            qa_item=qa_item,
-            packet=packet,
-            runner=runner,
-            media_backend=media_backend,
-            allow_openai_video_input=allow_openai_video_input,
-            prompt_rows=answerability_prompt_rows,
-            judge_media_role=judge_media_role,
-            attempt=attempt,
-            call_profile=active_stage_profiles.get("answerability"),
-        )
+        try:
+            qa_formality_future = executor.submit(
+                run_model_judge_branch,
+                check_name="qa_formality",
+                prompt=qa_formality_prompt,
+                runner=active_qa_formality_runner,
+                image_paths=[],
+                video_paths=[],
+                evidence_id=packet.get("evidence_id"),
+                qa_id=qa_item.get("qa_id"),
+                attempt=attempt,
+                collect_choice_logits=record_decision_entropy,
+                minimal_verdict_probe_prompt=qa_formality_entropy_probe_prompt,
+                call_profile=active_stage_profiles.get("qa_formality"),
+                repair_call_profile=active_stage_profiles.get("json_repair"),
+            )
+            evidence_groundedness_future = executor.submit(
+                run_model_judge_branch,
+                check_name="evidence_groundedness",
+                prompt=evidence_groundedness_prompt,
+                runner=runner,
+                image_paths=full_image_paths,
+                video_paths=full_video_paths,
+                evidence_id=packet.get("evidence_id"),
+                qa_id=qa_item.get("qa_id"),
+                attempt=attempt,
+                collect_choice_logits=record_decision_entropy,
+                minimal_verdict_probe_prompt=evidence_groundedness_entropy_probe_prompt,
+                call_profile=(
+                    active_stage_profiles.get("evidence_groundedness")
+                    or active_stage_profiles.get("evidence_groundedness_aggregation")
+                ),
+                reasoning_call_profile=active_stage_profiles.get(
+                    "evidence_groundedness_reasoning"
+                ),
+                finalizer_call_profile=active_stage_profiles.get(
+                    "evidence_groundedness_finalizer"
+                ),
+                repair_call_profile=active_stage_profiles.get("json_repair"),
+            )
+            answerability_future = executor.submit(
+                run_answerability_eval,
+                qa_item=qa_item,
+                packet=packet,
+                runner=runner,
+                media_backend=media_backend,
+                allow_openai_video_input=allow_openai_video_input,
+                prompt_rows=answerability_prompt_rows,
+                judge_media_role=judge_media_role,
+                attempt=attempt,
+                call_profile=active_stage_profiles.get("answerability"),
+                condition_call_profiles=active_stage_profiles,
+            )
+        finally:
+            for release_batch in held_batch_releases:
+                release_batch()
 
         try:
             qa_formality_judge = qa_formality_future.result()
@@ -4042,6 +4755,25 @@ def run_parallel_review_judges(
                 "evidence_groundedness",
                 f"evidence_groundedness judge crashed: {exc}",
             )
+        for prompt_row in reversed(prompt_rows):
+            if (
+                prompt_row.get("stage") == "evidence_groundedness_judge"
+                and prompt_row.get("qa_id") == qa_item.get("qa_id")
+                and prompt_row.get("attempt") == attempt
+            ):
+                prompt_row["format_repair"] = evidence_groundedness_judge.get(
+                    "format_repair"
+                )
+                prompt_row["reasoning_elapsed_seconds"] = (
+                    evidence_groundedness_judge.get("reasoning_elapsed_seconds")
+                )
+                prompt_row["finalizer_elapsed_seconds"] = (
+                    evidence_groundedness_judge.get("finalizer_elapsed_seconds")
+                )
+                prompt_row["elapsed_seconds"] = evidence_groundedness_judge.get(
+                    "elapsed_seconds"
+                )
+                break
         try:
             answerability = answerability_future.result()
         except OpenRouterRequestError:
@@ -4052,17 +4784,13 @@ def run_parallel_review_judges(
                 "gate": {
                     "passed": False,
                     "reason": f"answerability judge crashed: {exc}",
+                    **_minimum_set_not_determined("answerability_judge_crashed"),
                 },
             }
 
     answerability_gate_result = answerability.get("gate")
     if isinstance(answerability_gate_result, dict):
-        minimum_required_users = answerability_gate_result.get(
-            "minimum_required_users"
-        )
-        if isinstance(minimum_required_users, list) and minimum_required_users:
-            qa_item["minimum_required_users"] = list(minimum_required_users)
-            qa_item["minimum_required_user_count"] = len(minimum_required_users)
+        _attach_minimum_set_metadata(qa_item, answerability)
 
     for row in answerability_prompt_rows:
         prompt_rows.append(row)
@@ -4761,27 +5489,19 @@ def generate_video_qa_loop(
                 f"images={len(image_paths)} videos={len(video_paths)}",
                 flush=True,
             )
-            if generator_decode_mode == "sampling":
-                raw_generation = generate_with_call_profile(
-                    runner,
-                    gen_prompt,
-                    image_paths=image_paths,
-                    video_paths=video_paths,
-                    call_profile=stage_profiles.get("generator"),
-                    decoding_mode=generator_decode_mode,
-                    temperature=generator_temperature,
-                    top_p=generator_top_p,
-                    top_k=generator_top_k,
-                )
-            else:
-                raw_generation = generate_with_call_profile(
-                    runner,
-                    gen_prompt,
-                    image_paths=image_paths,
-                    video_paths=video_paths,
-                    call_profile=stage_profiles.get("generator"),
-                )
-            generation_elapsed_seconds = round(time.time() - stage_start, 3)
+            generation_result = run_generator_stage(
+                runner=runner,
+                prompt=gen_prompt,
+                image_paths=image_paths,
+                video_paths=video_paths,
+                stage_profiles=stage_profiles,
+                decode_mode=generator_decode_mode,
+                temperature=generator_temperature,
+                top_p=generator_top_p,
+                top_k=generator_top_k,
+            )
+            raw_generation = str(generation_result["raw_output"])
+            generation_elapsed_seconds = float(generation_result["elapsed_seconds"])
             print(
                 "qa_stage_done "
                 f"stage=generation evidence_id={packet.get('evidence_id')} "
@@ -4789,17 +5509,61 @@ def generate_video_qa_loop(
                 f"seconds={generation_elapsed_seconds:.1f}",
                 flush=True,
             )
-            attempt_trace["generation"]["raw_output"] = raw_generation
-            attempt_trace["generation"]["elapsed_seconds"] = generation_elapsed_seconds
-            previous_generation = str(raw_generation)
+            attempt_trace["generation"].update(
+                {
+                    "raw_output": raw_generation,
+                    "reasoning_output": generation_result.get("reasoning_output"),
+                    "finalizer_output": generation_result.get("final_output"),
+                    "finalizer_prompt": generation_result.get("finalizer_prompt"),
+                    "execution_mode": generation_result.get("execution_mode"),
+                    "reasoning_elapsed_seconds": generation_result.get(
+                        "reasoning_elapsed_seconds"
+                    ),
+                    "finalizer_elapsed_seconds": generation_result.get(
+                        "finalizer_elapsed_seconds"
+                    ),
+                    "elapsed_seconds": generation_elapsed_seconds,
+                }
+            )
+            prompts[-1].update(
+                {
+                    "execution_mode": generation_result.get("execution_mode"),
+                    "reasoning_max_new_tokens": getattr(
+                        stage_profiles.get("generator_reasoning"),
+                        "max_new_tokens",
+                        None,
+                    ),
+                    "finalizer_max_new_tokens": getattr(
+                        stage_profiles.get("generator_finalizer"),
+                        "max_new_tokens",
+                        None,
+                    ),
+                    "reasoning_elapsed_seconds": generation_result.get(
+                        "reasoning_elapsed_seconds"
+                    ),
+                    "finalizer_elapsed_seconds": generation_result.get(
+                        "finalizer_elapsed_seconds"
+                    ),
+                    "elapsed_seconds": generation_elapsed_seconds,
+                }
+            )
             try:
-                qa = extract_json_object(raw_generation)
+                qa, generator_repair = parse_generator_output_with_repair(
+                    raw_output=raw_generation,
+                    runner=runner,
+                    repair_profile=stage_profiles.get("generator_json_repair"),
+                )
             except Exception as exc:
                 feedback = f"Generator output was not valid JSON: {exc}"
                 attempt_trace["result"] = {"accepted": False, "reason": feedback}
                 packet_rejections.append({"attempt": attempt, "reason": feedback, "raw_output": raw_generation})
                 persist_attempt("rejected", qa=None)
                 continue
+            attempt_trace["generation"]["format_repair"] = generator_repair
+            prompts[-1]["format_repair"] = generator_repair
+            previous_generation = str(
+                generator_repair.get("raw_output") or raw_generation
+            )
 
             qa.setdefault("qa_id", f"QA_{len(accepted) + 1:03d}_{packet.get('evidence_id')}")
             qa.update(slot_fields)
@@ -5116,7 +5880,7 @@ def generate_video_qa_loop(
 
 
 def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--backend", default="transformers-local", choices=["transformers-local", "transformers-local-memory-safe", "openai-compatible-local", "openrouter", "gemini"])
+    parser.add_argument("--backend", default="transformers-local", choices=["transformers-local", "transformers-local-memory-safe", "vllm-local", "openai-compatible-local", "openrouter", "gemini"])
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     parser.add_argument("--generation-mode", default="baseline", choices=GENERATION_MODES)
     parser.add_argument("--generator-decode-mode", default="greedy", choices=GENERATOR_DECODING_MODES)
@@ -5167,7 +5931,7 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
         help="Per-call output token cap for qa_formality and JSON repair.",
     )
     parser.add_argument("--api-key", help="Provider API key; OpenRouter reads OPENROUTER_API_KEY and Gemini reads GEMINI_API_KEY or GOOGLE_API_KEY")
-    parser.add_argument("--judge-backend", choices=["transformers-local", "transformers-local-memory-safe", "openai-compatible-local", "openrouter", "gemini"])
+    parser.add_argument("--judge-backend", choices=["transformers-local", "transformers-local-memory-safe", "vllm-local", "openai-compatible-local", "openrouter", "gemini"])
     parser.add_argument("--judge-model-id", help=f"Model for review judges/evaluators; defaults to {DEFAULT_JUDGE_MODEL_ID} when judge backend differs")
     parser.add_argument("--judge-base-url")
     parser.add_argument("--judge-api-key")

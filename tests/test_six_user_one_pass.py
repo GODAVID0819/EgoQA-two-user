@@ -18,6 +18,7 @@ from egolife_two_user_qa.one_pass_evidence import (  # noqa: E402
     compact_speaker_packets,
     expand_one_pass_slots,
 )
+import egolife_two_user_qa.one_pass_evidence as one_pass_evidence  # noqa: E402
 from egolife_two_user_qa.one_pass_summary import (  # noqa: E402
     summarize_one_pass_rows,
     update_one_pass_manifest,
@@ -125,7 +126,12 @@ def test_compact_speaker_packets_keep_all_speakers_and_media_contract(tmp_path: 
     assert all(
         all(
             clip["full_local_video"]
-            and clip["generator_local_video"]
+            and clip["generator_local_video"] is None
+            and clip["force_frame_inputs"]
+            and clip["generator_media_mode"] in {
+                "all_clustering_frames_only",
+                "retained_cluster_frames_only",
+            }
             and clip["temporal_pruning"]
             for clip in packet["clips"]
         )
@@ -134,6 +140,89 @@ def test_compact_speaker_packets_keep_all_speakers_and_media_contract(tmp_path: 
     assert all("block_diagnostics" not in packet for packet in packets)
     assert all("similarity_matrix" not in packet for packet in packets)
     assert all(packet["provenance"]["source_job_id"] == "16699348" for packet in packets)
+
+
+def test_compact_speaker_packets_resample_legacy_video_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asset_path = _asset(tmp_path, "DAY1::17200000")
+    payload = json.loads(asset_path.read_text(encoding="utf-8"))
+    for candidate in payload["speaker_candidates"]:
+        for clip in candidate["selected_clips"]:
+            clip.pop("frames", None)
+            clip["generator_media_mode"] = (
+                "full_video" if clip["agent_name"] == candidate["selected_clips"][0]["agent_name"] else "pruned_video"
+            )
+    asset_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    calls: list[tuple[str, Path]] = []
+
+    def fake_resample(clip: dict[str, object], *, output_dir: Path) -> list[dict[str, object]]:
+        frame_path = output_dir / "frame_000_0.00s.png"
+        frame_path.parent.mkdir(parents=True, exist_ok=True)
+        frame_path.write_bytes(b"frame")
+        calls.append((str(clip["agent_name"]), output_dir))
+        return [{"timestamp_seconds": 0.0, "path": str(frame_path)}]
+
+    monkeypatch.setattr(
+        one_pass_evidence,
+        "_materialize_legacy_sampled_frames",
+        fake_resample,
+        raising=False,
+    )
+
+    packets = compact_speaker_packets(asset_path, source_job_id="16699348")
+
+    assert len(calls) == 36
+    assert len(packets) == 6
+    assert all(clip["generator_local_video"] is None for packet in packets for clip in packet["clips"])
+    assert all(clip["frames"] for packet in packets for clip in packet["clips"])
+    assert all(
+        clip["generator_media_mode"] in {
+            "all_clustering_frames_only",
+            "retained_cluster_frames_only",
+        }
+        for packet in packets
+        for clip in packet["clips"]
+    )
+
+
+def test_materialize_legacy_sampled_frames_uses_one_ffmpeg_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_video = tmp_path / "source.mp4"
+    source_video.write_bytes(b"video")
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_: object) -> None:
+        commands.append(command)
+        output_pattern = str(command[-1])
+        for index in range(2):
+            output_path = Path(output_pattern.replace("%04d", f"{index:04d}"))
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"frame")
+
+    monkeypatch.setattr(one_pass_evidence.shutil, "which", lambda _: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(one_pass_evidence.subprocess, "run", fake_run)
+
+    frames = one_pass_evidence._materialize_legacy_sampled_frames(
+        {
+            "source_local_video": str(source_video),
+            "duration_seconds": 2.0,
+        },
+        output_dir=tmp_path / "frames",
+    )
+
+    assert len(commands) == 1
+    assert commands[0][0] == "/usr/bin/ffmpeg"
+    assert "-start_number" in commands[0]
+    assert [frame["timestamp_seconds"] for frame in frames] == [0.0, 1.0]
+    assert [Path(str(frame["path"])).name for frame in frames] == [
+        "frame_0000.png",
+        "frame_0001.png",
+    ]
 
 
 def test_expand_one_pass_slots_has_fixed_30_rows_and_balanced_speakers(tmp_path: Path) -> None:

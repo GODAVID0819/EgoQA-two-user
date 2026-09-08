@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import math
+import os
 from pathlib import Path
+import shutil
+import subprocess
 from typing import Any, Iterable
 
 
@@ -26,6 +31,7 @@ DROP_KEYS = {
     "pair_results",
     "review_bundle",
 }
+LEGACY_SAMPLE_INTERVAL_SECONDS = 1.0
 
 
 def _compact_value(value: Any) -> Any:
@@ -45,6 +51,154 @@ def _compact_clip(clip: dict[str, Any], *, group_id: str, speaker_index: int) ->
     if not isinstance(compact, dict):
         raise ValueError(f"{group_id} speaker_{speaker_index}: selected clip is not an object")
     return compact
+
+
+def _legacy_source_video(clip: dict[str, Any]) -> Path:
+    for key in (
+        "source_local_video",
+        "full_local_video",
+        "local_video",
+        "generator_local_video",
+    ):
+        value = clip.get(key)
+        if isinstance(value, str) and value and Path(value).is_file():
+            return Path(value)
+    raise ValueError(
+        f"legacy candidate has no usable local source video: {clip.get('clip_id')}"
+    )
+
+
+def _materialize_legacy_sampled_frames(
+    clip: dict[str, Any],
+    *,
+    output_dir: Path,
+) -> list[dict[str, Any]]:
+    source_video = _legacy_source_video(clip)
+    source_key = hashlib.sha1(str(source_video.resolve()).encode("utf-8")).hexdigest()[:16]
+    frame_dir = output_dir / source_key
+    duration_seconds = float(clip.get("duration_seconds") or 600.0)
+    frame_count = max(
+        2,
+        int(math.ceil(duration_seconds / LEGACY_SAMPLE_INTERVAL_SECONDS)),
+    )
+    frame_dir.mkdir(parents=True, exist_ok=True)
+    frame_paths = [frame_dir / f"frame_{index:04d}.png" for index in range(frame_count)]
+    if not all(path.is_file() and path.stat().st_size > 0 for path in frame_paths):
+        ffmpeg_binary = os.environ.get("FFMPEG_BINARY", "ffmpeg")
+        ffmpeg_path = shutil.which(ffmpeg_binary)
+        if not ffmpeg_path and Path(ffmpeg_binary).is_file():
+            ffmpeg_path = ffmpeg_binary
+        if not ffmpeg_path:
+            raise RuntimeError("ffmpeg is required to resample legacy candidate videos")
+        try:
+            subprocess.run(
+                [
+                    ffmpeg_path,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(source_video),
+                    "-vf",
+                    f"fps={1.0 / LEGACY_SAMPLE_INTERVAL_SECONDS:g},format=rgb24",
+                    "-frames:v",
+                    str(frame_count),
+                    "-vsync",
+                    "0",
+                    "-f",
+                    "image2",
+                    "-start_number",
+                    "0",
+                    str(frame_dir / "frame_%04d.png"),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"failed to resample legacy candidate video: {source_video}"
+            ) from exc
+    frames = [
+        {
+            "timestamp_seconds": round(index * LEGACY_SAMPLE_INTERVAL_SECONDS, 3),
+            "path": str(path),
+        }
+        for index, path in enumerate(frame_paths)
+        if path.is_file() and path.stat().st_size > 0
+    ]
+    if not frames:
+        raise ValueError(
+            f"legacy candidate produced no sampled generator frames: {source_video}"
+        )
+    return frames
+
+
+def _route_sampled_generator_clip(
+    clip: dict[str, Any],
+    *,
+    is_speaker: bool,
+    group_id: str,
+    speaker_index: int,
+    legacy_frame_cache_dir: Path,
+) -> dict[str, Any]:
+    frames = list(clip.get("frames") or [])
+    resampled_legacy = False
+    if not frames:
+        frames = _materialize_legacy_sampled_frames(
+            clip,
+            output_dir=legacy_frame_cache_dir,
+        )
+        resampled_legacy = True
+    pruning = clip.get("temporal_pruning")
+    marked = {
+        int(index)
+        for index in (pruning.get("marked_frame_indices") or [])
+    } if isinstance(pruning, dict) else set()
+    keep_intervals = (
+        list(pruning.get("keep_intervals") or [])
+        if isinstance(pruning, dict)
+        else []
+    )
+    retained_frames = []
+    for index, frame in enumerate(frames):
+        if is_speaker or index not in marked:
+            timestamp = frame.get("timestamp_seconds")
+            if is_speaker or marked:
+                retained_frames.append(dict(frame))
+            elif keep_intervals and isinstance(timestamp, (int, float)):
+                if any(
+                    float(start) <= float(timestamp) <= float(end)
+                    for start, end in keep_intervals
+                ):
+                    retained_frames.append(dict(frame))
+            elif not keep_intervals:
+                retained_frames.append(dict(frame))
+    if not retained_frames:
+        raise ValueError(
+            f"{group_id} speaker_{speaker_index}: no retained sampled generator frames"
+        )
+    routed = dict(clip)
+    routed["frames"] = retained_frames
+    routed["force_frame_inputs"] = True
+    routed["local_video"] = None
+    routed["generator_local_video"] = None
+    routed["generator_media_mode"] = (
+        "all_clustering_frames_only"
+        if is_speaker
+        else "retained_cluster_frames_only"
+    )
+    routed["media_role"] = (
+        "speaker_all_clustering_frames"
+        if is_speaker
+        else "provider_retained_cluster_frames"
+    )
+    routed["generator_frame_count"] = len(retained_frames)
+    if resampled_legacy:
+        routed["legacy_sampled_frame_source"] = "full_local_video"
+        routed["legacy_sample_interval_seconds"] = LEGACY_SAMPLE_INTERVAL_SECONDS
+    return routed
 
 
 def _candidate_speaker_index(candidate: dict[str, Any], *, group_id: str) -> int:
@@ -97,12 +251,14 @@ def compact_speaker_packets(
     asset_path: str | Path,
     *,
     source_job_id: str,
+    legacy_frame_cache_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """从一个 group asset 提取六个可直接供 QA loop 使用的 speaker packet。"""
 
     path = Path(asset_path)
     if not path.is_file():
         raise FileNotFoundError(f"candidate asset does not exist: {path}")
+    frame_cache_dir = Path(legacy_frame_cache_dir) if legacy_frame_cache_dir else path.parent / "legacy_sampled_frames"
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"candidate asset must contain one JSON object: {path}")
@@ -176,17 +332,35 @@ def compact_speaker_packets(
             for clip in selected_clips
             if isinstance(clip, dict)
         ]
+        compact_clips = [
+            _route_sampled_generator_clip(
+                clip,
+                is_speaker=clip_index == 0,
+                group_id=group_id,
+                speaker_index=speaker_index,
+                legacy_frame_cache_dir=frame_cache_dir,
+            )
+            for clip_index, clip in enumerate(compact_clips)
+        ]
         for clip_index, clip in enumerate(compact_clips):
-            for field in ("generator_local_video", "full_local_video"):
-                video_path = clip.get(field)
-                if not isinstance(video_path, str) or not video_path:
-                    raise ValueError(
-                        f"{group_id} speaker_{speaker_index} clip_{clip_index}: missing {field}"
-                    )
-                if not Path(video_path).is_file():
-                    raise ValueError(
-                        f"{group_id} speaker_{speaker_index} clip_{clip_index}: missing video {video_path}"
-                    )
+            full_video_path = clip.get("full_local_video")
+            if not isinstance(full_video_path, str) or not full_video_path:
+                raise ValueError(
+                    f"{group_id} speaker_{speaker_index} clip_{clip_index}: missing full_local_video"
+                )
+            if not Path(full_video_path).is_file():
+                raise ValueError(
+                    f"{group_id} speaker_{speaker_index} clip_{clip_index}: missing video {full_video_path}"
+                )
+            frame_paths = [
+                frame.get("path")
+                for frame in clip.get("frames") or []
+                if isinstance(frame, dict) and isinstance(frame.get("path"), str)
+            ]
+            if not frame_paths:
+                raise ValueError(
+                    f"{group_id} speaker_{speaker_index} clip_{clip_index}: missing sampled frames"
+                )
         speaker_user = users[0]
         base_evidence_id = f"EGOLIFE6U_CONSENSUS_{day}_{time_token}_S{speaker_index + 1}"
         media_roles = {
@@ -211,10 +385,12 @@ def compact_speaker_packets(
                 "media_roles": media_roles,
                 "requirement": (
                     "Six synchronized input videos are ordered as one speaker and five providers. "
-                    "Generation uses the full speaker video and five temporally pruned provider "
-                    "videos; groundedness and answerability use the six full original videos."
+                    "Generation uses all sampled speaker frames and retained provider frames; "
+                    "groundedness and answerability use the six full original videos."
                 ),
-                "generator_media_mode": "speaker_full_five_provider_pruned_videos",
+                "generator_media_mode": (
+                    "speaker_all_clustering_frames_five_provider_retained_cluster_frames"
+                ),
                 "clips": compact_clips,
                 "source_urls": {
                     "videos": [clip.get("video_url") for clip in compact_clips],
@@ -308,9 +484,14 @@ def write_one_pass_evidence(
     """逐个读取 asset，并写出 18 packet 与 30 slot 两份 JSONL。"""
 
     compact_packets: list[dict[str, Any]] = []
+    legacy_frame_cache_dir = Path(compact_output).parent / "legacy_sampled_frames"
     for asset_path in asset_paths:
         compact_packets.extend(
-            compact_speaker_packets(asset_path, source_job_id=source_job_id)
+            compact_speaker_packets(
+                asset_path,
+                source_job_id=source_job_id,
+                legacy_frame_cache_dir=legacy_frame_cache_dir,
+            )
         )
     slots = expand_one_pass_slots(compact_packets)
     compact_count = _write_jsonl(compact_output, compact_packets)

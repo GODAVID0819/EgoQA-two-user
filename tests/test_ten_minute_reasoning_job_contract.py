@@ -172,9 +172,11 @@ def test_one_pass_formal_wrapper_reuses_mined_assets_and_runs_30_slots() -> None
 
     assert '#SBATCH --job-name=egoqa_6u_10min_onepass30' in job
     assert '#SBATCH --account=torch_pr_674_tandon_advanced' in job
-    assert '#SBATCH --gres=gpu:1' in job
-    assert '#SBATCH --constraint=h100' in job
-    assert '#SBATCH --mem=96G' in job
+    assert '#SBATCH --partition=h200_tandon' in job
+    assert '#SBATCH --cpus-per-task=16' in job
+    assert '#SBATCH --gres=gpu:2' in job
+    assert '#SBATCH --constraint=h100' not in job
+    assert '#SBATCH --mem=320G' in job
     assert '#SBATCH --time=2-00:00:00' in job
     assert 'RUN_MODE="six_user_qa_10min_one_pass_30"' in job
     assert 'ACCEPTED_TARGET="30"' in job
@@ -185,17 +187,37 @@ def test_one_pass_formal_wrapper_reuses_mined_assets_and_runs_30_slots() -> None
     assert 'ONE_PASS_30_SLOT_MODE="1"' in job
     assert 'FAIL_FAST_REVIEW="0"' in job
     assert 'SIX_USER_ONE_PASS_PROFILE="1"' in job
-    assert 'QWEN_MEMORY_SAFE_VIDEO_FPS="0.5"' in job
-    assert 'QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS="65536"' in job
-    assert 'MAX_NEW_TOKENS="4096"' in job
-    assert 'PRECOMPUTED_SOURCE_JOB_ID="16699348"' in job
-    assert 'PRECOMPUTED_CANDIDATE_ASSETS_ROOT="${PROJECT_ROOT}/outputs/six_user_qa/' in job
+    assert 'INFERENCE_BACKEND="vllm-local"' in job
+    assert 'TRAIN_ENV="/scratch/xl6775/conda/envs/qwen38-vllm"' in job
+    assert 'VLLM_REQUIRED_VERSION="0.28.0"' in job
+    assert 'VLLM_TENSOR_PARALLEL_SIZE="2"' in job
+    assert 'VLLM_ATTENTION_BACKEND="FLASH_ATTN"' in job
+    assert 'VLLM_MM_ENCODER_ATTN_BACKEND="FLASH_ATTN"' in job
+    assert 'VLLM_GDN_PREFILL_BACKEND="flashinfer"' in job
+    assert 'VLLM_MTP_SPECULATIVE_TOKENS="1"' in job
+    assert 'VLLM_MAX_NUM_BATCHED_TOKENS="32768"' in job
+    assert 'VLLM_MM_PROCESSOR_CACHE_TYPE="shm"' in job
+    assert 'VLLM_ALLOWED_LOCAL_MEDIA_PATH="/scratch/xl6775"' in job
+    assert 'QWEN_MEMORY_SAFE_VIDEO_FPS="1.0"' in job
+    assert 'QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS="131072"' in job
+    assert 'MAX_NEW_TOKENS="6144"' in job
+    assert 'PRECOMPUTED_SOURCE_JOB_ID="${PRECOMPUTED_SOURCE_JOB_ID:-16699348}"' in job
+    assert 'PRECOMPUTED_CANDIDATE_ASSETS_ROOT="${PRECOMPUTED_CANDIDATE_ASSETS_ROOT:-${PROJECT_ROOT}/outputs/six_user_qa/' in job
     assert 'CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-1}"' in job
     assert 'CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/hpc/shared/cuda.py}"' in job
     assert 'CUDA_KEEPER_START_AFTER_SECONDS="${CUDA_KEEPER_START_AFTER_SECONDS:-7200}"' in job
     assert '--nodelist' not in job
     assert '#SBATCH -w' not in job
     runtime = runtime_text()
+    assert 'INFERENCE_BACKEND="${INFERENCE_BACKEND:-transformers-local-memory-safe}"' in runtime
+    assert '--backend "${INFERENCE_BACKEND}"' in runtime
+    assert '"inference_backend": "${INFERENCE_BACKEND}"' in runtime
+    assert '"vllm_tensor_parallel_size": int("${VLLM_TENSOR_PARALLEL_SIZE}")' in runtime
+    assert 'if [[ "${INFERENCE_BACKEND}" == "vllm-local" ]]; then' in runtime
+    assert 'cap_pixels_per_frame' in runtime
+    assert 'import flash_attn' in runtime
+    assert 'import flashinfer' in runtime
+    assert 'unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY_PATH' in runtime
     assert 'DAY1_17200000_group_relative_clip.json' in runtime
     assert 'DAY3_17000000_group_relative_clip.json' in runtime
     assert 'DAY4_21400000_group_relative_clip.json' in runtime

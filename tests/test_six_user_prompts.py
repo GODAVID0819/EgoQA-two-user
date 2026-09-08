@@ -22,6 +22,7 @@ from egolife_two_user_qa.prompts import (  # noqa: E402
     build_answerability_prompt,
     build_evidence_groundedness_judge_prompt,
     build_qa_formality_judge_prompt,
+    build_reasoned_finalizer_prompt,
     build_video_generation_prompt,
     video_packet_brief,
 )
@@ -29,6 +30,21 @@ from egolife_two_user_qa import prompts as prompts_module  # noqa: E402
 
 
 USERS = ["speaker", "provider_one", "provider_two", "provider_three", "provider_four", "provider_five"]
+
+
+def test_generator_finalizer_prompt_enforces_compact_complete_json() -> None:
+    prompt = build_reasoned_finalizer_prompt(
+        task_prompt="generate one QA",
+        reasoning_output="draft reasoning",
+        output_schema=VIDEO_GENERATION_SCHEMA,
+        stage_name="generation",
+    )
+
+    assert "question: at most 45 English words" in prompt
+    assert "each option: at most 20 English words" in prompt
+    assert "generator_rationale: at most 80 English words" in prompt
+    assert "Do not copy the reasoning" in prompt
+    assert "Return exactly one valid JSON object" in prompt
 
 
 def six_user_packet() -> dict[str, object]:
@@ -104,6 +120,32 @@ class SixUserPromptTests(unittest.TestCase):
                 "fact": "the final object state",
                 "why_needed": "it identifies the correct outcome",
             },
+        ]
+
+        prompt = build_answerability_prompt(
+            six_user_qa(),
+            condition,
+            canonical_facts=canonical,
+        )
+
+        self.assertIn('"fact_id": "F1"', prompt)
+        self.assertIn(
+            "must not add, delete, reorder, merge, split, or rewrite facts",
+            prompt,
+        )
+
+    def test_minimum_subset_answerability_prompt_reuses_canonical_facts(self) -> None:
+        condition = {
+            "condition_id": "minimum_required_users::provider_two+provider_four",
+            "condition_type": "minimum_required_users",
+            "users": ["provider_two", "provider_four"],
+        }
+        canonical = [
+            {
+                "fact_id": "F1",
+                "fact": "the final destination",
+                "why_needed": "it distinguishes the options",
+            }
         ]
 
         prompt = build_answerability_prompt(

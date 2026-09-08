@@ -14,7 +14,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -33,8 +33,14 @@ OPENROUTER_REASONING_EFFORTS = ("max", "xhigh", "high", "medium", "low", "minima
 DEFAULT_MAX_IMAGE_PIXELS = 262144
 DEFAULT_VIDEO_FPS = 1.0
 MEMORY_SAFE_BACKEND = "transformers-local-memory-safe"
+VLLM_LOCAL_BACKEND = "vllm-local"
 MEMORY_SAFE_DEFAULT_VIDEO_FPS = 1.0
+MEMORY_SAFE_DEFAULT_MIN_IMAGE_PIXELS = 4 * 28 * 28
 MEMORY_SAFE_DEFAULT_MAX_INPUT_TOKENS = 131_072
+MEMORY_SAFE_DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION = 0.85
+MEMORY_SAFE_DEFAULT_IMAGE_TEXT_TOKEN_RESERVE = 8_192
+MEMORY_SAFE_DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD = 2
+QWEN_VISION_TOKEN_PIXEL_AREA = 28 * 28
 MEMORY_SAFE_DEFAULT_MIN_FREE_GIB = 5.0
 MEMORY_SAFE_DEFAULT_KV_BYTES_PER_TOKEN = 65_536
 MEMORY_SAFE_DEFAULT_MIN_AVAILABLE_RAM_GIB = 16.0
@@ -44,6 +50,12 @@ MEMORY_SAFE_DEFAULT_ATTN_IMPLEMENTATION = "flash_attention_2"
 GENERATOR_DECODING_MODES = ("greedy", "sampling")
 DEFAULT_SAMPLING_TEMPERATURE = 0.7
 DEFAULT_SAMPLING_TOP_P = 0.9
+VLLM_DEFAULT_TENSOR_PARALLEL_SIZE = 2
+VLLM_DEFAULT_GPU_MEMORY_UTILIZATION = 0.90
+VLLM_DEFAULT_MAX_MODEL_LEN = 262_144
+VLLM_DEFAULT_MAX_IMAGES = 3_600
+VLLM_DEFAULT_MAX_VIDEOS = 20
+VLLM_DEFAULT_MM_PROCESSOR_CACHE_GB = 8.0
 # Archived inactive score-token defaults:
 # DEFAULT_CHOICE_FIELD = "final_quality_score"
 # DEFAULT_SCORE_CHOICES = ("1", "2", "3")
@@ -67,6 +79,66 @@ class GenerationCallProfile:
             raise ValueError("video_fps must be positive when set")
         if self.max_image_pixels is not None and self.max_image_pixels <= 0:
             raise ValueError("max_image_pixels must be positive when set")
+
+
+@dataclass
+class _PendingVLLMChat:
+    messages: list[dict[str, Any]]
+    sampling_params: Any
+    chat_template_kwargs: dict[str, Any] | None
+    mm_processor_kwargs: dict[str, Any]
+    queued_at: float = field(default_factory=time.perf_counter)
+    completed: threading.Event = field(default_factory=threading.Event)
+    output: Any | None = None
+    error: Exception | None = None
+
+
+def memory_safe_image_max_pixels(
+    *,
+    image_count: int,
+    configured_max_image_pixels: int,
+    max_input_tokens: int,
+    target_fraction: float = MEMORY_SAFE_DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION,
+    text_token_reserve: int = MEMORY_SAFE_DEFAULT_IMAGE_TEXT_TOKEN_RESERVE,
+    item_token_overhead: int = MEMORY_SAFE_DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD,
+    min_image_pixels: int = MEMORY_SAFE_DEFAULT_MIN_IMAGE_PIXELS,
+) -> int:
+    """按上下文预算为每张图片计算安全的像素上限。"""
+
+    if image_count < 0:
+        raise ValueError("image_count must be non-negative")
+    if configured_max_image_pixels < min_image_pixels:
+        raise ValueError(
+            "configured_max_image_pixels must be at least min_image_pixels"
+        )
+    if max_input_tokens <= 0:
+        raise ValueError("max_input_tokens must be positive")
+    if not 0 < target_fraction <= 1:
+        raise ValueError("target_fraction must be in (0, 1]")
+    if text_token_reserve < 0 or item_token_overhead < 0:
+        raise ValueError("token reserves must be non-negative")
+    if image_count == 0:
+        return int(configured_max_image_pixels)
+
+    target_tokens = int(max_input_tokens * target_fraction)
+    visual_token_budget = (
+        target_tokens - text_token_reserve - image_count * item_token_overhead
+    )
+    minimum_tokens_per_image = max(
+        1, int(min_image_pixels) // QWEN_VISION_TOKEN_PIXEL_AREA
+    )
+    if visual_token_budget < image_count * minimum_tokens_per_image:
+        raise RuntimeError(
+            "Too many generator images to fit even at the minimum image resolution: "
+            f"images={image_count} max_input_tokens={max_input_tokens} "
+            f"target_fraction={target_fraction:g}"
+        )
+    tokens_per_image = max(
+        minimum_tokens_per_image,
+        visual_token_budget // image_count,
+    )
+    adaptive_cap = tokens_per_image * QWEN_VISION_TOKEN_PIXEL_AREA
+    return int(max(min_image_pixels, min(configured_max_image_pixels, adaptive_cap)))
 
 
 class OpenRouterRequestError(RuntimeError):
@@ -1240,6 +1312,534 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
                 print("qwen_memory_safe_inference_done", flush=True)
 
 
+class Qwen3VLLocalVLLMRunner:
+    """用常驻、张量并行的 vLLM V1 引擎运行 Qwen 多模态推理。"""
+
+    supports_choice_logits = False
+    supports_vllm_randomized_request_ids = True
+    caps_video_pixels_per_frame = True
+    supports_concurrent_batching = True
+
+    def __init__(
+        self,
+        model_id: str = DEFAULT_MODEL_ID,
+        *,
+        max_new_tokens: int = 1024,
+        max_image_pixels: int = DEFAULT_MAX_IMAGE_PIXELS,
+        dtype: str = "bfloat16",
+        allow_cpu: bool = False,
+        disable_thinking: bool = False,
+        video_fps: float = DEFAULT_VIDEO_FPS,
+        max_input_tokens: int | None = None,
+    ) -> None:
+        if not allow_cpu and not cuda_available():
+            raise RuntimeError("vllm-local requires CUDA")
+        try:
+            from vllm import LLM, SamplingParams
+        except ImportError as exc:
+            raise RuntimeError(
+                "vllm-local requires vLLM with Qwen3.5/Qwen3.8 multimodal support"
+            ) from exc
+
+        self.model_id = model_id
+        self.max_new_tokens = int(max_new_tokens)
+        self.max_image_pixels = int(max_image_pixels)
+        self.min_image_pixels = int(
+            os.getenv("VLLM_MIN_IMAGE_PIXELS", str(MEMORY_SAFE_DEFAULT_MIN_IMAGE_PIXELS))
+        )
+        self.video_fps = float(os.getenv("VLLM_VIDEO_FPS", str(video_fps)))
+        self.max_model_len = int(
+            os.getenv(
+                "VLLM_MAX_MODEL_LEN",
+                str(max_input_tokens or VLLM_DEFAULT_MAX_MODEL_LEN),
+            )
+        )
+        self.image_context_target_fraction = float(
+            os.getenv(
+                "VLLM_IMAGE_CONTEXT_TARGET_FRACTION",
+                str(MEMORY_SAFE_DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION),
+            )
+        )
+        self.image_text_token_reserve = int(
+            os.getenv(
+                "VLLM_IMAGE_TEXT_TOKEN_RESERVE",
+                str(MEMORY_SAFE_DEFAULT_IMAGE_TEXT_TOKEN_RESERVE),
+            )
+        )
+        self.image_item_token_overhead = int(
+            os.getenv(
+                "VLLM_IMAGE_ITEM_TOKEN_OVERHEAD",
+                str(MEMORY_SAFE_DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD),
+            )
+        )
+        self.tensor_parallel_size = int(
+            os.getenv(
+                "VLLM_TENSOR_PARALLEL_SIZE",
+                str(VLLM_DEFAULT_TENSOR_PARALLEL_SIZE),
+            )
+        )
+        self.gpu_memory_utilization = float(
+            os.getenv(
+                "VLLM_GPU_MEMORY_UTILIZATION",
+                str(VLLM_DEFAULT_GPU_MEMORY_UTILIZATION),
+            )
+        )
+        self.max_images = int(os.getenv("VLLM_MAX_IMAGES", str(VLLM_DEFAULT_MAX_IMAGES)))
+        self.max_videos = int(os.getenv("VLLM_MAX_VIDEOS", str(VLLM_DEFAULT_MAX_VIDEOS)))
+        self.mm_processor_cache_gb = float(
+            os.getenv(
+                "VLLM_MM_PROCESSOR_CACHE_GB",
+                str(VLLM_DEFAULT_MM_PROCESSOR_CACHE_GB),
+            )
+        )
+        self.allowed_local_media_path = Path(
+            os.getenv("VLLM_ALLOWED_LOCAL_MEDIA_PATH", "/scratch")
+        ).resolve()
+        self.attention_backend = os.getenv(
+            "VLLM_ATTENTION_BACKEND", "FLASH_ATTN"
+        ).strip()
+        self.mm_encoder_attention_backend = os.getenv(
+            "VLLM_MM_ENCODER_ATTN_BACKEND", "FLASH_ATTN"
+        ).strip()
+        self.gdn_prefill_backend = os.getenv(
+            "VLLM_GDN_PREFILL_BACKEND", "flashinfer"
+        ).strip().lower()
+        self.max_num_batched_tokens = int(
+            os.getenv("VLLM_MAX_NUM_BATCHED_TOKENS", "32768")
+        )
+        self.max_num_seqs = int(os.getenv("VLLM_MAX_NUM_SEQS", "8"))
+        self.batch_wait_seconds = float(os.getenv("VLLM_BATCH_WAIT_MS", "20")) / 1000.0
+        self.speculative_tokens = int(os.getenv("VLLM_MTP_SPECULATIVE_TOKENS", "0"))
+        self.enable_prefix_caching = os.getenv(
+            "VLLM_ENABLE_PREFIX_CACHING", "0"
+        ).strip() == "1"
+        self.disable_thinking = bool(disable_thinking)
+        self.SamplingParams = SamplingParams
+        self._batch_condition = threading.Condition()
+        self._batch_leader_active = False
+        self._held_batch_target: int | None = None
+        self._released_batch_ready = False
+        self._pending_chat_requests: list[_PendingVLLMChat] = []
+
+        if self.max_new_tokens <= 0:
+            raise ValueError("max_new_tokens must be positive")
+        if self.max_image_pixels < self.min_image_pixels:
+            raise ValueError("max_image_pixels must be at least VLLM_MIN_IMAGE_PIXELS")
+        if self.video_fps <= 0:
+            raise ValueError("VLLM_VIDEO_FPS must be positive")
+        if self.max_model_len <= 0:
+            raise ValueError("VLLM_MAX_MODEL_LEN must be positive")
+        if self.tensor_parallel_size < 1:
+            raise ValueError("VLLM_TENSOR_PARALLEL_SIZE must be positive")
+        if not 0 < self.gpu_memory_utilization <= 1:
+            raise ValueError("VLLM_GPU_MEMORY_UTILIZATION must be in (0, 1]")
+        if self.max_images < 1 or self.max_videos < 1:
+            raise ValueError("VLLM_MAX_IMAGES and VLLM_MAX_VIDEOS must be positive")
+        if self.max_num_batched_tokens < 1:
+            raise ValueError("VLLM_MAX_NUM_BATCHED_TOKENS must be positive")
+        if self.max_num_seqs < 1:
+            raise ValueError("VLLM_MAX_NUM_SEQS must be positive")
+        if self.batch_wait_seconds < 0:
+            raise ValueError("VLLM_BATCH_WAIT_MS must be non-negative")
+        if self.speculative_tokens < 0:
+            raise ValueError("VLLM_MTP_SPECULATIVE_TOKENS must be non-negative")
+        if self.gdn_prefill_backend not in {"flashinfer", "triton", "cutedsl"}:
+            raise ValueError(
+                "VLLM_GDN_PREFILL_BACKEND must be flashinfer, triton, or cutedsl"
+            )
+        if not self.allowed_local_media_path.is_dir():
+            raise ValueError(
+                "VLLM_ALLOWED_LOCAL_MEDIA_PATH must be an existing directory: "
+                f"{self.allowed_local_media_path}"
+            )
+        if self.attention_backend != "FLASH_ATTN":
+            raise ValueError(
+                "production vllm-local requires VLLM_ATTENTION_BACKEND=FLASH_ATTN"
+            )
+        if self.mm_encoder_attention_backend != "FLASH_ATTN":
+            raise ValueError(
+                "production vllm-local requires VLLM_MM_ENCODER_ATTN_BACKEND=FLASH_ATTN"
+            )
+
+        engine_kwargs: dict[str, Any] = {
+            "model": model_id,
+            "trust_remote_code": True,
+            "dtype": dtype,
+            "tensor_parallel_size": self.tensor_parallel_size,
+            "gpu_memory_utilization": self.gpu_memory_utilization,
+            "max_model_len": self.max_model_len,
+            "max_num_seqs": self.max_num_seqs,
+            "max_num_batched_tokens": self.max_num_batched_tokens,
+            "limit_mm_per_prompt": {
+                "image": self.max_images,
+                "video": self.max_videos,
+                "audio": 0,
+            },
+            "mm_processor_kwargs": {
+                "min_pixels": self.min_image_pixels,
+                "max_pixels": self.max_image_pixels,
+                "fps": self.video_fps,
+                "cap_pixels_per_frame": True,
+            },
+            "mm_processor_cache_gb": self.mm_processor_cache_gb,
+            "mm_processor_cache_type": os.getenv("VLLM_MM_PROCESSOR_CACHE_TYPE", "shm"),
+            "mm_encoder_tp_mode": os.getenv("VLLM_MM_ENCODER_TP_MODE", "data"),
+            "mm_encoder_attn_backend": self.mm_encoder_attention_backend,
+            "attention_backend": self.attention_backend,
+            "enable_prefix_caching": self.enable_prefix_caching,
+            "enable_chunked_prefill": True,
+            "gdn_prefill_backend": self.gdn_prefill_backend,
+            "skip_mm_profiling": True,
+            "allowed_local_media_path": str(self.allowed_local_media_path),
+            "disable_log_stats": False,
+        }
+        if self.speculative_tokens:
+            engine_kwargs["speculative_config"] = {
+                "method": "mtp",
+                "num_speculative_tokens": self.speculative_tokens,
+            }
+        print(
+            "vllm_engine_start "
+            f"model_id={model_id} tensor_parallel_size={self.tensor_parallel_size} "
+            f"attention_backend={self.attention_backend} "
+            f"mm_encoder_attn_backend={self.mm_encoder_attention_backend} "
+            f"max_model_len={self.max_model_len} max_num_seqs={self.max_num_seqs} "
+            f"max_num_batched_tokens={self.max_num_batched_tokens} "
+            f"batch_wait_ms={self.batch_wait_seconds * 1000:g} "
+            f"gpu_memory_utilization={self.gpu_memory_utilization:g} "
+            f"gdn_prefill_backend={self.gdn_prefill_backend} "
+            "cap_pixels_per_frame=true",
+            flush=True,
+        )
+        start = time.time()
+        self.engine = LLM(**engine_kwargs)
+        if not callable(getattr(self.engine, "enqueue_chat", None)) or not callable(
+            getattr(self.engine, "wait_for_completion", None)
+        ):
+            raise RuntimeError(
+                "vllm-local requires LLM.enqueue_chat and LLM.wait_for_completion"
+            )
+        self.tokenizer = self.engine.get_tokenizer()
+        print(f"vllm_engine_ready seconds={time.time() - start:.1f}", flush=True)
+
+    def _run_chat_batch(self, requests: list[_PendingVLLMChat]) -> list[Any]:
+        started = time.perf_counter()
+        request_ids: list[str] = []
+        try:
+            for request in requests:
+                ids = self.engine.enqueue_chat(
+                    request.messages,
+                    sampling_params=request.sampling_params,
+                    use_tqdm=False,
+                    chat_template_kwargs=request.chat_template_kwargs,
+                    mm_processor_kwargs=request.mm_processor_kwargs,
+                )
+                if len(ids) != 1:
+                    raise RuntimeError(
+                        "vLLM enqueue_chat returned an unexpected request count: "
+                        f"expected=1 actual={len(ids)}"
+                    )
+                request_ids.append(str(ids[0]))
+            print(f"vllm_batch_start batch_size={len(requests)}", flush=True)
+            outputs = self.engine.wait_for_completion(use_tqdm=False)
+        except Exception:
+            if request_ids:
+                try:
+                    self.engine.wait_for_completion(use_tqdm=False)
+                except Exception:
+                    pass
+            raise
+
+        outputs_by_id = {
+            str(output.request_id): output
+            for output in outputs
+            if getattr(output, "request_id", None) is not None
+        }
+        completion_ids: list[str | None] = []
+        for request_id in request_ids:
+            completion_id = request_id if request_id in outputs_by_id else None
+            if completion_id is None:
+                external_id, separator, random_suffix = request_id.rpartition("-")
+                if (
+                    separator
+                    and len(random_suffix) == 8
+                    and all(char in "0123456789abcdef" for char in random_suffix.lower())
+                    and external_id in outputs_by_id
+                ):
+                    completion_id = external_id
+            completion_ids.append(completion_id)
+        missing = [
+            request_id
+            for request_id, completion_id in zip(request_ids, completion_ids, strict=True)
+            if completion_id is None
+        ]
+        if missing:
+            raise RuntimeError(
+                "vLLM batch completion omitted request IDs: "
+                + ", ".join(missing)
+                + f"; completion IDs: {sorted(outputs_by_id)}"
+            )
+        oldest_queue_wait_ms = (
+            started - min(request.queued_at for request in requests)
+        ) * 1000
+        print(
+            "vllm_batch_done "
+            f"batch_size={len(requests)} seconds={time.perf_counter() - started:.1f} "
+            f"oldest_queue_wait_ms={oldest_queue_wait_ms:.1f}",
+            flush=True,
+        )
+        return [
+            outputs_by_id[completion_id]
+            for completion_id in completion_ids
+            if completion_id is not None
+        ]
+
+    def _drain_chat_batches(self) -> None:
+        first_batch = True
+        while True:
+            with self._batch_condition:
+                while self._held_batch_target is not None:
+                    self._batch_condition.wait()
+                released_batch_ready = self._released_batch_ready
+                self._released_batch_ready = False
+                if first_batch and self.batch_wait_seconds and not released_batch_ready:
+                    deadline = time.perf_counter() + self.batch_wait_seconds
+                    while len(self._pending_chat_requests) < self.max_num_seqs:
+                        remaining = deadline - time.perf_counter()
+                        if remaining <= 0:
+                            break
+                        self._batch_condition.wait(timeout=remaining)
+                first_batch = False
+                if not self._pending_chat_requests:
+                    self._batch_leader_active = False
+                    self._batch_condition.notify_all()
+                    return
+                batch = self._pending_chat_requests[: self.max_num_seqs]
+                del self._pending_chat_requests[: len(batch)]
+
+            try:
+                outputs = self._run_chat_batch(batch)
+            except Exception as exc:
+                for request in batch:
+                    request.error = exc
+                    request.completed.set()
+            else:
+                for request, output in zip(batch, outputs, strict=True):
+                    request.output = output
+                    request.completed.set()
+
+    def begin_concurrent_batch(self, expected_requests: int) -> bool:
+        if expected_requests < 2:
+            return False
+        with self._batch_condition:
+            if (
+                self._batch_leader_active
+                or self._pending_chat_requests
+                or self._held_batch_target is not None
+            ):
+                return False
+            self._held_batch_target = min(expected_requests, self.max_num_seqs)
+            return True
+
+    def release_concurrent_batch(self, timeout_seconds: float = 5.0) -> int:
+        deadline = time.perf_counter() + timeout_seconds
+        with self._batch_condition:
+            target = self._held_batch_target
+            if target is None:
+                return 0
+            while len(self._pending_chat_requests) < target:
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    break
+                self._batch_condition.wait(timeout=remaining)
+            queued = len(self._pending_chat_requests)
+            self._held_batch_target = None
+            self._released_batch_ready = queued > 0
+            self._batch_condition.notify_all()
+            return queued
+
+    def _submit_chat(self, request: _PendingVLLMChat) -> Any:
+        with self._batch_condition:
+            self._pending_chat_requests.append(request)
+            self._batch_condition.notify_all()
+            is_leader = not self._batch_leader_active
+            if is_leader:
+                self._batch_leader_active = True
+        if is_leader:
+            self._drain_chat_batches()
+        request.completed.wait()
+        if request.error is not None:
+            raise request.error
+        if request.output is None:
+            raise RuntimeError("vLLM batch request completed without output")
+        return request.output
+
+    def _resolve_media(self, path: str | Path) -> Path:
+        resolved = Path(path).resolve()
+        if not resolved.is_file() or resolved.stat().st_size <= 0:
+            raise FileNotFoundError(f"vLLM media is missing or empty: {resolved}")
+        try:
+            resolved.relative_to(self.allowed_local_media_path)
+        except ValueError as exc:
+            raise ValueError(
+                f"vLLM media {resolved} is outside allowed root {self.allowed_local_media_path}"
+            ) from exc
+        return resolved
+
+    @staticmethod
+    def _media_uuid(
+        path: Path,
+        *,
+        modality: str,
+        video_fps: float,
+        max_pixels: int,
+    ) -> str:
+        stat = path.stat()
+        return (
+            f"file:{path}:{stat.st_size}:{stat.st_mtime_ns}:"
+            f"{modality}:fps-{video_fps:g}:pixels-{max_pixels}"
+        )
+
+    def _effective_image_max_pixels(
+        self,
+        image_count: int,
+        configured_max_image_pixels: int,
+    ) -> int:
+        if image_count == 0:
+            return configured_max_image_pixels
+        return memory_safe_image_max_pixels(
+            image_count=image_count,
+            configured_max_image_pixels=configured_max_image_pixels,
+            max_input_tokens=self.max_model_len,
+            target_fraction=self.image_context_target_fraction,
+            text_token_reserve=self.image_text_token_reserve,
+            item_token_overhead=self.image_item_token_overhead,
+            min_image_pixels=self.min_image_pixels,
+        )
+
+    def generate(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
+        call_profile: GenerationCallProfile | None = None,
+    ) -> str:
+        if decoding_mode not in GENERATOR_DECODING_MODES:
+            raise ValueError(f"unknown decoding_mode: {decoding_mode}")
+        effective_max_new_tokens = (
+            call_profile.max_new_tokens if call_profile is not None else self.max_new_tokens
+        )
+        effective_disable_thinking = (
+            call_profile.disable_thinking if call_profile is not None else self.disable_thinking
+        )
+        effective_video_fps = (
+            call_profile.video_fps
+            if call_profile is not None and call_profile.video_fps is not None
+            else self.video_fps
+        )
+        configured_max_pixels = (
+            call_profile.max_image_pixels
+            if call_profile is not None and call_profile.max_image_pixels is not None
+            else self.max_image_pixels
+        )
+        if configured_max_pixels < self.min_image_pixels:
+            raise ValueError("call profile max_image_pixels is below VLLM_MIN_IMAGE_PIXELS")
+        images = [self._resolve_media(path) for path in image_paths or []]
+        videos = [self._resolve_media(path) for path in video_paths or []]
+        if len(images) > self.max_images:
+            raise RuntimeError(
+                f"vLLM image count {len(images)} exceeds configured limit {self.max_images}"
+            )
+        if len(videos) > self.max_videos:
+            raise RuntimeError(
+                f"vLLM video count {len(videos)} exceeds configured limit {self.max_videos}"
+            )
+        effective_max_pixels = self._effective_image_max_pixels(
+            len(images), configured_max_pixels
+        )
+        content: list[dict[str, Any]] = []
+        for path in images:
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": path.as_uri()},
+                    "uuid": self._media_uuid(
+                        path,
+                        modality="image",
+                        video_fps=effective_video_fps,
+                        max_pixels=effective_max_pixels,
+                    ),
+                }
+            )
+        for path in videos:
+            content.append(
+                {
+                    "type": "video_url",
+                    "video_url": {"url": path.as_uri()},
+                    "uuid": self._media_uuid(
+                        path,
+                        modality="video",
+                        video_fps=effective_video_fps,
+                        max_pixels=effective_max_pixels,
+                    ),
+                }
+            )
+        content.append({"type": "text", "text": prompt})
+        sampling_kwargs: dict[str, Any] = {
+            "max_tokens": effective_max_new_tokens,
+            "temperature": temperature if decoding_mode == "sampling" else 0.0,
+        }
+        if decoding_mode == "sampling":
+            sampling_kwargs["top_p"] = top_p
+            if top_k is not None:
+                sampling_kwargs["top_k"] = top_k
+        seed = os.getenv("VLLM_SAMPLING_SEED")
+        if seed is not None:
+            sampling_kwargs["seed"] = int(seed)
+        chat_template_kwargs = (
+            {"enable_thinking": False} if effective_disable_thinking else None
+        )
+        print(
+            "vllm_generate_start "
+            f"images={len(images)} videos={len(videos)} "
+            f"effective_max_pixels={effective_max_pixels} "
+            f"prompt_chars={len(prompt)} decoding_mode={decoding_mode}",
+            flush=True,
+        )
+        start = time.time()
+        output = self._submit_chat(
+            _PendingVLLMChat(
+                messages=[{"role": "user", "content": content}],
+                sampling_params=self.SamplingParams(**sampling_kwargs),
+                chat_template_kwargs=chat_template_kwargs,
+                mm_processor_kwargs={
+                    "min_pixels": self.min_image_pixels,
+                    "max_pixels": effective_max_pixels,
+                    "fps": effective_video_fps,
+                    "cap_pixels_per_frame": True,
+                },
+            )
+        )
+        if not output.outputs:
+            raise RuntimeError("vLLM returned no completion")
+        completion = output.outputs[0]
+        text = str(completion.text).strip()
+        prompt_token_ids = getattr(output, "prompt_token_ids", None)
+        output_token_ids = getattr(completion, "token_ids", None)
+        print(
+            "vllm_generate_done "
+            f"seconds={time.time() - start:.1f} "
+            f"prompt_tokens={len(prompt_token_ids) if prompt_token_ids is not None else -1} "
+            f"output_tokens={len(output_token_ids) if output_token_ids is not None else -1}",
+            flush=True,
+        )
+        return text
+
+
 class OpenAICompatibleLocalRunner:
     """Call a local vLLM/SGLang/llama.cpp OpenAI-compatible server."""
 
@@ -2115,6 +2715,17 @@ def make_runner(
             dtype=dtype,
             allow_cpu=allow_cpu,
             disable_thinking=disable_thinking,
+        )
+    if backend == VLLM_LOCAL_BACKEND:
+        return Qwen3VLLocalVLLMRunner(
+            model_id,
+            max_new_tokens=max_new_tokens,
+            max_image_pixels=max_image_pixels,
+            dtype=dtype,
+            allow_cpu=allow_cpu,
+            disable_thinking=disable_thinking,
+            video_fps=video_fps,
+            max_input_tokens=max_input_tokens,
         )
     if backend == "openai-compatible-local":
         return OpenAICompatibleLocalRunner(

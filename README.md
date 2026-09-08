@@ -531,3 +531,16 @@ python -m egolife_two_user_qa validate_outputs \
   --report egolife_two_user_qa/outputs/pilot_20/generation_report.md \
   --strict-review
 ```
+
+## 当前六用户 one-pass 推理后端
+
+`hpc/qa/experiments/run_six_user_qa_10min_one_pass_30.sbatch` 已直接使用
+`vllm-local`，不再把 Transformers memory-safe runner 作为该主入口的推理后端。
+当前实现使用 2-GPU tensor parallel、FlashAttention、FlashInfer Gated DeltaNet
+prefill、chunked prefill、MTP speculative decoding、多模态 processor 缓存与并发
+review batching，同时保留原有 30 个 generation slot、blockwise 剪枝、
+reasoning/finalizer 和 minimum-set 语义。
+
+本地测试只验证 Python 行为、运行脚本合同和 Bash 语法；Torch 上的 vLLM 0.28.0
+环境、Qwen3.8-27B GPU runtime、显存峰值、端到端耗时和 QA 质量仍需一次最小 GPU
+smoke 后才能确认。

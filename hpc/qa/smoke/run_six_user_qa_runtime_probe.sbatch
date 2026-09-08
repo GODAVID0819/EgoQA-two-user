@@ -56,6 +56,40 @@ TRAIN_ENV="${TRAIN_ENV:-/scratch/xl6775/conda/envs/qwen3vl-smoke}"
 FFMPEG_ENV="${FFMPEG_ENV:-/scratch/xl6775/envs/egoqa-ffmpeg-runtime}"
 MODEL_DIR="${MODEL_DIR:-/scratch/xl6775/models/Qwen3.6-27B}"
 CLIP_MODEL_ID="${CLIP_MODEL_ID:-openai/clip-vit-base-patch32}"
+INFERENCE_BACKEND="${INFERENCE_BACKEND:-transformers-local-memory-safe}"
+VLLM_REQUIRED_VERSION="${VLLM_REQUIRED_VERSION:-0.28.0}"
+VLLM_TENSOR_PARALLEL_SIZE="${VLLM_TENSOR_PARALLEL_SIZE:-2}"
+VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
+VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-262144}"
+VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-8}"
+VLLM_BATCH_WAIT_MS="${VLLM_BATCH_WAIT_MS:-20}"
+VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-32768}"
+VLLM_MAX_IMAGES="${VLLM_MAX_IMAGES:-3600}"
+VLLM_MAX_VIDEOS="${VLLM_MAX_VIDEOS:-20}"
+VLLM_MM_PROCESSOR_CACHE_GB="${VLLM_MM_PROCESSOR_CACHE_GB:-8}"
+VLLM_MM_PROCESSOR_CACHE_TYPE="${VLLM_MM_PROCESSOR_CACHE_TYPE:-shm}"
+VLLM_MM_ENCODER_TP_MODE="${VLLM_MM_ENCODER_TP_MODE:-data}"
+VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
+VLLM_MM_ENCODER_ATTN_BACKEND="${VLLM_MM_ENCODER_ATTN_BACKEND:-FLASH_ATTN}"
+VLLM_GDN_PREFILL_BACKEND="${VLLM_GDN_PREFILL_BACKEND:-flashinfer}"
+VLLM_MTP_SPECULATIVE_TOKENS="${VLLM_MTP_SPECULATIVE_TOKENS:-1}"
+VLLM_ENABLE_PREFIX_CACHING="${VLLM_ENABLE_PREFIX_CACHING:-0}"
+VLLM_VIDEO_FPS="${VLLM_VIDEO_FPS:-0.5}"
+VLLM_MIN_IMAGE_PIXELS="${VLLM_MIN_IMAGE_PIXELS:-3136}"
+VLLM_IMAGE_CONTEXT_TARGET_FRACTION="${VLLM_IMAGE_CONTEXT_TARGET_FRACTION:-0.85}"
+VLLM_IMAGE_TEXT_TOKEN_RESERVE="${VLLM_IMAGE_TEXT_TOKEN_RESERVE:-8192}"
+VLLM_IMAGE_ITEM_TOKEN_OVERHEAD="${VLLM_IMAGE_ITEM_TOKEN_OVERHEAD:-2}"
+VLLM_ALLOWED_LOCAL_MEDIA_PATH="${VLLM_ALLOWED_LOCAL_MEDIA_PATH:-/scratch/xl6775}"
+export INFERENCE_BACKEND VLLM_REQUIRED_VERSION
+export VLLM_TENSOR_PARALLEL_SIZE VLLM_GPU_MEMORY_UTILIZATION VLLM_MAX_MODEL_LEN
+export VLLM_MAX_NUM_SEQS VLLM_BATCH_WAIT_MS VLLM_MAX_NUM_BATCHED_TOKENS
+export VLLM_MAX_IMAGES VLLM_MAX_VIDEOS VLLM_MM_PROCESSOR_CACHE_GB
+export VLLM_MM_PROCESSOR_CACHE_TYPE VLLM_MM_ENCODER_TP_MODE
+export VLLM_ATTENTION_BACKEND VLLM_MM_ENCODER_ATTN_BACKEND
+export VLLM_GDN_PREFILL_BACKEND VLLM_MTP_SPECULATIVE_TOKENS
+export VLLM_ENABLE_PREFIX_CACHING VLLM_VIDEO_FPS VLLM_MIN_IMAGE_PIXELS
+export VLLM_IMAGE_CONTEXT_TARGET_FRACTION VLLM_IMAGE_TEXT_TOKEN_RESERVE
+export VLLM_IMAGE_ITEM_TOKEN_OVERHEAD VLLM_ALLOWED_LOCAL_MEDIA_PATH
 JOB_SCRATCH_ROOT="/scratch/${USER}/job_scratch/${RUN_MODE}_${SLURM_JOB_ID}"
 OUTDIR="${OUTPUT_ROOT}/${RUN_MODE}_${SLURM_JOB_ID}"
 CACHE_DIR="${JOB_SCRATCH_ROOT}/media_cache"
@@ -149,6 +183,7 @@ cd "${PROJECT_ROOT}"
 source /share/apps/anaconda3/2025.06/etc/profile.d/conda.sh
 conda activate "${TRAIN_ENV}"
 PYTHON="${TRAIN_ENV}/bin/python"
+unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY_PATH
 ln -s "${PROJECT_ROOT}" "${PYTHON_ALIAS_ROOT}/egolife_two_user_qa"
 export PYTHONPATH="${PYTHON_ALIAS_ROOT}:${PROJECT_ROOT}:${PYTHONPATH:-}"
 
@@ -182,6 +217,12 @@ payload = {
     "output_dir": "${OUTDIR}",
     "job_scratch_root": "${JOB_SCRATCH_ROOT}",
     "model_dir": "${MODEL_DIR}",
+    "inference_backend": "${INFERENCE_BACKEND}",
+    "vllm_required_version": "${VLLM_REQUIRED_VERSION}",
+    "vllm_tensor_parallel_size": int("${VLLM_TENSOR_PARALLEL_SIZE}"),
+    "vllm_attention_backend": "${VLLM_ATTENTION_BACKEND}",
+    "vllm_mm_encoder_attention_backend": "${VLLM_MM_ENCODER_ATTN_BACKEND}",
+    "vllm_gdn_prefill_backend": "${VLLM_GDN_PREFILL_BACKEND}",
     "video_backend": "${FORCE_QWENVL_VIDEO_READER}",
     "min_video_pixels": int("${QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS}"),
     "max_image_pixels": int("${QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS}"),
@@ -262,6 +303,47 @@ print(f"gpu={torch.cuda.get_device_name(0)}")
 print(f"decord={decord.__version__}")
 print(f"video_backend={video_backend}")
 PY
+
+if [[ "${INFERENCE_BACKEND}" == "vllm-local" ]]; then
+  python - <<'PY'
+import os
+
+import flash_attn
+import flashinfer
+import torch
+import vllm
+
+from egolife_two_user_qa.qwen3vl_runner import Qwen3VLLocalVLLMRunner
+
+required_version = os.environ["VLLM_REQUIRED_VERSION"]
+if vllm.__version__ != required_version:
+    raise SystemExit(
+        f"vLLM version mismatch: expected={required_version} actual={vllm.__version__}"
+    )
+tensor_parallel_size = int(os.environ["VLLM_TENSOR_PARALLEL_SIZE"])
+if torch.cuda.device_count() < tensor_parallel_size:
+    raise SystemExit(
+        "visible GPU count is smaller than VLLM_TENSOR_PARALLEL_SIZE: "
+        f"visible={torch.cuda.device_count()} tp={tensor_parallel_size}"
+    )
+if os.environ["VLLM_ATTENTION_BACKEND"] != "FLASH_ATTN":
+    raise SystemExit("VLLM_ATTENTION_BACKEND must be FLASH_ATTN")
+if os.environ["VLLM_MM_ENCODER_ATTN_BACKEND"] != "FLASH_ATTN":
+    raise SystemExit("VLLM_MM_ENCODER_ATTN_BACKEND must be FLASH_ATTN")
+if os.environ["VLLM_GDN_PREFILL_BACKEND"] != "flashinfer":
+    raise SystemExit("VLLM_GDN_PREFILL_BACKEND must be flashinfer")
+if Qwen3VLLocalVLLMRunner.caps_video_pixels_per_frame is not True:
+    raise SystemExit("vLLM runner must enforce cap_pixels_per_frame")
+print(
+    "vllm_runtime_ready "
+    f"vllm={vllm.__version__} "
+    f"flash_attn={getattr(flash_attn, '__version__', 'unknown')} "
+    f"flashinfer={getattr(flashinfer, '__version__', 'unknown')} "
+    f"tp={tensor_parallel_size} "
+    "cap_pixels_per_frame=true"
+)
+PY
+fi
 
 if [[ "${CUDA_KEEPER_ENABLE}" == "1" ]]; then
   if [[ -s "${CUDA_KEEPER_SCRIPT}" ]]; then
@@ -414,12 +496,12 @@ generation_group_ids = sorted(
 )
 generation_group_count = len(generation_group_ids)
 expected_roles = [
-    "speaker_reference_unpruned",
-    "provider_similarity_pruned",
-    "provider_similarity_pruned",
-    "provider_similarity_pruned",
-    "provider_similarity_pruned",
-    "provider_similarity_pruned",
+    "speaker_all_clustering_frames",
+    "provider_retained_cluster_frames",
+    "provider_retained_cluster_frames",
+    "provider_retained_cluster_frames",
+    "provider_retained_cluster_frames",
+    "provider_retained_cluster_frames",
 ]
 seen_group_speakers = set()
 for row in rows:
@@ -427,7 +509,7 @@ for row in rows:
     clips = row.get("clips")
     if row.get("candidate_type") != "six_user_speaker_consensus":
         raise SystemExit("candidate_type mismatch")
-    if row.get("generator_media_mode") != "speaker_full_five_provider_pruned_videos":
+    if row.get("generator_media_mode") != "speaker_all_clustering_frames_five_provider_retained_cluster_frames":
         raise SystemExit("generator media contract mismatch")
     if not isinstance(users, list) or len(users) != 6 or row.get("required_users") != users:
         raise SystemExit("ordered six-user contract mismatch")
@@ -446,10 +528,22 @@ for row in rows:
     if [attempt.get("speaker_index") for attempt in attempts] != list(range(6)):
         raise SystemExit("speaker attempts must visit indexes 0 through 5 in order")
     for clip in clips:
-        generator_path = Path(str(clip.get("generator_local_video") or ""))
         full_path = Path(str(clip.get("full_local_video") or ""))
-        if not generator_path.is_file() or not full_path.is_file():
-            raise SystemExit(f"missing candidate media for {clip.get('agent_name')}")
+        if not full_path.is_file():
+            raise SystemExit(f"missing full candidate media for {clip.get('agent_name')}")
+        mode = str(clip.get("generator_media_mode") or "")
+        if mode in {"all_clustering_frames_only", "retained_cluster_frames_only"}:
+            frame_paths = [
+                str(frame.get("path") or "")
+                for frame in clip.get("frames") or []
+                if isinstance(frame, dict)
+            ]
+            if not frame_paths or not all(Path(path).is_file() for path in frame_paths):
+                raise SystemExit(f"missing sampled generator frames for {clip.get('agent_name')}")
+        else:
+            generator_path = Path(str(clip.get("generator_local_video") or ""))
+            if not generator_path.is_file():
+                raise SystemExit(f"missing generator media for {clip.get('agent_name')}")
 group_paths = {}
 for row in rows:
     group_id = str(row.get("generation_group_id") or "")
@@ -553,43 +647,80 @@ video_fps = float(sys.argv[2])
 cache_dir = Path(sys.argv[3])
 max_edge = int(sys.argv[4])
 first_row = json.loads(next(line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()))
-source_paths = [str(clip["generator_local_video"]) for clip in first_row["clips"]]
-if len(source_paths) != 6 or not all(Path(item).is_file() for item in source_paths):
-    raise SystemExit("six-user video preflight requires six materialized generator videos")
-preflight_video_paths = [
-    cached_memory_safe_video(item, cache_dir, fps=video_fps, max_edge=max_edge)
-    for item in source_paths
-]
-messages = [{
-    "role": "user",
-    "content": [
-        *[
-            {
-                "type": "video",
-                "video": str(output),
-                "min_pixels": int(os.environ["QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS"]),
-                "max_pixels": int(os.environ["QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS"]),
-                "fps": video_fps,
-            }
-            for output in preflight_video_paths
-        ],
-        {"type": "text", "text": "six-user runtime preflight"},
-    ],
-}]
+sampled_modes = {"all_clustering_frames_only", "retained_cluster_frames_only"}
+clips = list(first_row.get("clips") or [])
+if len(clips) != 6:
+    raise SystemExit("six-user preflight requires six ordered clips")
+uses_sampled_frames = all(
+    str(clip.get("generator_media_mode") or "") in sampled_modes
+    for clip in clips
+)
+if uses_sampled_frames:
+    image_paths = [
+        str(frame.get("path") or "")
+        for clip in clips
+        for frame in clip.get("frames") or []
+        if isinstance(frame, dict)
+    ]
+    if not image_paths or not all(Path(item).is_file() for item in image_paths):
+        raise SystemExit("six-user image preflight requires sampled generator frames")
+    content = [
+        {
+            "type": "image",
+            "image": path,
+            "max_pixels": int(os.environ["QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS"]),
+        }
+        for path in image_paths
+    ]
+    content.append({"type": "text", "text": "six-user image runtime preflight"})
+    expected_media_count = len(image_paths)
+    preflight_mode = "sampled_frames"
+else:
+    source_paths = [str(clip["generator_local_video"]) for clip in clips]
+    if not all(Path(item).is_file() for item in source_paths):
+        raise SystemExit("six-user video preflight requires six materialized generator videos")
+    preflight_video_paths = [
+        cached_memory_safe_video(item, cache_dir, fps=video_fps, max_edge=max_edge)
+        for item in source_paths
+    ]
+    content = [
+        {
+            "type": "video",
+            "video": str(output),
+            "min_pixels": int(os.environ["QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS"]),
+            "max_pixels": int(os.environ["QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS"]),
+            "fps": video_fps,
+        }
+        for output in preflight_video_paths
+    ]
+    content.append({"type": "text", "text": "six-user runtime preflight"})
+    expected_media_count = 6
+    preflight_mode = "videos"
+messages = [{"role": "user", "content": content}]
 try:
-    _, video_inputs, _ = process_vision_info(
+    image_inputs, video_inputs, _ = process_vision_info(
         messages,
         return_video_kwargs=True,
         return_video_metadata=True,
     )
 except TypeError:
     try:
-        _, video_inputs, _ = process_vision_info(messages, return_video_kwargs=True)
+        image_inputs, video_inputs, _ = process_vision_info(messages, return_video_kwargs=True)
     except TypeError:
-        _, video_inputs = process_vision_info(messages)
-if video_inputs is None or len(video_inputs) != 6:
-    raise SystemExit(f"Qwen video preflight decoded {0 if video_inputs is None else len(video_inputs)} videos")
-print("six_user_video_preflight_passed video_count=6 backend=decord", flush=True)
+        image_inputs, video_inputs = process_vision_info(messages)
+if uses_sampled_frames:
+    if image_inputs is None or len(image_inputs) != expected_media_count:
+        raise SystemExit(
+            f"Qwen image preflight decoded {0 if image_inputs is None else len(image_inputs)} images"
+        )
+else:
+    if video_inputs is None or len(video_inputs) != expected_media_count:
+        raise SystemExit(f"Qwen video preflight decoded {0 if video_inputs is None else len(video_inputs)} videos")
+print(
+    f"six_user_media_preflight_passed mode={preflight_mode} "
+    f"media_count={expected_media_count} backend=decord",
+    flush=True,
+)
 PY
 
 echo "stage=generate_six_user_qa"
@@ -633,7 +764,7 @@ python -m egolife_two_user_qa generate_video_qa_loop \
   --intermediate-output "${OUTDIR}/qa_mcq.intermediate.jsonl" \
   --target-count "${ACCEPTED_TARGET}" \
   --max-attempts "${MAX_ATTEMPTS}" \
-  --backend transformers-local-memory-safe \
+  --backend "${INFERENCE_BACKEND}" \
   --model-id "${MODEL_DIR}" \
   --dtype bfloat16 \
   --max-image-pixels "${QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS}" \
@@ -712,6 +843,14 @@ def read_rows(name):
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
+
+def model_call_count(row):
+    count = 2 if row.get("execution_mode") == "reasoned_then_finalize" else 1
+    repair = row.get("format_repair")
+    if isinstance(repair, dict) and repair.get("attempted") is True:
+        count += 1
+    return count
+
 accepted = read_rows("qa_mcq.jsonl")
 rejected = read_rows("qa_mcq.rejected.jsonl")
 prompts = read_rows("video_first_prompts.jsonl")
@@ -727,8 +866,8 @@ groundedness = [row for row in prompts if row.get("stage") == "evidence_grounded
 answerability = [row for row in prompts if row.get("stage") == "answerability"]
 
 for row in generation:
-    if len(row.get("video_paths") or []) != 6:
-        raise SystemExit("generator_video_count must be 6")
+    if not (len(row.get("image_paths") or []) > 0 or len(row.get("video_paths") or []) == 6):
+        raise SystemExit("generator media must contain sampled images or six videos")
 for row in groundedness:
     if len(row.get("video_paths") or []) != 6 or row.get("media_role") != "full":
         raise SystemExit("groundedness_video_count must be 6 full videos")
@@ -755,10 +894,12 @@ for row in accepted:
     if not generation_slot_id:
         raise SystemExit(f"accepted QA is missing generation_slot_id: qa_id={qa_id}")
     answerability_prompt_rows = by_answerability_identity.get(identity, [])
-    accepted_answerability_call_counts.append(len(answerability_prompt_rows))
-    if len(answerability_prompt_rows) != 2:
+    accepted_answerability_call_counts.append(
+        sum(model_call_count(item) for item in answerability_prompt_rows)
+    )
+    if len(answerability_prompt_rows) < 3:
         raise SystemExit(
-            f"accepted QA must have exactly 2 answerability calls: "
+            f"accepted QA must have at least 3 answerability calls including minimum-set audit: "
             f"generation_slot_id={generation_slot_id} qa_id={qa_id} "
             f"attempt={attempt} count={len(answerability_prompt_rows)}"
         )
@@ -768,10 +909,15 @@ for row in accepted:
     }
     speaker_answerability = answerability_rows.get("speaker_only")
     all_six_answerability = answerability_rows.get("combined_all_six_users")
+    minimum_set_rows = [
+        item
+        for item in answerability_prompt_rows
+        if str(item.get("condition_type") or "") == "minimum_required_users"
+    ]
     if (
-        set(answerability_rows) != {"speaker_only", "combined_all_six_users"}
-        or speaker_answerability is None
+        speaker_answerability is None
         or all_six_answerability is None
+        or not minimum_set_rows
     ):
         raise SystemExit(f"accepted QA is missing an answerability condition: {qa_id}")
     speaker_user = str(row.get("speaker_user") or "")
@@ -882,8 +1028,10 @@ completed_three_judge_attempt_count = sum(
 answerability_call_count = (
     accepted_answerability_call_counts[0]
     if accepted_answerability_call_counts
-    else (2 if completed_review_count else 0)
+    else (3 if completed_review_count else 0)
 )
+generator_call_count = model_call_count(generation[0]) if generation else 0
+groundedness_call_count = model_call_count(groundedness[0]) if groundedness else 0
 review_summary = summarize_review_gate_attempts(
     accepted,
     rejected,
@@ -1006,8 +1154,11 @@ result = {
     "accepted_target": accepted_target,
     "target_reached": len(accepted) >= accepted_target,
     "allow_partial": allow_partial,
-    "generator_video_count": 6,
+    "generator_video_count": 0,
+    "generator_sampled_frame_mode": True,
+    "generator_call_count": generator_call_count,
     "groundedness_video_count": 6,
+    "groundedness_call_count": groundedness_call_count,
     "evidence_segment_observation_count": 0,
     "evidence_groundedness_aggregation_count": 0,
     "answerability_call_count": answerability_call_count,

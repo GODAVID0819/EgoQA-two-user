@@ -458,6 +458,57 @@ STRICT_JSON_OUTPUT_CONTRACT = """Output contract:
 """
 
 
+REASONED_FINALIZER_FIELD_LIMITS = {
+    "generation": """Field limits:
+- question: at most 45 English words.
+- each option: at most 20 English words.
+- each evidence.needed_fact: at most 30 English words.
+- each evidence.timeframe: at most 15 English words.
+- each single_user_answerability value: at most 25 English words.
+- combined_answerability: at most 50 English words.
+- generator_rationale: at most 80 English words.
+- each per_user_evidence_claims.claim: at most 30 English words.
+- review.generator_self_check: at most 100 English words.""",
+    "evidence_groundedness": """Field limits:
+- Each reason and fix must be one sentence and at most 40 English words.
+- Do not repeat the reasoning draft or enumerate irrelevant observations.""",
+    "answerability": """Field limits:
+- reason: at most 50 English words.
+- each fact, why_needed, and visual_description: at most 35 English words.
+- Preserve every canonical fact identity exactly when canonical facts are supplied.""",
+}
+
+
+def build_reasoned_finalizer_prompt(
+    *,
+    task_prompt: str,
+    reasoning_output: str,
+    output_schema: dict[str, Any],
+    stage_name: str,
+) -> str:
+    limits = REASONED_FINALIZER_FIELD_LIMITS.get(
+        stage_name,
+        "Keep every string concise and do not repeat the reasoning draft.",
+    )
+    return f"""You are the structured finalizer for stage {stage_name}.
+
+The reasoning draft below is supporting analysis. It may be incomplete or contain tentative statements. Use it together with the original task and any media attached to this finalizer call. Do not copy the reasoning, continue the chain of thought, mention the draft, or emit a <think> block.
+
+{STRICT_JSON_OUTPUT_CONTRACT}
+
+{limits}
+
+Original task:
+{task_prompt}
+
+Reasoning draft:
+{reasoning_output}
+
+Return exactly one JSON object matching this schema or example shape:
+{json.dumps(output_schema, ensure_ascii=False, indent=2)}
+"""
+
+
 QUESTION_TYPE_GENERATION_INSTRUCTIONS = {
     "commonality": (
         "Create a commonality question only when the shared state, consequence, or follow-up "
@@ -1886,21 +1937,21 @@ def build_answerability_prompt(
                 "original provider videos. Combine visible evidence across them when needed. "
                 "Some provider views may be irrelevant."
             )
-            if canonical_facts is not None:
-                canonical_fact_block = f"""
-Canonical needed facts defined by the speaker-only condition:
-{json.dumps(canonical_facts, ensure_ascii=False, indent=2)}
-
-You must return exactly these canonical facts in the same order. You must not add, delete, reorder, merge, split, or rewrite facts. Preserve `fact_id`, `fact`, and `why_needed` verbatim. Re-evaluate only `visibility`, `confidence`, `source_user`, `original_time_range`, and `visual_description` from the supplied six videos.
-"""
-                fact_generation_rule = (
-                    "- Reuse the supplied canonical needed facts exactly; do not decompose the "
-                    "question again or change fact identity."
-                )
         else:
             media_rules = (
                 "- Evaluate only the videos explicitly listed in this condition. Do not assume "
                 "facts from omitted views."
+            )
+        if canonical_facts is not None:
+            canonical_fact_block = f"""
+Canonical needed facts defined by the speaker-only condition:
+{json.dumps(canonical_facts, ensure_ascii=False, indent=2)}
+
+You must return exactly these canonical facts in the same order. You must not add, delete, reorder, merge, split, or rewrite facts. Preserve `fact_id`, `fact`, and `why_needed` verbatim. Re-evaluate only `visibility`, `confidence`, `source_user`, `original_time_range`, and `visual_description` from the supplied condition videos.
+"""
+            fact_generation_rule = (
+                "- Reuse the supplied canonical needed facts exactly; do not decompose the "
+                "question again or change fact identity."
             )
         return f"""You are an evidence-sufficiency judge for an EgoLife multiple-choice question.
 
