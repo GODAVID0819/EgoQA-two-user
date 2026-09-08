@@ -94,6 +94,7 @@ JOB_SCRATCH_ROOT="/scratch/${USER}/job_scratch/${RUN_MODE}_${SLURM_JOB_ID}"
 OUTDIR="${OUTPUT_ROOT}/${RUN_MODE}_${SLURM_JOB_ID}"
 CACHE_DIR="${JOB_SCRATCH_ROOT}/media_cache"
 PYTHON_ALIAS_ROOT="${JOB_SCRATCH_ROOT}/pythonpath"
+VLLM_IPC_RUNTIME_LINK="/tmp/egoqa_vllm_${SLURM_JOB_ID}"
 
 CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-0}"
 CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/hpc/shared/cuda.py}"
@@ -112,6 +113,10 @@ cleanup() {
     echo "stage=stop_cuda_keeper pid=${CUDA_KEEPER_PID}"
     kill "${CUDA_KEEPER_PID}" 2>/dev/null || true
     wait "${CUDA_KEEPER_PID}" 2>/dev/null || true
+  fi
+  if [[ -L "${VLLM_IPC_RUNTIME_LINK}" ]] && \
+     [[ "$(readlink "${VLLM_IPC_RUNTIME_LINK}")" == "${JOB_SCRATCH_ROOT}/tmp" ]]; then
+    unlink "${VLLM_IPC_RUNTIME_LINK}"
   fi
   return "${cleanup_status}"
 }
@@ -178,6 +183,17 @@ mkdir -p \
   "${TMPDIR}" \
   "${CONDA_PKGS_DIRS}" \
   "${PIP_CACHE_DIR}"
+
+if [[ "${INFERENCE_BACKEND}" == "vllm-local" ]]; then
+  if [[ -e "${VLLM_IPC_RUNTIME_LINK}" || -L "${VLLM_IPC_RUNTIME_LINK}" ]]; then
+    echo "STOP: vLLM IPC path already exists: ${VLLM_IPC_RUNTIME_LINK}" >&2
+    exit 1
+  fi
+  ln -s "${JOB_SCRATCH_ROOT}/tmp" "${VLLM_IPC_RUNTIME_LINK}"
+  export TMPDIR="${VLLM_IPC_RUNTIME_LINK}"
+  export TMP="${VLLM_IPC_RUNTIME_LINK}"
+  export TEMP="${VLLM_IPC_RUNTIME_LINK}"
+fi
 
 cd "${PROJECT_ROOT}"
 source /share/apps/anaconda3/2025.06/etc/profile.d/conda.sh

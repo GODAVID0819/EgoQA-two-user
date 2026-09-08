@@ -171,6 +171,18 @@ def test_runtime_cleanup_preserves_original_failure_status() -> None:
     assert 'return "${cleanup_status}"' in runtime
 
 
+def test_vllm_runtime_uses_short_ipc_link_into_job_scratch() -> None:
+    runtime = runtime_text()
+
+    assert 'VLLM_IPC_RUNTIME_LINK="/tmp/egoqa_vllm_${SLURM_JOB_ID}"' in runtime
+    assert 'ln -s "${JOB_SCRATCH_ROOT}/tmp" "${VLLM_IPC_RUNTIME_LINK}"' in runtime
+    assert 'export TMPDIR="${VLLM_IPC_RUNTIME_LINK}"' in runtime
+    assert 'export TMP="${VLLM_IPC_RUNTIME_LINK}"' in runtime
+    assert 'export TEMP="${VLLM_IPC_RUNTIME_LINK}"' in runtime
+    assert '[[ "$(readlink "${VLLM_IPC_RUNTIME_LINK}")" == "${JOB_SCRATCH_ROOT}/tmp" ]]' in runtime
+    assert 'unlink "${VLLM_IPC_RUNTIME_LINK}"' in runtime
+
+
 def test_one_pass_formal_wrapper_reuses_mined_assets_and_runs_30_slots() -> None:
     job = ONE_PASS_FORMAL_JOB.read_text(encoding="utf-8")
 
