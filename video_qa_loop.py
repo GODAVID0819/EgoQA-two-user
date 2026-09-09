@@ -268,6 +268,30 @@ def six_user_one_pass_profiles() -> dict[str, GenerationCallProfile]:
     }
 
 
+def six_user_one_pass_nr_profiles() -> dict[str, GenerationCallProfile]:
+    """Return the one-pass NR treatment with R-finalizer output budgets."""
+
+    reasoning = six_user_one_pass_profiles()
+    generator = reasoning["generator_finalizer"]
+    groundedness = reasoning["evidence_groundedness_finalizer"]
+    speaker = reasoning["speaker_only_answerability_finalizer"]
+    all_six = reasoning["all_six_answerability_finalizer"]
+    minimum_set = reasoning["minimum_set_answerability_finalizer"]
+    return {
+        "generator": generator,
+        "generator_json_repair": reasoning["generator_json_repair"],
+        "qa_formality": reasoning["qa_formality"],
+        "speaker_only_answerability": speaker,
+        "all_six_answerability": all_six,
+        "minimum_set_answerability": minimum_set,
+        "answerability": all_six,
+        "evidence_groundedness": groundedness,
+        "evidence_segment_observation": groundedness,
+        "evidence_groundedness_aggregation": groundedness,
+        "json_repair": reasoning["json_repair"],
+    }
+
+
 def generate_with_call_profile(
     runner: Any,
     prompt: str,
@@ -4921,6 +4945,7 @@ def generate_video_qa_loop(
     six_user_ten_minute_reasoning_profile: bool = False,
     six_user_ten_minute_fast_profile: bool = False,
     six_user_one_pass_profile: bool = False,
+    six_user_one_pass_nr_profile: bool = False,
     fail_fast_review: bool = False,
     formality_max_new_tokens: int = 2048,
     qa_formality_use_generator: bool = False,
@@ -4944,7 +4969,11 @@ def generate_video_qa_loop(
     attempts_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     judge_include_generator_rationale = False
-    if six_user_one_pass_profile:
+    if six_user_one_pass_profile and six_user_one_pass_nr_profile:
+        raise ValueError("one-pass NR and R profiles are mutually exclusive")
+    if six_user_one_pass_nr_profile:
+        stage_profiles = six_user_one_pass_nr_profiles()
+    elif six_user_one_pass_profile:
         stage_profiles = six_user_one_pass_profiles()
     elif six_user_ten_minute_fast_profile:
         stage_profiles = six_user_ten_minute_fast_profiles()
@@ -5917,6 +5946,14 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--six-user-one-pass-nr-profile",
+        action="store_true",
+        help=(
+            "Use the one-pass non-reasoning treatment with the same media and "
+            "R-finalizer output budgets."
+        ),
+    )
+    parser.add_argument(
         "--fail-fast-review",
         action="store_true",
         help=(
@@ -6043,6 +6080,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         six_user_ten_minute_fast_profile=args.six_user_ten_minute_fast_profile,
         six_user_one_pass_profile=args.six_user_one_pass_profile,
+        six_user_one_pass_nr_profile=args.six_user_one_pass_nr_profile,
         fail_fast_review=args.fail_fast_review,
         formality_max_new_tokens=args.formality_max_new_tokens,
         qa_formality_use_generator=args.qa_formality_use_generator,

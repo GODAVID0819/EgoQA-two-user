@@ -32,6 +32,8 @@ TARGET_GENERATION_GROUPS="${TARGET_GENERATION_GROUPS:-1}"
 EXPECTED_QA_PER_GROUP="${EXPECTED_QA_PER_GROUP:-0}"
 ONE_CANDIDATE_PER_GROUP="${ONE_CANDIDATE_PER_GROUP:-0}"
 ONE_PASS_30_SLOT_MODE="${ONE_PASS_30_SLOT_MODE:-0}"
+ONE_PASS_REASONING_MODE="${ONE_PASS_REASONING_MODE:-r}"
+EXPECTED_TOTAL_SLOTS="${EXPECTED_TOTAL_SLOTS:-30}"
 PRECOMPUTED_CANDIDATE_ASSETS_ROOT="${PRECOMPUTED_CANDIDATE_ASSETS_ROOT:-}"
 PRECOMPUTED_SOURCE_JOB_ID="${PRECOMPUTED_SOURCE_JOB_ID:-16699348}"
 GENERATOR_DECODE_MODE="${GENERATOR_DECODE_MODE:-greedy}"
@@ -48,6 +50,7 @@ export SIX_USER_TEN_MINUTE_REASONING_PROFILE
 export SIX_USER_TEN_MINUTE_FAST_PROFILE SIX_USER_ONE_PASS_PROFILE FAIL_FAST_REVIEW
 export EXPECTED_QA_PER_GROUP
 export ONE_CANDIDATE_PER_GROUP ONE_PASS_30_SLOT_MODE
+export ONE_PASS_REASONING_MODE EXPECTED_TOTAL_SLOTS
 export PRECOMPUTED_CANDIDATE_ASSETS_ROOT PRECOMPUTED_SOURCE_JOB_ID
 
 PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
@@ -258,6 +261,8 @@ payload = {
     "ten_minute_reasoning_profile": bool(int("${SIX_USER_TEN_MINUTE_REASONING_PROFILE}")),
     "ten_minute_fast_profile": bool(int("${SIX_USER_TEN_MINUTE_FAST_PROFILE}")),
     "one_pass_30_slot_mode": bool(int("${ONE_PASS_30_SLOT_MODE}")),
+    "one_pass_reasoning_mode": "${ONE_PASS_REASONING_MODE}",
+    "expected_total_slots": int("${EXPECTED_TOTAL_SLOTS}"),
     "one_pass_profile": bool(int("${SIX_USER_ONE_PASS_PROFILE}")),
     "precomputed_candidate_assets_root": "${PRECOMPUTED_CANDIDATE_ASSETS_ROOT}",
     "precomputed_source_job_id": "${PRECOMPUTED_SOURCE_JOB_ID}",
@@ -768,6 +773,14 @@ if [[ "${QA_TIME_BUDGET_MODE}" == "1" ]]; then
   fi
 fi
 if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then
+  case "${ONE_PASS_REASONING_MODE}" in
+    "nr") QA_PROFILE_ARGS=(--six-user-one-pass-nr-profile) ;;
+    "r") QA_PROFILE_ARGS=(--six-user-one-pass-profile) ;;
+    *)
+      echo "STOP: invalid ONE_PASS_REASONING_MODE=${ONE_PASS_REASONING_MODE}" >&2
+      exit 2
+      ;;
+  esac
   EVIDENCE_INPUT_PATH="${OUTDIR}/one_pass_evidence.jsonl"
   QA_TIME_ARGS+=(--attempts-output "${OUTDIR}/qa_mcq.attempts.jsonl")
   if [[ -n "${MAX_GENERATION_SLOTS}" ]]; then
@@ -814,7 +827,7 @@ if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then
     --attempts "${OUTDIR}/qa_mcq.attempts.jsonl" \
     --output "${OUTDIR}/six_user_qa_result.json" \
     --manifest "${OUTDIR}/job_manifest.json" \
-    --expected-slots 30 \
+    --expected-slots "${EXPECTED_TOTAL_SLOTS}" \
     --generation-exit-code "${GENERATION_EXIT_CODE}"
 else
 python - "${OUTDIR}" "${ACCEPTED_TARGET}" "${ALLOW_PARTIAL}" "${MAX_ATTEMPTS}" \
