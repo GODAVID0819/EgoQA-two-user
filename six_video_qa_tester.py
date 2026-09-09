@@ -30,6 +30,7 @@ from .qwen3vl_runner import (
     GENERATOR_DECODING_MODES,
     MEMORY_SAFE_BACKEND,
     OPENROUTER_REASONING_EFFORTS,
+    VLLM_LOCAL_BACKEND,
     make_runner,
 )
 from .schema import OPTION_LETTERS, extract_json_object, normalize_correct
@@ -39,6 +40,7 @@ from .small_video_model_runner import SMALL_VIDEO_BACKENDS, make_small_video_run
 TEST_BACKENDS = (
     "transformers-local",
     MEMORY_SAFE_BACKEND,
+    VLLM_LOCAL_BACKEND,
     *SMALL_VIDEO_BACKENDS,
     "openai-compatible-local",
     "openrouter",
@@ -259,11 +261,26 @@ def _ordered_six_media(
     if asker_clip["source_role"] != "selected_pair_full_original":
         raise ValueError(f"{qa_id}: asker is not part of the original selected pair")
 
-    others = sorted(
-        (clip for clip in media if clip is not asker_clip),
+    selected_partner = [
+        clip
+        for clip in media
+        if clip is not asker_clip
+        and clip.get("source_role") == "selected_pair_full_original"
+    ]
+    if len(selected_partner) != 1:
+        raise ValueError(
+            f"{qa_id}: expected one non-asker selected-pair video, "
+            f"found {len(selected_partner)}"
+        )
+    context_clips = sorted(
+        (clip for clip in media if clip.get("source_role") == "remaining_context"),
         key=lambda clip: str(clip.get("agent_dir") or ""),
     )
-    ordered = [asker_clip, *others]
+    if len(context_clips) != 4:
+        raise ValueError(
+            f"{qa_id}: expected four remaining context videos, found {len(context_clips)}"
+        )
+    ordered = [asker_clip, selected_partner[0], *context_clips]
     for index, clip in enumerate(ordered, 1):
         clip["input_video_index"] = index
         clip["is_asker_video"] = index == 1
@@ -338,6 +355,7 @@ def build_blind_video_prompt(
     *,
     asker: str,
     video_input_scope: str,
+    force_choice_decoding: bool = False,
 ) -> str:
     """Build a test prompt with no gold, evidence, or participant metadata."""
 
@@ -359,14 +377,23 @@ def build_blind_video_prompt(
         )
     else:
         raise ValueError(f"unsupported video_input_scope: {video_input_scope}")
+    response_instruction = (
+        "Return exactly one capital letter: A, B, C, D, or E.\n"
+        "Your entire response must be that single letter.\n\n"
+        "Answer:"
+        if force_choice_decoding
+        else (
+            'Return exactly one JSON object in this form: {"choice":"A"}\n'
+            "Replace A with one of A, B, C, D, or E. Do not explain your answer."
+        )
+    )
     return (
         media_description
         + "No other identity or pairing information is provided. Base your answer "
         "only on the visible video content and the question.\n\n"
         f"Question:\n{question}\n\n"
         f"Options:\n{option_lines}\n\n"
-        'Return exactly one JSON object in this form: {"choice":"A"}\n'
-        "Replace A with one of A, B, C, D, or E. Do not explain your answer."
+        + response_instruction
     )
 
 
@@ -453,6 +480,7 @@ def _prepare_cases(
     six_view_index: dict[str, dict[str, Any]] | None,
     video_input_scope: str,
     pair_video_source: str,
+    force_choice_decoding: bool,
 ) -> list[dict[str, Any]]:
     cases = []
     for qa in qa_rows:
@@ -503,6 +531,7 @@ def _prepare_cases(
                     qa,
                     asker=asker,
                     video_input_scope=video_input_scope,
+                    force_choice_decoding=force_choice_decoding,
                 ),
             }
         )
@@ -520,6 +549,7 @@ def _result_summary(
     prompts_path: Path,
     video_input_scope: str,
     pair_video_source: str,
+    choice_decoding_mode: str,
 ) -> dict[str, Any]:
     successful = [row for row in results if row.get("status") == "completed"]
     parsed = [row for row in successful if row.get("predicted_choice") in OPTION_LETTERS]
@@ -556,6 +586,7 @@ def _result_summary(
         "prompts_path": str(prompts_path),
         "video_input_scope": video_input_scope,
         "pair_video_source": pair_video_source,
+        "choice_decoding_mode": choice_decoding_mode,
         "testee_disclosure": (
             "asker name and the fact that Video 1 belongs to the asker; "
             + (
@@ -615,6 +646,7 @@ def run_six_video_qa_test(
     runner: Any | None = None,
     video_input_scope: str = "six",
     pair_video_source: str = "generator",
+    force_choice_decoding: bool = False,
 ) -> dict[str, Any]:
     """Run blind A-E evaluation and write one durable result row per QA."""
 
@@ -662,6 +694,7 @@ def run_six_video_qa_test(
         six_view_index=six_view_index,
         video_input_scope=video_input_scope,
         pair_video_source=pair_video_source,
+        force_choice_decoding=force_choice_decoding,
     )
 
     output_path = Path(output_path)
@@ -718,6 +751,16 @@ def run_six_video_qa_test(
             device_map=device_map,
         )
     effective_model_id = str(getattr(active_runner, "model_id", model_id))
+    choice_decoding_mode = (
+        "forced_single_token_ae"
+        if force_choice_decoding
+        else "generated_text_parse"
+    )
+    forced_choice_generator = getattr(active_runner, "generate_forced_choice", None)
+    if force_choice_decoding and not callable(forced_choice_generator):
+        raise ValueError(
+            f"runner {type(active_runner).__name__} does not support forced-choice decoding"
+        )
 
     completed_evaluation_ids = set()
     if resume and output_path.exists():
@@ -743,6 +786,14 @@ def run_six_video_qa_test(
                 raise ValueError("resume output contains a different backend")
             if str(result.get("model_id") or "") != effective_model_id:
                 raise ValueError("resume output contains a different model_id")
+            existing_choice_decoding_mode = str(
+                result.get("choice_decoding_mode") or "generated_text_parse"
+            )
+            if existing_choice_decoding_mode != choice_decoding_mode:
+                raise ValueError(
+                    "resume output contains a different choice_decoding_mode: "
+                    f"{existing_choice_decoding_mode!r}"
+                )
             existing_qa_id = str(result.get("qa_id") or "")
             if not existing_qa_id:
                 raise ValueError("resume output contains a row without qa_id")
@@ -863,6 +914,7 @@ def run_six_video_qa_test(
             "video_count": len(anonymous_paths),
             "video_input_scope": video_input_scope,
             "pair_video_source": pair_video_source,
+            "choice_decoding_mode": choice_decoding_mode,
             "disclosed_identity_count": 1,
             "gold_fields_in_prompt": False,
         }
@@ -873,15 +925,27 @@ def run_six_video_qa_test(
             prepare_videos = getattr(active_runner, "prepare_videos", None)
             if callable(prepare_videos):
                 prepare_videos(anonymous_paths)
-            raw_output = active_runner.generate(
-                case["prompt"],
-                image_paths=[],
-                video_paths=anonymous_paths,
-                decoding_mode=decoding_mode,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-            )
+            if force_choice_decoding:
+                raw_output = forced_choice_generator(
+                    case["prompt"],
+                    image_paths=[],
+                    video_paths=anonymous_paths,
+                    choices=tuple(OPTION_LETTERS),
+                    decoding_mode=decoding_mode,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                )
+            else:
+                raw_output = active_runner.generate(
+                    case["prompt"],
+                    image_paths=[],
+                    video_paths=anonymous_paths,
+                    decoding_mode=decoding_mode,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                )
             predicted_choice, parse_method = parse_model_choice(str(raw_output))
             result = {
                 "case_index": case_index,
@@ -894,6 +958,7 @@ def run_six_video_qa_test(
                 "model_id": effective_model_id,
                 "video_input_scope": video_input_scope,
                 "pair_video_source": pair_video_source,
+                "choice_decoding_mode": choice_decoding_mode,
                 "status": "completed",
                 "question": case["question"],
                 "options": case["options"],
@@ -931,6 +996,7 @@ def run_six_video_qa_test(
                 "model_id": effective_model_id,
                 "video_input_scope": video_input_scope,
                 "pair_video_source": pair_video_source,
+                "choice_decoding_mode": choice_decoding_mode,
                 "status": "error",
                 "error": f"{type(exc).__name__}: {exc}",
                 "model_call_seconds": round(time.time() - started, 3),
@@ -953,6 +1019,7 @@ def run_six_video_qa_test(
         prompts_path=prompts_path,
         video_input_scope=video_input_scope,
         pair_video_source=pair_video_source,
+        choice_decoding_mode=choice_decoding_mode,
     )
     summary.update(
         {
@@ -970,6 +1037,7 @@ def run_six_video_qa_test(
             "max_items": max_items,
             "max_frames_per_video": max_frames_per_video,
             "resume": resume,
+            "force_choice_decoding": force_choice_decoding,
         }
     )
     write_json(summary_path, summary)
@@ -1051,6 +1119,14 @@ def add_six_video_tester_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--top-k", type=int)
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--max-items", type=int)
+    parser.add_argument(
+        "--force-choice-decoding",
+        action="store_true",
+        help=(
+            "Constrain compatible local runners to emit exactly one A-E token "
+            "instead of parsing free-form generated text"
+        ),
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
 
@@ -1098,6 +1174,7 @@ def run_six_video_test_from_args(args: argparse.Namespace) -> dict[str, Any]:
         top_k=args.top_k,
         start_index=args.start_index,
         max_items=args.max_items,
+        force_choice_decoding=args.force_choice_decoding,
         resume=args.resume,
         fail_fast=args.fail_fast,
     )

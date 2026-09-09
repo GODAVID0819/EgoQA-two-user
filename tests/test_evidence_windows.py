@@ -6,12 +6,14 @@ from typing import Any
 
 import pytest
 
+import egolife_two_user_qa.evidence as evidence_module
 from egolife_two_user_qa.evidence import (
     DEFAULT_EVIDENCE_DURATION_SECONDS,
     LONG_CONTEXT_EVIDENCE_DURATION_SECONDS,
     build_evidence_packet,
     concatenate_video_segments,
     group_manifest_clips,
+    iter_evidence_packets,
 )
 from egolife_two_user_qa.prompts import temporal_pruning_brief, video_packet_brief
 from egolife_two_user_qa.video_qa_loop import video_evidence_for_packet
@@ -92,6 +94,75 @@ def test_ten_minute_grouping_rejects_an_agent_with_a_missing_segment() -> None:
     assert groups == []
 
 
+def test_lazy_evidence_filter_excludes_processed_window_before_selection(tmp_path) -> None:
+    manifest = _ten_minute_manifest()
+    second_start = 12 * 3600 + 10 * 60
+    for agent_dir in AGENTS:
+        for index in range(20):
+            manifest["clips"].append(_clip(agent_dir, second_start + 30 * index))
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    packets = list(
+        iter_evidence_packets(
+            manifest_path=manifest_path,
+            cache_dir=tmp_path / "cache",
+            output_root=tmp_path / "output",
+            target_count=1,
+            users_per_case=2,
+            frames_per_clip=1,
+            evidence_duration_seconds=LONG_CONTEXT_EVIDENCE_DURATION_SECONDS,
+            download_media=False,
+            excluded_group_keys={("DAY1", "12000000")},
+        )
+    )
+
+    assert len(packets) == 1
+    assert packets[0]["time_token"] == "12100000"
+
+
+def test_lazy_evidence_iterator_can_skip_a_failed_media_group(
+    tmp_path, monkeypatch
+) -> None:
+    manifest = _ten_minute_manifest()
+    second_start = 12 * 3600 + 10 * 60
+    for agent_dir in AGENTS:
+        for index in range(20):
+            manifest["clips"].append(_clip(agent_dir, second_start + 30 * index))
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    attempted_tokens: list[str] = []
+
+    def fake_build_evidence_packet(group, **_kwargs):
+        attempted_tokens.append(group["time_token"])
+        if len(attempted_tokens) == 1:
+            raise RuntimeError("simulated media failure")
+        return {"time_token": group["time_token"]}
+
+    monkeypatch.setattr(
+        evidence_module,
+        "build_evidence_packet",
+        fake_build_evidence_packet,
+    )
+
+    packets = list(
+        iter_evidence_packets(
+            manifest_path=manifest_path,
+            cache_dir=tmp_path / "cache",
+            output_root=tmp_path / "output",
+            target_count=2,
+            users_per_case=2,
+            frames_per_clip=1,
+            evidence_duration_seconds=LONG_CONTEXT_EVIDENCE_DURATION_SECONDS,
+            download_media=False,
+            skip_failed_groups=True,
+        )
+    )
+
+    assert attempted_tokens == ["12000000", "12100000"]
+    assert packets == [{"time_token": "12100000"}]
+
+
 def test_thirty_second_override_preserves_exact_timestamp_grouping() -> None:
     clips = [_clip(agent_dir, 12 * 3600 + 12) for agent_dir in AGENTS]
 
@@ -150,7 +221,7 @@ def test_dry_packet_keeps_all_source_provenance_without_claiming_remote_window_u
     assert len(audit_rows[0]["source_segments"]) == 20
 
 
-def test_temporal_pruning_brief_exposes_pruned_to_original_time_map() -> None:
+def test_temporal_pruning_brief_omits_exact_interval_mapping() -> None:
     brief = temporal_pruning_brief(
         {
             "keep_intervals": [[2.5, 4.5], [6.5, 7.5]],
@@ -160,23 +231,11 @@ def test_temporal_pruning_brief_exposes_pruned_to_original_time_map() -> None:
     )
 
     assert brief is not None
-    assert brief["pruned_to_original_time_map"] == [
-        {
-            "pruned_start_seconds": 0.0,
-            "pruned_end_seconds": 2.0,
-            "original_start_seconds": 2.5,
-            "original_end_seconds": 4.5,
-        },
-        {
-            "pruned_start_seconds": 2.0,
-            "pruned_end_seconds": 3.0,
-            "original_start_seconds": 6.5,
-            "original_end_seconds": 7.5,
-        },
-    ]
-    assert "equal pruned playback positions do not prove concurrency" in brief[
-        "temporal_alignment_contract"
-    ]
+    assert brief["kept_duration_seconds"] == 3.0
+    assert brief["removed_duration_seconds"] == 7.0
+    assert "keep_intervals" not in brief
+    assert "pruned_to_original_time_map" not in brief
+    assert "temporal_alignment_contract" not in brief
 
 
 def test_evidence_duration_must_be_a_multiple_of_source_clip_duration() -> None:

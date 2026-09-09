@@ -15,9 +15,13 @@
 
 set -euo pipefail
 
+# ARCHIVED EXPERIMENT: production generation and qa_formality now reject
+# concurrent-activity questions, including single-anchor and activity-pair forms.
+echo "error=archived_concurrent_activity_experiment_not_a_production_pipeline" >&2
+exit 2
+
 PROJECT_ROOT="${QWEN3VL_PROJECT_ROOT:-/scratch/${USER}/Long-video-understanding-clip}"
-# Compatibility launcher: concurrency is now one of several optional implicit
-# directions in the active underrepresented-family run.
+# Historical forwarding body retained below for audit only.
 export EGOLIFE2U_OUTPUT_ROOT="${EGOLIFE2U_OUTPUT_ROOT:-egolife_two_user_qa/outputs/implicit_underrepresented_families_50}"
 
 cd "${PROJECT_ROOT}"

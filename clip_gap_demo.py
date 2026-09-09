@@ -17,8 +17,12 @@ import math
 import random
 import shutil
 import subprocess
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Protocol
+
+import numpy as np
 
 from .io_utils import iter_jsonl, write_json
 
@@ -77,33 +81,44 @@ def cluster_embedding_medoids(
 
     if not embeddings:
         return [], []
-    vectors = [_normalize(vector) for vector in embeddings]
+    vectors = np.asarray(embeddings, dtype=np.float64)
+    if vectors.ndim != 2 or vectors.shape[1] == 0:
+        raise ValueError("embeddings must form a non-empty two-dimensional matrix")
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    vectors = np.divide(
+        vectors,
+        norms,
+        out=np.zeros_like(vectors),
+        where=norms > 0,
+    )
     k = max(1, min(cluster_count, len(vectors)))
 
-    centers = [vectors[0]]
     center_indices = [0]
-    while len(centers) < k:
-        next_index = max(
-            (index for index in range(len(vectors)) if index not in center_indices),
-            key=lambda index: min(1.0 - cosine_similarity(vectors[index], center) for center in centers),
-        )
+    centers = vectors[[0]].copy()
+    while len(center_indices) < k:
+        similarities = vectors @ centers.T
+        nearest_distances = np.min(1.0 - similarities, axis=1)
+        nearest_distances[center_indices] = -np.inf
+        next_index = int(np.argmax(nearest_distances))
         center_indices.append(next_index)
-        centers.append(vectors[next_index])
+        centers = np.vstack((centers, vectors[next_index]))
 
-    labels = [0 for _ in vectors]
+    labels = np.zeros(len(vectors), dtype=np.int64)
     for _ in range(max_iterations):
-        new_labels = [
-            max(range(k), key=lambda cluster: cosine_similarity(vector, centers[cluster]))
-            for vector in vectors
-        ]
+        new_labels = np.argmax(vectors @ centers.T, axis=1).astype(np.int64)
         # Exact duplicate centers can otherwise lose a cluster through tie-breaking.
         for cluster, center_index in enumerate(center_indices):
             new_labels[center_index] = cluster
-        new_centers = []
+        new_centers = np.empty_like(centers)
         for cluster in range(k):
-            members = [vectors[index] for index, label in enumerate(new_labels) if label == cluster]
-            new_centers.append(_normalize(_mean(members)) if members else centers[cluster])
-        if new_labels == labels:
+            members = vectors[new_labels == cluster]
+            if len(members) == 0:
+                new_centers[cluster] = centers[cluster]
+                continue
+            center = np.mean(members, axis=0)
+            norm = float(np.linalg.norm(center))
+            new_centers[cluster] = center / norm if norm > 0 else 0.0
+        if np.array_equal(new_labels, labels):
             labels = new_labels
             centers = new_centers
             break
@@ -112,11 +127,10 @@ def cluster_embedding_medoids(
 
     medoids = []
     for cluster in range(k):
-        members = [index for index, label in enumerate(labels) if label == cluster]
-        medoids.append(
-            max(members, key=lambda index: cosine_similarity(vectors[index], centers[cluster]))
-        )
-    return labels, medoids
+        members = np.flatnonzero(labels == cluster)
+        similarities = vectors[members] @ centers[cluster]
+        medoids.append(int(members[int(np.argmax(similarities))]))
+    return labels.tolist(), medoids
 
 
 def mine_anchors_and_gaps(
@@ -276,6 +290,12 @@ def sample_short_video(
     start_seconds: float = 0.0,
     ffmpeg_binary: str = "ffmpeg",
 ) -> list[dict[str, Any]]:
+    if duration_seconds <= 0:
+        raise ValueError("duration_seconds must be positive")
+    if sample_interval_seconds <= 0:
+        raise ValueError("sample_interval_seconds must be positive")
+    if start_seconds < 0:
+        raise ValueError("start_seconds must be non-negative")
     ffmpeg = shutil.which(ffmpeg_binary)
     if not ffmpeg:
         explicit = Path(ffmpeg_binary)
@@ -289,45 +309,93 @@ def sample_short_video(
     # Sample inside the requested window, not exactly at the right endpoint.
     # Many EgoLife clips are exactly 30s, and ffmpeg may write no frame at t=30.0.
     count = max(2, int(math.ceil(duration_seconds / sample_interval_seconds)))
-    frames = []
-    for index in range(count):
-        timestamp = start_seconds + index * sample_interval_seconds
-        if timestamp >= start_seconds + duration_seconds - 1e-9:
-            break
-        path = output_dir / f"frame_{index:03d}_{timestamp:.2f}s.png"
-        if not path.exists() or path.stat().st_size == 0:
-            try:
-                subprocess.run(
-                    [
-                        ffmpeg,
-                        "-hide_banner",
-                        "-loglevel",
-                        "error",
-                        "-y",
-                        "-ss",
-                        f"{timestamp:.3f}",
-                        "-i",
-                        str(video_path),
-                        "-frames:v",
-                        "1",
-                        "-vf",
-                        "format=rgb24",
-                        "-f",
-                        "image2",
-                        str(path),
-                    ],
-                    check=True,
+    timestamps = [
+        start_seconds + index * sample_interval_seconds
+        for index in range(count)
+        if start_seconds + index * sample_interval_seconds
+        < start_seconds + duration_seconds - 1e-9
+    ]
+    expected_paths = [
+        output_dir / f"frame_{index:03d}_{timestamp:.2f}s.png"
+        for index, timestamp in enumerate(timestamps)
+    ]
+    if expected_paths and all(
+        path.is_file() and path.stat().st_size > 0 for path in expected_paths
+    ):
+        print(
+            "sampled_video_frames "
+            f"status=cache_hit video={video_path} frames={len(expected_paths)} "
+            "ffmpeg_processes=0",
+            flush=True,
+        )
+        return [
+            {"timestamp_seconds": round(timestamp, 3), "path": str(path)}
+            for timestamp, path in zip(timestamps, expected_paths)
+        ]
+
+    batch_dir = output_dir / f".ffmpeg_batch_{uuid.uuid4().hex}"
+    batch_dir.mkdir()
+    batch_pattern = batch_dir / "frame_%06d.png"
+    started = time.monotonic()
+    try:
+        subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                f"{float(start_seconds):.3f}",
+                "-i",
+                str(video_path),
+                "-t",
+                f"{float(duration_seconds):.3f}",
+                "-vf",
+                (
+                    f"fps={1.0 / float(sample_interval_seconds):.12g}:"
+                    "start_time=0,format=rgb24"
+                ),
+                "-frames:v",
+                str(len(timestamps)),
+                "-start_number",
+                "0",
+                str(batch_pattern),
+            ],
+            check=True,
+        )
+        extracted = sorted(batch_dir.glob("frame_*.png"))
+        minimum_count = min(len(timestamps), max(2, len(timestamps) - 2))
+        if len(extracted) < minimum_count:
+            raise RuntimeError(
+                "ffmpeg batch sampling returned too few frames: "
+                f"video={video_path} expected={len(timestamps)} "
+                f"minimum={minimum_count} actual={len(extracted)}"
+            )
+        usable_count = min(len(extracted), len(expected_paths))
+        frames = []
+        for index in range(usable_count):
+            destination = expected_paths[index]
+            extracted[index].replace(destination)
+            if not destination.is_file() or destination.stat().st_size == 0:
+                raise RuntimeError(
+                    f"ffmpeg did not write sampled frame: {destination}"
                 )
-            except subprocess.CalledProcessError:
-                if len(frames) >= max(2, count - 2):
-                    break
-                raise
-        if not path.exists() or path.stat().st_size == 0:
-            if len(frames) >= max(2, count - 2):
-                break
-            raise RuntimeError(f"ffmpeg did not write sampled frame: {path}")
-        frames.append({"timestamp_seconds": round(timestamp, 3), "path": str(path)})
-    return frames
+            frames.append(
+                {
+                    "timestamp_seconds": round(timestamps[index], 3),
+                    "path": str(destination),
+                }
+            )
+        print(
+            "sampled_video_frames "
+            f"status=extracted video={video_path} frames={len(frames)} "
+            f"ffmpeg_processes=1 seconds={time.monotonic() - started:.3f}",
+            flush=True,
+        )
+        return frames
+    finally:
+        shutil.rmtree(batch_dir, ignore_errors=True)
 
 
 def packet_frames(

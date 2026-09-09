@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import ctypes
 import gc
 import inspect
 import json
@@ -35,8 +36,10 @@ DEFAULT_VIDEO_FPS = 1.0
 MEMORY_SAFE_BACKEND = "transformers-local-memory-safe"
 VLLM_LOCAL_BACKEND = "vllm-local"
 MEMORY_SAFE_DEFAULT_VIDEO_FPS = 1.0
+MEMORY_SAFE_DEFAULT_MIN_VIDEO_PIXELS = 4 * 28 * 28
 MEMORY_SAFE_DEFAULT_MIN_IMAGE_PIXELS = 4 * 28 * 28
 MEMORY_SAFE_DEFAULT_MAX_INPUT_TOKENS = 131_072
+MEMORY_SAFE_DEFAULT_ADAPTIVE_IMAGE_PIXELS = False
 MEMORY_SAFE_DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION = 0.85
 MEMORY_SAFE_DEFAULT_IMAGE_TEXT_TOKEN_RESERVE = 8_192
 MEMORY_SAFE_DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD = 2
@@ -65,22 +68,6 @@ DEFAULT_CHOICE_FIELD = "verdict"
 DEFAULT_DECISION_CHOICES = ("pass", "fail")
 
 
-@dataclass(frozen=True)
-class GenerationCallProfile:
-    max_new_tokens: int
-    disable_thinking: bool
-    video_fps: float | None = None
-    max_image_pixels: int | None = None
-
-    def __post_init__(self) -> None:
-        if self.max_new_tokens <= 0:
-            raise ValueError("max_new_tokens must be positive")
-        if self.video_fps is not None and self.video_fps <= 0:
-            raise ValueError("video_fps must be positive when set")
-        if self.max_image_pixels is not None and self.max_image_pixels <= 0:
-            raise ValueError("max_image_pixels must be positive when set")
-
-
 @dataclass
 class _PendingVLLMChat:
     messages: list[dict[str, Any]]
@@ -103,7 +90,7 @@ def memory_safe_image_max_pixels(
     item_token_overhead: int = MEMORY_SAFE_DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD,
     min_image_pixels: int = MEMORY_SAFE_DEFAULT_MIN_IMAGE_PIXELS,
 ) -> int:
-    """按上下文预算为每张图片计算安全的像素上限。"""
+    """Choose a per-image cap that keeps every image inside a safe token target."""
 
     if image_count < 0:
         raise ValueError("image_count must be non-negative")
@@ -122,7 +109,9 @@ def memory_safe_image_max_pixels(
 
     target_tokens = int(max_input_tokens * target_fraction)
     visual_token_budget = (
-        target_tokens - text_token_reserve - image_count * item_token_overhead
+        target_tokens
+        - text_token_reserve
+        - image_count * item_token_overhead
     )
     minimum_tokens_per_image = max(
         1, int(min_image_pixels) // QWEN_VISION_TOKEN_PIXEL_AREA
@@ -138,7 +127,12 @@ def memory_safe_image_max_pixels(
         visual_token_budget // image_count,
     )
     adaptive_cap = tokens_per_image * QWEN_VISION_TOKEN_PIXEL_AREA
-    return int(max(min_image_pixels, min(configured_max_image_pixels, adaptive_cap)))
+    return int(
+        max(
+            min_image_pixels,
+            min(configured_max_image_pixels, adaptive_cap),
+        )
+    )
 
 
 class OpenRouterRequestError(RuntimeError):
@@ -275,7 +269,6 @@ class Generator(Protocol):
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
-        call_profile: GenerationCallProfile | None = None,
     ) -> str:
         ...
 
@@ -304,6 +297,40 @@ def generation_kwargs(
     else:
         kwargs["do_sample"] = False
     return kwargs
+
+
+def forced_choice_token_ids(
+    tokenizer: Any,
+    choices: tuple[str, ...],
+) -> dict[str, tuple[int, ...]]:
+    """Return validated single-token spellings for each forced choice."""
+
+    token_ids_by_choice: dict[str, set[int]] = {choice: set() for choice in choices}
+    for choice in choices:
+        for piece in (choice, f" {choice}", f"\n{choice}"):
+            encoded = tokenizer.encode(piece, add_special_tokens=False)
+            if len(encoded) != 1:
+                continue
+            token_id = int(encoded[0])
+            decoded_piece = tokenizer.decode(
+                [token_id],
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
+            if decoded_piece.strip().upper() == choice:
+                token_ids_by_choice[choice].add(token_id)
+    missing_choices = [
+        choice for choice, token_ids in token_ids_by_choice.items() if not token_ids
+    ]
+    if missing_choices:
+        raise RuntimeError(
+            "tokenizer has no single-token spelling for forced choice(s): "
+            + ", ".join(missing_choices)
+        )
+    return {
+        choice: tuple(sorted(token_ids))
+        for choice, token_ids in token_ids_by_choice.items()
+    }
 
 
 def image_to_data_url(path: str | Path) -> str:
@@ -390,6 +417,43 @@ def available_host_memory_bytes() -> int | None:
             pass
 
     return min(candidates) if candidates else None
+
+
+def process_resident_memory_bytes() -> int | None:
+    """Return this process's resident host-memory footprint when available."""
+
+    try:
+        import psutil
+
+        return int(psutil.Process().memory_info().rss)
+    except (ImportError, AttributeError, OSError, ValueError):
+        pass
+    status_path = Path("/proc/self/status")
+    if status_path.is_file():
+        try:
+            for line in status_path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+        except (IndexError, OSError, TypeError, ValueError):
+            pass
+    return None
+
+
+def release_unused_host_memory() -> tuple[int | None, int | None, bool]:
+    """Collect Python objects and return free glibc arenas to the Slurm cgroup."""
+
+    before = process_resident_memory_bytes()
+    gc.collect()
+    trimmed = False
+    try:
+        libc = ctypes.CDLL(None)
+        malloc_trim = getattr(libc, "malloc_trim")
+        malloc_trim.argtypes = [ctypes.c_size_t]
+        malloc_trim.restype = ctypes.c_int
+        trimmed = bool(malloc_trim(0))
+    except (AttributeError, OSError):
+        pass
+    return before, process_resident_memory_bytes(), trimmed
 
 
 def normalize_video_kwargs(video_kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -481,6 +545,7 @@ def load_transformers_model(
         kwargs: dict[str, Any] = {
             "device_map": device_map,
             "attn_implementation": attn_implementation,
+            "low_cpu_mem_usage": True,
             "trust_remote_code": True,
         }
 
@@ -577,6 +642,7 @@ class Qwen3VLTransformersRunner:
         min_available_ram_gib: float = 0.0,
         attn_implementation: str = "sdpa",
         device_map: str = "auto",
+        required_cuda_device_count: int = 1,
     ) -> None:
         if not allow_cpu and not cuda_available():
             raise RuntimeError(
@@ -601,6 +667,7 @@ class Qwen3VLTransformersRunner:
         self.min_available_ram_gib = float(min_available_ram_gib)
         self.attn_implementation = attn_implementation
         self.device_map = device_map
+        self.required_cuda_device_count = int(required_cuda_device_count)
         if self.video_fps <= 0:
             raise ValueError("video_fps must be positive")
         if self.max_input_tokens is not None and self.max_input_tokens <= 0:
@@ -611,6 +678,8 @@ class Qwen3VLTransformersRunner:
             raise ValueError("kv_bytes_per_token must be non-negative")
         if self.min_available_ram_gib < 0:
             raise ValueError("min_available_ram_gib must be non-negative")
+        if self.required_cuda_device_count < 1:
+            raise ValueError("required_cuda_device_count must be at least 1")
         self.process_vision_info = process_vision_info
         start = time.time()
         print(f"loading_processor={model_id}", flush=True)
@@ -625,7 +694,46 @@ class Qwen3VLTransformersRunner:
         self.model.eval()
         self.device = next(self.model.parameters()).device
         self.torch = torch
+        mapped_devices: set[torch.device] = set()
+        for mapped_device in (
+            getattr(self.model, "hf_device_map", {}) or {}
+        ).values():
+            if isinstance(mapped_device, int):
+                mapped_devices.add(torch.device("cuda", mapped_device))
+                continue
+            mapped_label = str(mapped_device)
+            if mapped_label.isdigit():
+                mapped_devices.add(torch.device("cuda", int(mapped_label)))
+            elif mapped_label.startswith("cuda"):
+                mapped_devices.add(torch.device(mapped_label))
+        if not mapped_devices and self.device.type == "cuda":
+            mapped_devices.add(self.device)
+        self.cuda_devices = tuple(
+            sorted(
+                mapped_devices,
+                key=lambda device: device.index if device.index is not None else 0,
+            )
+        )
+        if (
+            self.torch.cuda.is_available()
+            and len(self.cuda_devices) < self.required_cuda_device_count
+        ):
+            raise RuntimeError(
+                "Loaded model did not span the required CUDA device count: "
+                f"device_map={self.device_map!r} required={self.required_cuda_device_count} "
+                f"mapped_devices={[str(device) for device in self.cuda_devices]}"
+            )
         print(f"model_first_param_device={self.device}", flush=True)
+        print(
+            "model_device_map="
+            f"{getattr(self.model, 'hf_device_map', self.device_map)}",
+            flush=True,
+        )
+        print(
+            "model_cuda_devices="
+            + ",".join(str(device) for device in self.cuda_devices),
+            flush=True,
+        )
         print(f"model_loaded_seconds={time.time() - start:.1f}", flush=True)
 
     def _enforce_available_host_memory(self, *, stage: str) -> None:
@@ -637,9 +745,19 @@ class Qwen3VLTransformersRunner:
                 "Cannot determine available host RAM for memory-safe inference"
             )
         available_gib = available_bytes / 1024**3
+        process_rss = process_resident_memory_bytes()
+        process_rss_gib = (
+            process_rss / 1024**3 if process_rss is not None else None
+        )
+        process_rss_label = (
+            f"{process_rss_gib:.3f}"
+            if process_rss_gib is not None
+            else "unknown"
+        )
         print(
             "qwen_host_ram "
             f"stage={stage} available_gib={available_gib:.3f} "
+            f"process_rss_gib={process_rss_label} "
             f"required_available_gib={self.min_available_ram_gib:.3f}",
             flush=True,
         )
@@ -650,27 +768,13 @@ class Qwen3VLTransformersRunner:
                 f"required_available_gib={self.min_available_ram_gib:.3f}"
             )
 
-    def _estimated_kv_gib(
-        self,
-        *,
-        input_tokens: int,
-        max_new_tokens: int | None = None,
-    ) -> float:
-        output_tokens = self.max_new_tokens if max_new_tokens is None else max_new_tokens
+    def _estimated_kv_gib(self, *, input_tokens: int) -> float:
         return (
-            (input_tokens + output_tokens) * self.kv_bytes_per_token / 1024**3
+            (input_tokens + self.max_new_tokens) * self.kv_bytes_per_token / 1024**3
         )
 
-    def _required_free_vram_gib(
-        self,
-        *,
-        input_tokens: int,
-        max_new_tokens: int | None = None,
-    ) -> float:
-        return self._estimated_kv_gib(
-            input_tokens=input_tokens,
-            max_new_tokens=max_new_tokens,
-        ) + self.min_free_gib
+    def _required_free_vram_gib(self, *, input_tokens: int) -> float:
+        return self._estimated_kv_gib(input_tokens=input_tokens) + self.min_free_gib
 
     def generate(
         self,
@@ -681,7 +785,6 @@ class Qwen3VLTransformersRunner:
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
-        call_profile: GenerationCallProfile | None = None,
     ) -> str:
         result = self._generate(
             prompt,
@@ -691,9 +794,49 @@ class Qwen3VLTransformersRunner:
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
-            call_profile=call_profile,
         )
         return str(result["text"])
+
+    def generate_forced_choice(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        *,
+        choices: tuple[str, ...] = ("A", "B", "C", "D", "E"),
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
+    ) -> str:
+        """Select exactly one choice by constraining the first output token."""
+
+        normalized_choices = tuple(
+            str(choice).strip().upper() for choice in choices
+        )
+        if not normalized_choices or any(
+            not choice or len(choice) != 1 for choice in normalized_choices
+        ):
+            raise ValueError("forced choices must be non-empty single characters")
+        if len(set(normalized_choices)) != len(normalized_choices):
+            raise ValueError("forced choices must be unique")
+        result = self._generate(
+            prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            decoding_mode=decoding_mode,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            forced_choices=normalized_choices,
+        )
+        selected = str(result["text"]).strip().upper()
+        if selected not in normalized_choices:
+            raise RuntimeError(
+                "forced-choice decoding returned an unexpected token: "
+                f"{result['text']!r}"
+            )
+        return selected
 
     def generate_with_choice_logits(
         self,
@@ -714,6 +857,11 @@ class Qwen3VLTransformersRunner:
             choices=choices,
         )
 
+    def _image_max_pixels_for_call(self, image_count: int) -> int:
+        """Return the per-image processor cap for one model call."""
+
+        return int(self.max_image_pixels)
+
     def generate_content(
         self,
         content: list[dict[str, Any]],
@@ -722,7 +870,6 @@ class Qwen3VLTransformersRunner:
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
-        call_profile: GenerationCallProfile | None = None,
     ) -> str:
         """Generate from explicitly interleaved text/image/video content.
 
@@ -737,7 +884,6 @@ class Qwen3VLTransformersRunner:
             top_p=top_p,
             top_k=top_k,
             multimodal_content=content,
-            call_profile=call_profile,
         )
         return str(result["text"])
 
@@ -753,32 +899,31 @@ class Qwen3VLTransformersRunner:
         *,
         choice_field: str | None = None,
         choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
+        forced_choices: tuple[str, ...] | None = None,
         multimodal_content: list[dict[str, Any]] | None = None,
-        call_profile: GenerationCallProfile | None = None,
     ) -> dict[str, Any]:
+        if choice_field and forced_choices:
+            raise ValueError("choice-logit capture and forced-choice decoding are exclusive")
         image_paths = image_paths or []
         video_paths = video_paths or []
-        effective_max_image_pixels = (
-            call_profile.max_image_pixels
-            if call_profile is not None and call_profile.max_image_pixels is not None
-            else self.max_image_pixels
-        )
-        effective_video_fps = (
-            call_profile.video_fps
-            if call_profile is not None and call_profile.video_fps is not None
-            else getattr(self, "video_fps", DEFAULT_VIDEO_FPS)
-        )
         if multimodal_content is None:
+            effective_image_max_pixels = self._image_max_pixels_for_call(
+                len(image_paths)
+            )
             content: list[dict[str, Any]] = [
-                {"type": "image", "image": image_path, "max_pixels": effective_max_image_pixels}
+                {
+                    "type": "image",
+                    "image": image_path,
+                    "max_pixels": effective_image_max_pixels,
+                }
                 for image_path in image_paths
             ]
             for video_path in video_paths:
                 video_content = {
                     "type": "video",
                     "video": video_path,
-                    "max_pixels": effective_max_image_pixels,
-                    "fps": effective_video_fps,
+                    "max_pixels": self.max_image_pixels,
+                    "fps": getattr(self, "video_fps", DEFAULT_VIDEO_FPS),
                 }
                 if self.min_video_pixels is not None:
                     video_content["min_pixels"] = self.min_video_pixels
@@ -788,35 +933,36 @@ class Qwen3VLTransformersRunner:
             content = [dict(item) for item in multimodal_content]
             image_paths = [str(item.get("image")) for item in content if item.get("type") == "image"]
             video_paths = [str(item.get("video")) for item in content if item.get("type") == "video"]
+            effective_image_max_pixels = self._image_max_pixels_for_call(
+                len(image_paths)
+            )
+            for item in content:
+                if item.get("type") == "image":
+                    requested_pixels = int(
+                        item.get("max_pixels", self.max_image_pixels)
+                    )
+                    item["max_pixels"] = min(
+                        requested_pixels, effective_image_max_pixels
+                    )
         prompt_chars = sum(
             len(str(item.get("text", "")))
             for item in content
             if item.get("type") == "text"
-        )
-        effective_max_new_tokens = (
-            call_profile.max_new_tokens
-            if call_profile is not None
-            else self.max_new_tokens
-        )
-        effective_disable_thinking = (
-            call_profile.disable_thinking
-            if call_profile is not None
-            else self.disable_thinking
         )
         messages = [{"role": "user", "content": content}]
         start = time.time()
         print(
             "qwen_generate_start "
             f"images={len(image_paths)} videos={len(video_paths)} "
-            f"prompt_chars={prompt_chars} disable_thinking={effective_disable_thinking} "
-            f"max_new_tokens={effective_max_new_tokens} "
+            f"image_max_pixels={effective_image_max_pixels} "
+            f"prompt_chars={prompt_chars} disable_thinking={self.disable_thinking} "
             f"decoding_mode={decoding_mode}",
             flush=True,
         )
         text = apply_chat_template_compat(
             self.processor,
             messages,
-            disable_thinking=effective_disable_thinking,
+            disable_thinking=self.disable_thinking,
         )
         try:
             vision_info = self.process_vision_info(
@@ -861,43 +1007,70 @@ class Qwen3VLTransformersRunner:
             raise RuntimeError(
                 "Qwen input exceeds the memory-safe token ceiling: "
                 f"input_tokens={input_tokens} max_input_tokens={self.max_input_tokens}. "
-                "Reduce video FPS or max image pixels before retrying."
+                f"effective_image_max_pixels={effective_image_max_pixels}. "
+                "Reduce video FPS or image pixels before retrying."
             )
-        if (self.min_free_gib > 0 or self.kv_bytes_per_token > 0) and self.torch.cuda.is_available():
-            free_bytes, total_bytes = self.torch.cuda.mem_get_info(self.device)
-            free_gib = free_bytes / 1024**3
-            estimated_kv_gib = self._estimated_kv_gib(
-                input_tokens=input_tokens,
-                max_new_tokens=effective_max_new_tokens,
-            )
-            required_free_gib = self._required_free_vram_gib(
-                input_tokens=input_tokens,
-                max_new_tokens=effective_max_new_tokens,
-            )
-            print(
-                "qwen_pre_generate_vram "
-                f"free_gib={free_gib:.3f} total_gib={total_bytes / 1024**3:.3f} "
-                f"estimated_kv_gib={estimated_kv_gib:.3f} "
-                f"workspace_reserve_gib={self.min_free_gib:.3f} "
-                f"required_free_gib={required_free_gib:.3f}",
-                flush=True,
-            )
-            if free_gib < required_free_gib:
-                raise RuntimeError(
-                    "Insufficient free CUDA memory for memory-safe generation: "
-                    f"free_gib={free_gib:.3f} required_free_gib={required_free_gib:.3f} "
+        if (
+            (self.min_free_gib > 0 or self.kv_bytes_per_token > 0)
+            and self.cuda_devices
+        ):
+            estimated_kv_gib = self._estimated_kv_gib(input_tokens=input_tokens)
+            required_free_gib = self._required_free_vram_gib(input_tokens=input_tokens)
+            for cuda_device in self.cuda_devices:
+                free_bytes, total_bytes = self.torch.cuda.mem_get_info(cuda_device)
+                free_gib = free_bytes / 1024**3
+                print(
+                    "qwen_pre_generate_vram "
+                    f"device={cuda_device} free_gib={free_gib:.3f} "
+                    f"total_gib={total_bytes / 1024**3:.3f} "
                     f"estimated_kv_gib={estimated_kv_gib:.3f} "
-                    f"workspace_reserve_gib={self.min_free_gib:.3f}"
+                    f"workspace_reserve_gib={self.min_free_gib:.3f} "
+                    f"required_free_gib={required_free_gib:.3f}",
+                    flush=True,
                 )
+                if free_gib < required_free_gib:
+                    raise RuntimeError(
+                        "Insufficient free CUDA memory for memory-safe generation: "
+                        f"device={cuda_device} free_gib={free_gib:.3f} "
+                        f"required_free_gib={required_free_gib:.3f} "
+                        f"estimated_kv_gib={estimated_kv_gib:.3f} "
+                        f"workspace_reserve_gib={self.min_free_gib:.3f}"
+                    )
         generate_kwargs = generation_kwargs(
-            max_new_tokens=effective_max_new_tokens,
+            max_new_tokens=self.max_new_tokens,
             decoding_mode=decoding_mode,
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
         )
         capture = None
-        if choice_field:
+        if forced_choices:
+            tokenizer = getattr(self.processor, "tokenizer", self.processor)
+            token_ids_by_choice = forced_choice_token_ids(tokenizer, forced_choices)
+            allowed_token_ids = sorted(
+                {
+                    token_id
+                    for token_ids in token_ids_by_choice.values()
+                    for token_id in token_ids
+                }
+            )
+
+            class ForcedChoiceLogitsProcessor:
+                def __init__(self, ids: list[int]) -> None:
+                    self.ids = ids
+
+                def __call__(self, input_ids: Any, scores: Any) -> Any:
+                    filtered = scores.new_full(scores.shape, float("-inf"))
+                    filtered[:, self.ids] = scores[:, self.ids]
+                    return filtered
+
+            from transformers import LogitsProcessorList
+
+            generate_kwargs["max_new_tokens"] = 1
+            generate_kwargs["logits_processor"] = LogitsProcessorList(
+                [ForcedChoiceLogitsProcessor(allowed_token_ids)]
+            )
+        elif choice_field:
             tokenizer = getattr(self.processor, "tokenizer", self.processor)
             token_ids: set[int] = set()
             whitespace_prefixes = ["", " ", "  ", "   ", "    ", "\n", "\n  ", "\n    ", "\t"]
@@ -1037,12 +1210,38 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
         video_fps = float(
             os.getenv("QWEN_MEMORY_SAFE_VIDEO_FPS", str(MEMORY_SAFE_DEFAULT_VIDEO_FPS))
         )
-        raw_min_video_pixels = os.getenv("QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS")
-        min_video_pixels = int(raw_min_video_pixels) if raw_min_video_pixels else None
+        min_video_pixels = int(
+            os.getenv(
+                "QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS",
+                str(MEMORY_SAFE_DEFAULT_MIN_VIDEO_PIXELS),
+            )
+        )
         max_input_tokens = int(
             os.getenv(
                 "QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS",
                 str(MEMORY_SAFE_DEFAULT_MAX_INPUT_TOKENS),
+            )
+        )
+        self.adaptive_image_pixels = os.getenv(
+            "QWEN_MEMORY_SAFE_ADAPTIVE_IMAGE_PIXELS",
+            "1" if MEMORY_SAFE_DEFAULT_ADAPTIVE_IMAGE_PIXELS else "0",
+        ).strip().lower() not in {"0", "false", "no"}
+        self.image_context_target_fraction = float(
+            os.getenv(
+                "QWEN_MEMORY_SAFE_IMAGE_CONTEXT_TARGET_FRACTION",
+                str(MEMORY_SAFE_DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION),
+            )
+        )
+        self.image_text_token_reserve = int(
+            os.getenv(
+                "QWEN_MEMORY_SAFE_IMAGE_TEXT_TOKEN_RESERVE",
+                str(MEMORY_SAFE_DEFAULT_IMAGE_TEXT_TOKEN_RESERVE),
+            )
+        )
+        self.image_item_token_overhead = int(
+            os.getenv(
+                "QWEN_MEMORY_SAFE_IMAGE_ITEM_TOKEN_OVERHEAD",
+                str(MEMORY_SAFE_DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD),
             )
         )
         min_free_gib = float(
@@ -1063,6 +1262,12 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
         attn_implementation = os.getenv(
             "QWEN_MEMORY_SAFE_ATTN_IMPLEMENTATION",
             MEMORY_SAFE_DEFAULT_ATTN_IMPLEMENTATION,
+        )
+        device_map = os.getenv("QWEN_MEMORY_SAFE_DEVICE_MAP", "cuda").strip()
+        if not device_map:
+            raise ValueError("QWEN_MEMORY_SAFE_DEVICE_MAP must not be empty")
+        required_cuda_device_count = int(
+            os.getenv("QWEN_MEMORY_SAFE_REQUIRED_MODEL_GPU_COUNT", "1")
         )
         self.transcode_local_videos = os.getenv(
             "QWEN_MEMORY_SAFE_TRANSCODE_LOCAL_VIDEOS", "1"
@@ -1089,6 +1294,18 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
             raise ValueError("QWEN_MEMORY_SAFE_TRANSCODE_MAX_EDGE must be positive")
         if not 0 <= self.transcode_crf <= 51:
             raise ValueError("QWEN_MEMORY_SAFE_TRANSCODE_CRF must be between 0 and 51")
+        if not 0 < self.image_context_target_fraction <= 1:
+            raise ValueError(
+                "QWEN_MEMORY_SAFE_IMAGE_CONTEXT_TARGET_FRACTION must be in (0, 1]"
+            )
+        if self.image_text_token_reserve < 0:
+            raise ValueError(
+                "QWEN_MEMORY_SAFE_IMAGE_TEXT_TOKEN_RESERVE must be non-negative"
+            )
+        if self.image_item_token_overhead < 0:
+            raise ValueError(
+                "QWEN_MEMORY_SAFE_IMAGE_ITEM_TOKEN_OVERHEAD must be non-negative"
+            )
         super().__init__(
             model_id,
             max_new_tokens=max_new_tokens,
@@ -1103,6 +1320,8 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
             kv_bytes_per_token=MEMORY_SAFE_DEFAULT_KV_BYTES_PER_TOKEN,
             min_available_ram_gib=min_available_ram_gib,
             attn_implementation=attn_implementation,
+            device_map=device_map,
+            required_cuda_device_count=required_cuda_device_count,
         )
         self._inference_lock = threading.Lock()
         print(
@@ -1111,27 +1330,47 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
             f"max_image_pixels={self.max_image_pixels} "
             f"min_video_pixels={self.min_video_pixels} "
             f"max_input_tokens={self.max_input_tokens} "
+            f"adaptive_image_pixels={str(self.adaptive_image_pixels).lower()} "
+            f"image_context_target_fraction={self.image_context_target_fraction:g} "
+            f"image_text_token_reserve={self.image_text_token_reserve} "
+            f"image_item_token_overhead={self.image_item_token_overhead} "
             f"gpu_workspace_reserve_gib={self.min_free_gib:g} "
             f"kv_bytes_per_token={self.kv_bytes_per_token} "
             f"min_available_ram_gib={self.min_available_ram_gib:g} "
             f"transcode_local_videos={str(self.transcode_local_videos).lower()} "
             f"transcode_max_edge={self.transcode_max_edge} "
-            f"attn_implementation={self.attn_implementation} serialized=true",
+            f"attn_implementation={self.attn_implementation} "
+            f"device_map={self.device_map} "
+            f"required_model_gpu_count={self.required_cuda_device_count} "
+            "serialized=true",
             flush=True,
         )
 
-    def _prepare_video_for_memory_safe_decode(
-        self,
-        path: str | Path,
-        *,
-        video_fps: float | None = None,
-    ) -> str:
+    def _image_max_pixels_for_call(self, image_count: int) -> int:
+        if not self.adaptive_image_pixels or image_count == 0:
+            return super()._image_max_pixels_for_call(image_count)
+        effective = memory_safe_image_max_pixels(
+            image_count=image_count,
+            configured_max_image_pixels=self.max_image_pixels,
+            max_input_tokens=self.max_input_tokens,
+            target_fraction=self.image_context_target_fraction,
+            text_token_reserve=self.image_text_token_reserve,
+            item_token_overhead=self.image_item_token_overhead,
+        )
+        print(
+            "qwen_memory_safe_image_budget "
+            f"images={image_count} configured_max_pixels={self.max_image_pixels} "
+            f"effective_max_pixels={effective} "
+            f"target_fraction={self.image_context_target_fraction:g} "
+            f"text_token_reserve={self.image_text_token_reserve}",
+            flush=True,
+        )
+        return effective
+
+    def _prepare_video_for_memory_safe_decode(self, path: str | Path) -> str:
         source = Path(path).resolve()
         if not self.transcode_local_videos:
             return str(source)
-        effective_video_fps = self.video_fps if video_fps is None else float(video_fps)
-        if effective_video_fps <= 0:
-            raise ValueError("video_fps must be positive")
         stat = source.stat()
         cache_label = ".".join(
             (
@@ -1139,7 +1378,7 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
                 f"{stat.st_ino:x}",
                 str(stat.st_size),
                 str(stat.st_mtime_ns),
-                f"fps-{effective_video_fps:g}",
+                f"fps-{self.video_fps:g}",
                 f"edge-{self.transcode_max_edge}",
                 f"crf-{self.transcode_crf}",
             )
@@ -1152,7 +1391,7 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
             f".{source.stem}.{cache_label}.{threading.get_ident()}.tmp.mp4"
         )
         filters = (
-            f"fps={effective_video_fps:g}",
+            f"fps={self.video_fps:g}",
             (
                 f"scale={self.transcode_max_edge}:{self.transcode_max_edge}:"
                 "force_original_aspect_ratio=decrease"
@@ -1187,7 +1426,7 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
         print(
             "qwen_memory_safe_video_transcode_start "
             f"source={source} source_bytes={stat.st_size} "
-            f"fps={effective_video_fps:g} max_edge={self.transcode_max_edge} "
+            f"fps={self.video_fps:g} max_edge={self.transcode_max_edge} "
             f"crf={self.transcode_crf}",
             flush=True,
         )
@@ -1214,35 +1453,16 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
         return str(output)
 
     def _generate(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        call_profile = kwargs.get("call_profile")
-        profile_video_fps = (
-            call_profile.video_fps
-            if isinstance(call_profile, GenerationCallProfile)
-            and call_profile.video_fps is not None
-            else getattr(self, "video_fps", DEFAULT_VIDEO_FPS)
-        )
-        profile_max_image_pixels = (
-            call_profile.max_image_pixels
-            if isinstance(call_profile, GenerationCallProfile)
-            and call_profile.max_image_pixels is not None
-            else getattr(self, "max_image_pixels", DEFAULT_MAX_IMAGE_PIXELS)
-        )
-        runner_video_fps = float(getattr(self, "video_fps", DEFAULT_VIDEO_FPS))
-        runner_max_image_pixels = int(
-            getattr(self, "max_image_pixels", DEFAULT_MAX_IMAGE_PIXELS)
-        )
-        effective_video_fps = min(float(profile_video_fps), runner_video_fps)
-        effective_max_image_pixels = min(int(profile_max_image_pixels), runner_max_image_pixels)
         multimodal_content = kwargs.get("multimodal_content")
         if multimodal_content is not None:
             guarded_content = []
             for original_item in multimodal_content:
                 item = dict(original_item)
                 if item.get("type") == "video":
-                    requested_fps = float(item.get("fps", effective_video_fps))
-                    requested_pixels = int(item.get("max_pixels", effective_max_image_pixels))
-                    item["fps"] = min(requested_fps, effective_video_fps)
-                    item["max_pixels"] = min(requested_pixels, effective_max_image_pixels)
+                    requested_fps = float(item.get("fps", self.video_fps))
+                    requested_pixels = int(item.get("max_pixels", self.max_image_pixels))
+                    item["fps"] = min(requested_fps, self.video_fps)
+                    item["max_pixels"] = min(requested_pixels, self.max_image_pixels)
                 guarded_content.append(item)
             kwargs = {**kwargs, "multimodal_content": guarded_content}
         queued_at = time.time()
@@ -1252,20 +1472,13 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
             args = list(args)
             if len(args) > 2 and args[2]:
                 args[2] = [
-                    self._prepare_video_for_memory_safe_decode(
-                        path,
-                        video_fps=effective_video_fps,
-                    )
-                    for path in args[2]
+                    self._prepare_video_for_memory_safe_decode(path) for path in args[2]
                 ]
             elif kwargs.get("video_paths"):
                 kwargs = {
                     **kwargs,
                     "video_paths": [
-                        self._prepare_video_for_memory_safe_decode(
-                            path,
-                            video_fps=effective_video_fps,
-                        )
+                        self._prepare_video_for_memory_safe_decode(path)
                         for path in kwargs["video_paths"]
                     ],
                 }
@@ -1275,18 +1488,18 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
                     item = dict(original_item)
                     if item.get("type") == "video" and item.get("video"):
                         item["video"] = self._prepare_video_for_memory_safe_decode(
-                            item["video"],
-                            video_fps=effective_video_fps,
+                            item["video"]
                         )
                     prepared_content.append(item)
                 kwargs = {**kwargs, "multimodal_content": prepared_content}
-            cuda_active = bool(self.torch.cuda.is_available())
-            if cuda_active:
-                self.torch.cuda.synchronize(self.device)
-                self.torch.cuda.reset_peak_memory_stats(self.device)
-                allocated_before = self.torch.cuda.memory_allocated(self.device)
-            else:
-                allocated_before = 0
+            cuda_devices = tuple(self.cuda_devices)
+            allocated_before: dict[str, int] = {}
+            for cuda_device in cuda_devices:
+                self.torch.cuda.synchronize(cuda_device)
+                self.torch.cuda.reset_peak_memory_stats(cuda_device)
+                allocated_before[str(cuda_device)] = self.torch.cuda.memory_allocated(
+                    cuda_device
+                )
             print(
                 "qwen_memory_safe_inference_start "
                 f"lock_wait_seconds={wait_seconds:.3f}",
@@ -1296,29 +1509,65 @@ class Qwen3VLMemorySafeTransformersRunner(Qwen3VLTransformersRunner):
                 self._enforce_available_host_memory(stage="before_video_decode")
                 return super()._generate(*args, **kwargs)
             finally:
-                if cuda_active:
-                    self.torch.cuda.synchronize(self.device)
-                    peak_allocated = self.torch.cuda.max_memory_allocated(self.device)
-                    allocated_after = self.torch.cuda.memory_allocated(self.device)
+                peak_allocated_total = 0
+                allocated_after_total = 0
+                for cuda_device in cuda_devices:
+                    self.torch.cuda.synchronize(cuda_device)
+                    peak_allocated = self.torch.cuda.max_memory_allocated(cuda_device)
+                    allocated_after = self.torch.cuda.memory_allocated(cuda_device)
+                    peak_allocated_total += peak_allocated
+                    allocated_after_total += allocated_after
                     print(
                         "qwen_memory_safe_vram "
-                        f"allocated_before_gib={allocated_before / 1024**3:.3f} "
+                        f"device={cuda_device} "
+                        f"allocated_before_gib={allocated_before[str(cuda_device)] / 1024**3:.3f} "
                         f"peak_allocated_gib={peak_allocated / 1024**3:.3f} "
                         f"allocated_after_gib={allocated_after / 1024**3:.3f}",
                         flush=True,
                     )
-                    gc.collect()
-                    self.torch.cuda.empty_cache()
+                    with self.torch.cuda.device(cuda_device):
+                        self.torch.cuda.empty_cache()
+                if cuda_devices:
+                    print(
+                        "qwen_memory_safe_vram_total "
+                        f"device_count={len(cuda_devices)} "
+                        f"peak_allocated_sum_gib={peak_allocated_total / 1024**3:.3f} "
+                        f"allocated_after_sum_gib={allocated_after_total / 1024**3:.3f}",
+                        flush=True,
+                    )
+                rss_before, rss_after, malloc_trimmed = release_unused_host_memory()
+                rss_before_label = (
+                    f"{rss_before / 1024**3:.3f}"
+                    if rss_before is not None
+                    else "unknown"
+                )
+                rss_after_label = (
+                    f"{rss_after / 1024**3:.3f}"
+                    if rss_after is not None
+                    else "unknown"
+                )
+                print(
+                    "qwen_memory_safe_host_cleanup "
+                    f"rss_before_gib={rss_before_label} "
+                    f"rss_after_gib={rss_after_label} "
+                    f"malloc_trimmed={str(malloc_trimmed).lower()}",
+                    flush=True,
+                )
                 print("qwen_memory_safe_inference_done", flush=True)
 
 
 class Qwen3VLLocalVLLMRunner:
-    """用常驻、张量并行的 vLLM V1 引擎运行 Qwen 多模态推理。"""
+    """Run Qwen through one resident, tensor-parallel vLLM V1 engine.
+
+    Concurrent calls are coalesced briefly and submitted through vLLM's offline
+    enqueue API before the engine starts scheduling them. This gives one QA
+    packet real continuous batching while preserving synchronous ``generate``
+    calls for the rest of the pipeline.
+    """
 
     supports_choice_logits = False
     supports_vllm_randomized_request_ids = True
     caps_video_pixels_per_frame = True
-    supports_concurrent_batching = True
 
     def __init__(
         self,
@@ -1345,9 +1594,14 @@ class Qwen3VLLocalVLLMRunner:
         self.max_new_tokens = int(max_new_tokens)
         self.max_image_pixels = int(max_image_pixels)
         self.min_image_pixels = int(
-            os.getenv("VLLM_MIN_IMAGE_PIXELS", str(MEMORY_SAFE_DEFAULT_MIN_IMAGE_PIXELS))
+            os.getenv(
+                "VLLM_MIN_IMAGE_PIXELS",
+                str(MEMORY_SAFE_DEFAULT_MIN_IMAGE_PIXELS),
+            )
         )
-        self.video_fps = float(os.getenv("VLLM_VIDEO_FPS", str(video_fps)))
+        self.video_fps = float(
+            os.getenv("VLLM_VIDEO_FPS", str(video_fps))
+        )
         self.max_model_len = int(
             os.getenv(
                 "VLLM_MAX_MODEL_LEN",
@@ -1384,8 +1638,12 @@ class Qwen3VLLocalVLLMRunner:
                 str(VLLM_DEFAULT_GPU_MEMORY_UTILIZATION),
             )
         )
-        self.max_images = int(os.getenv("VLLM_MAX_IMAGES", str(VLLM_DEFAULT_MAX_IMAGES)))
-        self.max_videos = int(os.getenv("VLLM_MAX_VIDEOS", str(VLLM_DEFAULT_MAX_VIDEOS)))
+        self.max_images = int(
+            os.getenv("VLLM_MAX_IMAGES", str(VLLM_DEFAULT_MAX_IMAGES))
+        )
+        self.max_videos = int(
+            os.getenv("VLLM_MAX_VIDEOS", str(VLLM_DEFAULT_MAX_VIDEOS))
+        )
         self.mm_processor_cache_gb = float(
             os.getenv(
                 "VLLM_MM_PROCESSOR_CACHE_GB",
@@ -1408,13 +1666,18 @@ class Qwen3VLLocalVLLMRunner:
             os.getenv("VLLM_MAX_NUM_BATCHED_TOKENS", "32768")
         )
         self.max_num_seqs = int(os.getenv("VLLM_MAX_NUM_SEQS", "8"))
-        self.batch_wait_seconds = float(os.getenv("VLLM_BATCH_WAIT_MS", "20")) / 1000.0
-        self.speculative_tokens = int(os.getenv("VLLM_MTP_SPECULATIVE_TOKENS", "0"))
-        self.enable_prefix_caching = os.getenv(
-            "VLLM_ENABLE_PREFIX_CACHING", "0"
-        ).strip() == "1"
+        self.batch_wait_seconds = float(
+            os.getenv("VLLM_BATCH_WAIT_MS", "20")
+        ) / 1000.0
+        self.speculative_tokens = int(
+            os.getenv("VLLM_MTP_SPECULATIVE_TOKENS", "0")
+        )
+        self.enable_prefix_caching = (
+            os.getenv("VLLM_ENABLE_PREFIX_CACHING", "0").strip() == "1"
+        )
         self.disable_thinking = bool(disable_thinking)
         self.SamplingParams = SamplingParams
+        self.supports_concurrent_batching = True
         self._batch_condition = threading.Condition()
         self._batch_leader_active = False
         self._held_batch_target: int | None = None
@@ -1458,7 +1721,8 @@ class Qwen3VLLocalVLLMRunner:
             )
         if self.mm_encoder_attention_backend != "FLASH_ATTN":
             raise ValueError(
-                "production vllm-local requires VLLM_MM_ENCODER_ATTN_BACKEND=FLASH_ATTN"
+                "production vllm-local requires "
+                "VLLM_MM_ENCODER_ATTN_BACKEND=FLASH_ATTN"
             )
 
         engine_kwargs: dict[str, Any] = {
@@ -1482,7 +1746,9 @@ class Qwen3VLLocalVLLMRunner:
                 "cap_pixels_per_frame": True,
             },
             "mm_processor_cache_gb": self.mm_processor_cache_gb,
-            "mm_processor_cache_type": os.getenv("VLLM_MM_PROCESSOR_CACHE_TYPE", "shm"),
+            "mm_processor_cache_type": os.getenv(
+                "VLLM_MM_PROCESSOR_CACHE_TYPE", "shm"
+            ),
             "mm_encoder_tp_mode": os.getenv("VLLM_MM_ENCODER_TP_MODE", "data"),
             "mm_encoder_attn_backend": self.mm_encoder_attention_backend,
             "attention_backend": self.attention_backend,
@@ -1503,12 +1769,18 @@ class Qwen3VLLocalVLLMRunner:
             f"model_id={model_id} tensor_parallel_size={self.tensor_parallel_size} "
             f"attention_backend={self.attention_backend} "
             f"mm_encoder_attn_backend={self.mm_encoder_attention_backend} "
-            f"max_model_len={self.max_model_len} max_num_seqs={self.max_num_seqs} "
+            f"max_model_len={self.max_model_len} "
+            f"max_num_seqs={self.max_num_seqs} "
             f"max_num_batched_tokens={self.max_num_batched_tokens} "
             f"batch_wait_ms={self.batch_wait_seconds * 1000:g} "
             f"gpu_memory_utilization={self.gpu_memory_utilization:g} "
+            f"max_images={self.max_images} max_videos={self.max_videos} "
+            f"mm_encoder_tp_mode={engine_kwargs['mm_encoder_tp_mode']} "
+            f"mm_processor_cache_gb={self.mm_processor_cache_gb:g} "
             f"gdn_prefill_backend={self.gdn_prefill_backend} "
-            "cap_pixels_per_frame=true",
+            "cap_pixels_per_frame=true "
+            f"mtp_speculative_tokens={self.speculative_tokens} "
+            f"prefix_caching={str(self.enable_prefix_caching).lower()}",
             flush=True,
         )
         start = time.time()
@@ -1523,6 +1795,8 @@ class Qwen3VLLocalVLLMRunner:
         print(f"vllm_engine_ready seconds={time.time() - start:.1f}", flush=True)
 
     def _run_chat_batch(self, requests: list[_PendingVLLMChat]) -> list[Any]:
+        """Queue heterogeneous chats, then let one vLLM scheduler run them."""
+
         started = time.perf_counter()
         request_ids: list[str] = []
         try:
@@ -1540,9 +1814,15 @@ class Qwen3VLLocalVLLMRunner:
                         f"expected=1 actual={len(ids)}"
                     )
                 request_ids.append(str(ids[0]))
-            print(f"vllm_batch_start batch_size={len(requests)}", flush=True)
+            print(
+                "vllm_batch_start "
+                f"batch_size={len(requests)} max_num_seqs={self.max_num_seqs}",
+                flush=True,
+            )
             outputs = self.engine.wait_for_completion(use_tqdm=False)
         except Exception:
+            # If enqueue failed partway through, drain requests that already
+            # entered the engine before allowing a later batch to use it.
             if request_ids:
                 try:
                     self.engine.wait_for_completion(use_tqdm=False)
@@ -1555,6 +1835,10 @@ class Qwen3VLLocalVLLMRunner:
             for output in outputs
             if getattr(output, "request_id", None) is not None
         }
+        # vLLM 0.28 returns its randomized internal ID from enqueue_chat
+        # (for example ``0-8266c7e2``), while RequestOutput.request_id is the
+        # original external ID (``0``).  Accept both shapes without disabling
+        # vLLM's request-ID randomization, which protects against collisions.
         completion_ids: list[str | None] = []
         for request_id in request_ids:
             completion_id = request_id if request_id in outputs_by_id else None
@@ -1563,14 +1847,16 @@ class Qwen3VLLocalVLLMRunner:
                 if (
                     separator
                     and len(random_suffix) == 8
-                    and all(char in "0123456789abcdef" for char in random_suffix.lower())
+                    and all(character in "0123456789abcdef" for character in random_suffix.lower())
                     and external_id in outputs_by_id
                 ):
                     completion_id = external_id
             completion_ids.append(completion_id)
         missing = [
             request_id
-            for request_id, completion_id in zip(request_ids, completion_ids, strict=True)
+            for request_id, completion_id in zip(
+                request_ids, completion_ids, strict=True
+            )
             if completion_id is None
         ]
         if missing:
@@ -1595,6 +1881,8 @@ class Qwen3VLLocalVLLMRunner:
         ]
 
     def _drain_chat_batches(self) -> None:
+        """Leader-side queue drain for synchronous callers in worker threads."""
+
         first_batch = True
         while True:
             with self._batch_condition:
@@ -1629,6 +1917,8 @@ class Qwen3VLLocalVLLMRunner:
                     request.completed.set()
 
     def begin_concurrent_batch(self, expected_requests: int) -> bool:
+        """Hold an idle queue so a known sibling set enters one scheduler run."""
+
         if expected_requests < 2:
             return False
         with self._batch_condition:
@@ -1642,6 +1932,8 @@ class Qwen3VLLocalVLLMRunner:
             return True
 
     def release_concurrent_batch(self, timeout_seconds: float = 5.0) -> int:
+        """Release a held queue after all expected siblings arrive or timeout."""
+
         deadline = time.perf_counter() + timeout_seconds
         with self._batch_condition:
             target = self._held_batch_target
@@ -1665,6 +1957,7 @@ class Qwen3VLLocalVLLMRunner:
             is_leader = not self._batch_leader_active
             if is_leader:
                 self._batch_leader_active = True
+
         if is_leader:
             self._drain_chat_batches()
         request.completed.wait()
@@ -1682,34 +1975,22 @@ class Qwen3VLLocalVLLMRunner:
             resolved.relative_to(self.allowed_local_media_path)
         except ValueError as exc:
             raise ValueError(
-                f"vLLM media {resolved} is outside allowed root {self.allowed_local_media_path}"
+                f"vLLM media {resolved} is outside allowed root "
+                f"{self.allowed_local_media_path}"
             ) from exc
         return resolved
 
     @staticmethod
-    def _media_uuid(
-        path: Path,
-        *,
-        modality: str,
-        video_fps: float,
-        max_pixels: int,
-    ) -> str:
+    def _media_uuid(path: Path) -> str:
         stat = path.stat()
-        return (
-            f"file:{path}:{stat.st_size}:{stat.st_mtime_ns}:"
-            f"{modality}:fps-{video_fps:g}:pixels-{max_pixels}"
-        )
+        return f"file:{path}:{stat.st_size}:{stat.st_mtime_ns}"
 
-    def _effective_image_max_pixels(
-        self,
-        image_count: int,
-        configured_max_image_pixels: int,
-    ) -> int:
+    def _effective_image_max_pixels(self, image_count: int) -> int:
         if image_count == 0:
-            return configured_max_image_pixels
+            return self.max_image_pixels
         return memory_safe_image_max_pixels(
             image_count=image_count,
-            configured_max_image_pixels=configured_max_image_pixels,
+            configured_max_image_pixels=self.max_image_pixels,
             max_input_tokens=self.max_model_len,
             target_fraction=self.image_context_target_fraction,
             text_token_reserve=self.image_text_token_reserve,
@@ -1726,28 +2007,9 @@ class Qwen3VLLocalVLLMRunner:
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
-        call_profile: GenerationCallProfile | None = None,
     ) -> str:
         if decoding_mode not in GENERATOR_DECODING_MODES:
             raise ValueError(f"unknown decoding_mode: {decoding_mode}")
-        effective_max_new_tokens = (
-            call_profile.max_new_tokens if call_profile is not None else self.max_new_tokens
-        )
-        effective_disable_thinking = (
-            call_profile.disable_thinking if call_profile is not None else self.disable_thinking
-        )
-        effective_video_fps = (
-            call_profile.video_fps
-            if call_profile is not None and call_profile.video_fps is not None
-            else self.video_fps
-        )
-        configured_max_pixels = (
-            call_profile.max_image_pixels
-            if call_profile is not None and call_profile.max_image_pixels is not None
-            else self.max_image_pixels
-        )
-        if configured_max_pixels < self.min_image_pixels:
-            raise ValueError("call profile max_image_pixels is below VLLM_MIN_IMAGE_PIXELS")
         images = [self._resolve_media(path) for path in image_paths or []]
         videos = [self._resolve_media(path) for path in video_paths or []]
         if len(images) > self.max_images:
@@ -1758,21 +2020,14 @@ class Qwen3VLLocalVLLMRunner:
             raise RuntimeError(
                 f"vLLM video count {len(videos)} exceeds configured limit {self.max_videos}"
             )
-        effective_max_pixels = self._effective_image_max_pixels(
-            len(images), configured_max_pixels
-        )
+        effective_max_pixels = self._effective_image_max_pixels(len(images))
         content: list[dict[str, Any]] = []
         for path in images:
             content.append(
                 {
                     "type": "image_url",
                     "image_url": {"url": path.as_uri()},
-                    "uuid": self._media_uuid(
-                        path,
-                        modality="image",
-                        video_fps=effective_video_fps,
-                        max_pixels=effective_max_pixels,
-                    ),
+                    "uuid": self._media_uuid(path),
                 }
             )
         for path in videos:
@@ -1780,17 +2035,12 @@ class Qwen3VLLocalVLLMRunner:
                 {
                     "type": "video_url",
                     "video_url": {"url": path.as_uri()},
-                    "uuid": self._media_uuid(
-                        path,
-                        modality="video",
-                        video_fps=effective_video_fps,
-                        max_pixels=effective_max_pixels,
-                    ),
+                    "uuid": self._media_uuid(path),
                 }
             )
         content.append({"type": "text", "text": prompt})
         sampling_kwargs: dict[str, Any] = {
-            "max_tokens": effective_max_new_tokens,
+            "max_tokens": self.max_new_tokens,
             "temperature": temperature if decoding_mode == "sampling" else 0.0,
         }
         if decoding_mode == "sampling":
@@ -1801,7 +2051,7 @@ class Qwen3VLLocalVLLMRunner:
         if seed is not None:
             sampling_kwargs["seed"] = int(seed)
         chat_template_kwargs = (
-            {"enable_thinking": False} if effective_disable_thinking else None
+            {"enable_thinking": False} if self.disable_thinking else None
         )
         print(
             "vllm_generate_start "
@@ -1819,7 +2069,7 @@ class Qwen3VLLocalVLLMRunner:
                 mm_processor_kwargs={
                     "min_pixels": self.min_image_pixels,
                     "max_pixels": effective_max_pixels,
-                    "fps": effective_video_fps,
+                    "fps": self.video_fps,
                     "cap_pixels_per_frame": True,
                 },
             )
@@ -1844,6 +2094,13 @@ class OpenAICompatibleLocalRunner:
     """Call a local vLLM/SGLang/llama.cpp OpenAI-compatible server."""
 
     supports_choice_logits = True
+    # A local serving frontend accepts independent HTTP calls concurrently.
+    # Unlike the offline ``vllm.LLM`` entrypoint, those calls can be rendered
+    # by separate API processes before entering the shared GPU scheduler.
+    supports_concurrent_batching = True
+    supports_local_media_file_uris = True
+    uses_async_multimodal_frontend = True
+    caps_video_pixels_per_frame = True
     preserve_http_errors = False
 
     def __init__(
@@ -1852,9 +2109,13 @@ class OpenAICompatibleLocalRunner:
         *,
         base_url: str = "http://127.0.0.1:8000/v1",
         max_new_tokens: int = 1024,
-        timeout: int = 600,
+        timeout: int = 3600,
         api_key: str | None = None,
         allow_video_input: bool = False,
+        disable_thinking: bool = False,
+        max_image_pixels: int = DEFAULT_MAX_IMAGE_PIXELS,
+        video_fps: float = DEFAULT_VIDEO_FPS,
+        max_input_tokens: int | None = None,
     ) -> None:
         self.model_id = model_id
         self.base_url = base_url.rstrip("/")
@@ -1862,6 +2123,83 @@ class OpenAICompatibleLocalRunner:
         self.timeout = timeout
         self.api_key = api_key or os.getenv("LOCAL_VLM_API_KEY") or "none"
         self.allow_video_input = allow_video_input
+        self.disable_thinking = disable_thinking
+        self.max_image_pixels = int(max_image_pixels)
+        self.min_image_pixels = int(
+            os.getenv(
+                "VLLM_MIN_IMAGE_PIXELS",
+                str(MEMORY_SAFE_DEFAULT_MIN_IMAGE_PIXELS),
+            )
+        )
+        self.video_fps = float(os.getenv("VLLM_VIDEO_FPS", str(video_fps)))
+        self.max_model_len = int(
+            os.getenv(
+                "VLLM_MAX_MODEL_LEN",
+                str(max_input_tokens or VLLM_DEFAULT_MAX_MODEL_LEN),
+            )
+        )
+        self.image_context_target_fraction = float(
+            os.getenv(
+                "VLLM_IMAGE_CONTEXT_TARGET_FRACTION",
+                str(MEMORY_SAFE_DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION),
+            )
+        )
+        self.image_text_token_reserve = int(
+            os.getenv(
+                "VLLM_IMAGE_TEXT_TOKEN_RESERVE",
+                str(MEMORY_SAFE_DEFAULT_IMAGE_TEXT_TOKEN_RESERVE),
+            )
+        )
+        self.image_item_token_overhead = int(
+            os.getenv(
+                "VLLM_IMAGE_ITEM_TOKEN_OVERHEAD",
+                str(MEMORY_SAFE_DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD),
+            )
+        )
+        self.use_local_media_file_uris = self.supports_local_media_file_uris and (
+            os.getenv("VLLM_OPENAI_USE_LOCAL_MEDIA_URIS", "0").strip() == "1"
+        )
+        self.allowed_local_media_path = Path(
+            os.getenv("VLLM_ALLOWED_LOCAL_MEDIA_PATH", ".")
+        ).resolve()
+        if self.max_image_pixels < self.min_image_pixels:
+            raise ValueError("max_image_pixels must be at least VLLM_MIN_IMAGE_PIXELS")
+        if self.video_fps <= 0:
+            raise ValueError("VLLM_VIDEO_FPS must be positive")
+        if self.max_model_len <= 0:
+            raise ValueError("VLLM_MAX_MODEL_LEN must be positive")
+
+    def _effective_image_max_pixels(self, image_count: int) -> int:
+        if image_count == 0:
+            return self.max_image_pixels
+        return memory_safe_image_max_pixels(
+            image_count=image_count,
+            configured_max_image_pixels=self.max_image_pixels,
+            max_input_tokens=self.max_model_len,
+            target_fraction=self.image_context_target_fraction,
+            text_token_reserve=self.image_text_token_reserve,
+            item_token_overhead=self.image_item_token_overhead,
+            min_image_pixels=self.min_image_pixels,
+        )
+
+    def _media_url(self, path: str | Path) -> str:
+        """Use zero-copy file URIs for a trusted local server when requested."""
+
+        if not self.use_local_media_file_uris:
+            return file_to_data_url(path)
+        resolved = Path(path).resolve()
+        if not resolved.is_file() or resolved.stat().st_size <= 0:
+            raise FileNotFoundError(
+                f"OpenAI-compatible local media is missing or empty: {resolved}"
+            )
+        try:
+            resolved.relative_to(self.allowed_local_media_path)
+        except ValueError as exc:
+            raise ValueError(
+                f"local media {resolved} is outside allowed root "
+                f"{self.allowed_local_media_path}"
+            ) from exc
+        return resolved.as_uri()
 
     def generate(
         self,
@@ -1872,7 +2210,6 @@ class OpenAICompatibleLocalRunner:
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
-        call_profile: GenerationCallProfile | None = None,
     ) -> str:
         data = self._generate_response(
             prompt,
@@ -1882,7 +2219,6 @@ class OpenAICompatibleLocalRunner:
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
-            call_profile=call_profile,
         )
         return data["choices"][0]["message"]["content"].strip()
 
@@ -1932,30 +2268,38 @@ class OpenAICompatibleLocalRunner:
         top_k: int | None = None,
         *,
         include_logprobs: bool = False,
-        call_profile: GenerationCallProfile | None = None,
     ) -> dict[str, Any]:
-        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        # Preserve the embedded vLLM runner's media-before-text ordering for
+        # this production path.  Remote OpenAI-compatible providers retain
+        # their historical text-before-media request shape.
+        content: list[dict[str, Any]] = []
+        if not self.uses_async_multimodal_frontend:
+            content.append({"type": "text", "text": prompt})
         for path in image_paths or []:
-            content.append({"type": "image_url", "image_url": {"url": image_to_data_url(path)}})
+            image_url = (
+                self._media_url(path)
+                if self.use_local_media_file_uris
+                else image_to_data_url(path)
+            )
+            content.append({"type": "image_url", "image_url": {"url": image_url}})
         if video_paths and not self.allow_video_input:
             raise RuntimeError(
                 "openai-compatible-local backend received video_paths, but video input is disabled. "
                 "Use image fallback or pass --allow-openai-video-input for a server that supports video data URLs."
             )
         for path in video_paths or []:
-            content.append({"type": "video_url", "video_url": {"url": file_to_data_url(path)}})
+            content.append(
+                {"type": "video_url", "video_url": {"url": self._media_url(path)}}
+            )
+        if self.uses_async_multimodal_frontend:
+            content.append({"type": "text", "text": prompt})
         if decoding_mode not in GENERATOR_DECODING_MODES:
             raise ValueError(f"unknown decoding_mode: {decoding_mode}")
-        effective_max_new_tokens = (
-            call_profile.max_new_tokens
-            if call_profile is not None
-            else self.max_new_tokens
-        )
         payload = {
             "model": self.model_id,
             "messages": [{"role": "user", "content": content}],
             "temperature": temperature if decoding_mode == "sampling" else 0,
-            "max_tokens": effective_max_new_tokens,
+            "max_tokens": self.max_new_tokens,
         }
         if decoding_mode == "sampling":
             payload["top_p"] = top_p
@@ -1964,6 +2308,19 @@ class OpenAICompatibleLocalRunner:
         if include_logprobs:
             payload["logprobs"] = True
             payload["top_logprobs"] = 20
+        effective_max_pixels = self.max_image_pixels
+        if self.uses_async_multimodal_frontend:
+            effective_max_pixels = self._effective_image_max_pixels(
+                len(image_paths or [])
+            )
+            payload["mm_processor_kwargs"] = {
+                "min_pixels": self.min_image_pixels,
+                "max_pixels": effective_max_pixels,
+                "fps": self.video_fps,
+                "cap_pixels_per_frame": True,
+            }
+        if self.disable_thinking:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         payload.update(self._extra_request_payload())
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
@@ -1973,6 +2330,15 @@ class OpenAICompatibleLocalRunner:
                 "Authorization": f"Bearer {self.api_key}",
             },
             method="POST",
+        )
+        started = time.perf_counter()
+        print(
+            "openai_compatible_request_start "
+            f"images={len(image_paths or [])} videos={len(video_paths or [])} "
+            f"effective_max_pixels={effective_max_pixels} "
+            f"prompt_chars={len(prompt)} decoding_mode={decoding_mode} "
+            f"local_media_uris={str(self.use_local_media_file_uris).lower()}",
+            flush=True,
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -1988,8 +2354,14 @@ class OpenAICompatibleLocalRunner:
             raise RuntimeError(
                 f"HTTP {exc.code} from {req.full_url}: {detail}; "
                 f"prompt_chars={len(prompt)} images={len(image_paths or [])} "
-                f"videos={len(video_paths or [])} max_tokens={effective_max_new_tokens}"
+                f"videos={len(video_paths or [])} max_tokens={self.max_new_tokens}"
             ) from exc
+        print(
+            "openai_compatible_request_done "
+            f"seconds={time.perf_counter() - started:.1f} "
+            f"images={len(image_paths or [])} videos={len(video_paths or [])}",
+            flush=True,
+        )
         return data
 
     def _extra_request_payload(self) -> dict[str, Any]:
@@ -2004,6 +2376,11 @@ class OpenRouterRunner(OpenAICompatibleLocalRunner):
     # Gemini 2.5 Flash does not advertise logprobs/top_logprobs through OpenRouter.
     # Judges still emit their PASS/FAIL or A-E decision; only entropy diagnostics are absent.
     supports_choice_logits = False
+    # Keep the existing conservative retry/rate-limit behavior for remote
+    # providers.  The concurrent path above is specifically for a local server.
+    supports_concurrent_batching = False
+    supports_local_media_file_uris = False
+    uses_async_multimodal_frontend = False
     preserve_http_errors = True
 
     def __init__(
@@ -2236,7 +2613,6 @@ class OpenRouterRunner(OpenAICompatibleLocalRunner):
         top_k: int | None = None,
         *,
         include_logprobs: bool = False,
-        call_profile: GenerationCallProfile | None = None,
     ) -> dict[str, Any]:
         prepared_video_paths = [self._prepare_video_for_upload(path) for path in (video_paths or [])]
         attempts = self.max_retries + 1
@@ -2252,7 +2628,6 @@ class OpenRouterRunner(OpenAICompatibleLocalRunner):
                     top_p=top_p,
                     top_k=top_k,
                     include_logprobs=include_logprobs,
-                    call_profile=call_profile,
                 )
                 response_error = self._response_error(data)
                 if response_error is not None:
@@ -2509,7 +2884,6 @@ class GeminiRunner:
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
-        call_profile: GenerationCallProfile | None = None,
     ) -> str:
         result = self._generate(
             prompt,
@@ -2519,7 +2893,6 @@ class GeminiRunner:
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
-            call_profile=call_profile,
         )
         return str(result["text"])
 
@@ -2554,7 +2927,6 @@ class GeminiRunner:
         include_logprobs: bool = False,
         choice_field: str = DEFAULT_CHOICE_FIELD,
         choices: tuple[str, ...] = DEFAULT_DECISION_CHOICES,
-        call_profile: GenerationCallProfile | None = None,
     ) -> dict[str, Any]:
         if decoding_mode not in GENERATOR_DECODING_MODES:
             raise ValueError(f"unknown decoding_mode: {decoding_mode}")
@@ -2570,13 +2942,8 @@ class GeminiRunner:
         parts = [self._image_part(path) for path in image_paths]
         parts.extend(self._file_part(path) for path in video_paths)
         parts.append({"text": prompt})
-        effective_max_new_tokens = (
-            call_profile.max_new_tokens
-            if call_profile is not None
-            else self.max_new_tokens
-        )
         generation_config: dict[str, Any] = {
-            "maxOutputTokens": effective_max_new_tokens,
+            "maxOutputTokens": self.max_new_tokens,
             "temperature": temperature if decoding_mode == "sampling" else 0,
         }
         if decoding_mode == "sampling":
@@ -2734,6 +3101,10 @@ def make_runner(
             max_new_tokens=max_new_tokens,
             api_key=api_key,
             allow_video_input=allow_openai_video_input,
+            disable_thinking=disable_thinking,
+            max_image_pixels=max_image_pixels,
+            video_fps=video_fps,
+            max_input_tokens=max_input_tokens,
         )
     if backend == "openrouter":
         effective_base_url = (

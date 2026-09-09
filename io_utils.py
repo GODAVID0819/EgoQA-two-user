@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -64,11 +67,82 @@ def hf_resolve_url(dataset: str, repo_path: str, revision: str = "main") -> str:
     return f"https://huggingface.co/datasets/{dataset}/resolve/{revision}/{clean}"
 
 
-def fetch_json(url: str, *, timeout: int = 60, retries: int = 3) -> Any:
-    req = urllib.request.Request(url, headers={"User-Agent": "egolife-two-user-qa/0.1"})
-    token = os.getenv("HF_TOKEN")
+def _hugging_face_token() -> str | None:
+    """Resolve an HF token without assuming that ``HOME`` is the login home.
+
+    HPC launchers redirect ``HOME`` and ``HF_HOME`` to job-local scratch.  Keep
+    accepting the standard environment token, but also honor ``HF_TOKEN_PATH``
+    so the launcher can point at the token created by ``huggingface-cli login``
+    before it redirects those cache directories.
+    """
+
+    token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
     if token:
-        req.add_header("Authorization", f"Bearer {token}")
+        return token.strip() or None
+
+    token_path = os.getenv("HF_TOKEN_PATH")
+    if not token_path:
+        return None
+    try:
+        return Path(token_path).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _retry_delay_seconds(error: Exception, attempt: int) -> float:
+    """Return bounded exponential backoff, honoring HTTP Retry-After."""
+
+    exponential_delay = min(float(2**attempt), 300.0)
+    if not isinstance(error, urllib.error.HTTPError):
+        return exponential_delay
+
+    retry_after = error.headers.get("Retry-After")
+    if not retry_after:
+        return exponential_delay
+    try:
+        server_delay = float(retry_after)
+    except ValueError:
+        try:
+            retry_time = parsedate_to_datetime(retry_after)
+            if retry_time.tzinfo is None:
+                retry_time = retry_time.replace(tzinfo=timezone.utc)
+            server_delay = (retry_time - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return exponential_delay
+    return min(max(exponential_delay, server_delay, 0.0), 300.0)
+
+
+def _request(url: str) -> urllib.request.Request:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "egolife-two-user-qa/0.1"},
+    )
+    token = _hugging_face_token()
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    return request
+
+
+def _report_retry(
+    *,
+    operation: str,
+    url: str,
+    error: Exception,
+    attempt: int,
+    retries: int,
+    delay: float,
+) -> None:
+    status = error.code if isinstance(error, urllib.error.HTTPError) else type(error).__name__
+    print(
+        f"{operation}_retry attempt={attempt + 1}/{retries + 1} "
+        f"status={status} wait_seconds={delay:g} url={url}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def fetch_json(url: str, *, timeout: int = 60, retries: int = 3) -> Any:
+    req = _request(url)
     last_error: Exception | None = None
     for attempt in range(retries + 1):
         try:
@@ -82,11 +156,20 @@ def fetch_json(url: str, *, timeout: int = 60, retries: int = 3) -> Any:
         except Exception as exc:
             last_error = exc
         if attempt < retries:
-            time.sleep(2 ** attempt)
+            delay = _retry_delay_seconds(last_error, attempt)
+            _report_retry(
+                operation="fetch_json",
+                url=url,
+                error=last_error,
+                attempt=attempt,
+                retries=retries,
+                delay=delay,
+            )
+            time.sleep(delay)
     raise RuntimeError(f"GET {url} failed after {retries + 1} attempts: {last_error}") from last_error
 
 
-def download_file(url: str, output_path: str | Path, *, timeout: int = 120, retries: int = 3) -> Path:
+def download_file(url: str, output_path: str | Path, *, timeout: int = 120, retries: int = 8) -> Path:
     """Download a URL atomically, reusing an existing non-empty file."""
 
     output_path = Path(output_path)
@@ -94,10 +177,7 @@ def download_file(url: str, output_path: str | Path, *, timeout: int = 120, retr
         return output_path
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    req = urllib.request.Request(url, headers={"User-Agent": "egolife-two-user-qa/0.1"})
-    token = os.getenv("HF_TOKEN")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
+    req = _request(url)
 
     fd, tmp_name = tempfile.mkstemp(prefix=output_path.name, suffix=".tmp", dir=output_path.parent)
     os.close(fd)
@@ -113,7 +193,16 @@ def download_file(url: str, output_path: str | Path, *, timeout: int = 120, retr
             last_error = exc
             tmp_path.unlink(missing_ok=True)
             if attempt < retries:
-                time.sleep(2 ** attempt)
+                delay = _retry_delay_seconds(exc, attempt)
+                _report_retry(
+                    operation="download",
+                    url=url,
+                    error=exc,
+                    attempt=attempt,
+                    retries=retries,
+                    delay=delay,
+                )
+                time.sleep(delay)
                 fd, tmp_name = tempfile.mkstemp(prefix=output_path.name, suffix=".tmp", dir=output_path.parent)
                 os.close(fd)
                 tmp_path = Path(tmp_name)

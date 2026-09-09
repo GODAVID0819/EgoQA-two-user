@@ -1,9 +1,10 @@
-"""Build an evidence-first manual review package from accepted QA JSONL files."""
+"""Build an evidence-first manual review package from QA or intermediate JSONL."""
 
 from __future__ import annotations
 
 import argparse
 import collections
+import copy
 import csv
 import hashlib
 import json
@@ -37,6 +38,21 @@ RUN_LABELS = {
     "k_8": "K = 8",
 }
 
+SIX_PARTICIPANTS = (
+    ("A1_JAKE", "Jake"),
+    ("A2_ALICE", "Alice"),
+    ("A3_TASHA", "Tasha"),
+    ("A4_LUCIA", "Lucia"),
+    ("A5_KATRINA", "Katrina"),
+    ("A6_SHURE", "Shure"),
+)
+VIDEO_DATASET_URL = "https://huggingface.co/datasets/lmms-lab/EgoLife/resolve/main"
+_VIDEO_KEY_RE = re.compile(
+    r"/(?P<agent_dir>A[1-6]_[A-Z]+)/(?P<day>DAY[1-7])/"
+    r"(?P=day)_(?P=agent_dir)_(?P<time_token>\d{8})\.mp4(?:$|[?#])",
+    re.IGNORECASE,
+)
+
 REVIEW_COLUMNS = [
     "evidence_order",
     "evidence_id",
@@ -66,10 +82,19 @@ REVIEW_COLUMNS = [
     "required_users",
     "attempt_count",
     "judge_video_source",
+    "video_count",
     "video_1_user",
     "video_1_url",
     "video_2_user",
     "video_2_url",
+    "video_3_user",
+    "video_3_url",
+    "video_4_user",
+    "video_4_url",
+    "video_5_user",
+    "video_5_url",
+    "video_6_user",
+    "video_6_url",
     "generator_rationale",
     "evidence_claims",
     "referred_timestamps",
@@ -112,6 +137,149 @@ def _read_jsonl(path: Path) -> tuple[bytes, list[dict[str, Any]]]:
             raise ValueError(f"{path}:{line_number}: expected a JSON object")
         rows.append(parsed)
     return raw, rows
+
+
+def _qa_shaped(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and bool(str(value.get("question") or "").strip())
+        and isinstance(value.get("options"), list)
+    )
+
+
+def _accepted_value(value: Any) -> bool:
+    if value is True:
+        return True
+    return str(value or "").strip().lower() in {"accept", "accepted", "pass", "passed"}
+
+
+def _attempt_was_accepted(attempt: dict[str, Any]) -> bool:
+    result = attempt.get("result")
+    return (
+        _accepted_value(attempt.get("accepted"))
+        or _accepted_value(attempt.get("status"))
+        or (isinstance(result, dict) and _accepted_value(result.get("accepted")))
+    )
+
+
+def _qa_from_attempt(attempt: dict[str, Any]) -> dict[str, Any] | None:
+    """Recover the final QA from standard and cyclic intermediate layouts."""
+
+    for candidate in (
+        attempt.get("qa"),
+        (attempt.get("candidate") or {}).get("qa")
+        if isinstance(attempt.get("candidate"), dict)
+        else None,
+    ):
+        if _qa_shaped(candidate):
+            return copy.deepcopy(candidate)
+
+    generation = attempt.get("generation")
+    if not isinstance(generation, dict):
+        return None
+    parsed = generation.get("parsed_qa")
+    normalized = generation.get("normalized_qa")
+    if not _qa_shaped(parsed):
+        return None
+    qa = copy.deepcopy(normalized) if isinstance(normalized, dict) else {}
+    qa.update(copy.deepcopy(parsed))
+    return qa
+
+
+def _attempt_human_audit(attempt: dict[str, Any]) -> dict[str, Any]:
+    media = attempt.get("media")
+    if isinstance(media, dict) and isinstance(media.get("human_audit"), dict):
+        return media["human_audit"]
+    trace = attempt.get("generation_trace")
+    if isinstance(trace, dict):
+        media = trace.get("media")
+        if isinstance(media, dict) and isinstance(media.get("human_audit"), dict):
+            return media["human_audit"]
+    return {}
+
+
+def _enrich_intermediate_qa(
+    qa: dict[str, Any],
+    *,
+    row: dict[str, Any],
+    attempt: dict[str, Any],
+) -> dict[str, Any]:
+    qa = copy.deepcopy(qa)
+    audit = _attempt_human_audit(attempt)
+    for key in ("evidence_id", "qa_id", "question_type", "generation_mode"):
+        if not qa.get(key):
+            qa[key] = attempt.get(key) or row.get(key)
+    attempt_number = attempt.get("attempt") or row.get("attempt")
+    qa["attempt_count"] = int(attempt_number or qa.get("attempt_count") or 0)
+
+    for key in ("required_users", "source_urls", "video_evidence", "human_audit"):
+        if not qa.get(key):
+            if key == "human_audit":
+                value = audit
+            else:
+                value = audit.get(key)
+            if value:
+                qa[key] = copy.deepcopy(value)
+
+    if not qa.get("judge_video_source"):
+        media = attempt.get("media")
+        qa["judge_video_source"] = (
+            media.get("judge_media_role") if isinstance(media, dict) else None
+        ) or row.get("judge_video_source") or ""
+
+    options = qa.get("options")
+    correct = str(qa.get("correct") or "").strip().upper()
+    if not qa.get("answer") and isinstance(options, list) and correct in "ABCDE":
+        index = ord(correct) - ord("A")
+        if index < len(options):
+            qa["answer"] = options[index]
+    return qa
+
+
+def _accepted_qa_rows(
+    rows: list[dict[str, Any]],
+    *,
+    source: Path,
+) -> tuple[list[dict[str, Any]], int]:
+    """Select accepted QAs and reconstruct them when the source is intermediate."""
+
+    accepted: list[dict[str, Any]] = []
+    skipped = 0
+    for row_number, row in enumerate(rows, 1):
+        status = str(row.get("status") or "").strip().lower()
+        is_explicit_intermediate = bool(status) or isinstance(row.get("attempts"), list)
+
+        if _qa_shaped(row) and (not status or _accepted_value(status)):
+            accepted.append(copy.deepcopy(row))
+            continue
+        if not is_explicit_intermediate or not _accepted_value(status):
+            skipped += 1
+            continue
+
+        attempts = row.get("attempts")
+        attempt_rows = [item for item in attempts or [] if isinstance(item, dict)]
+        chosen: dict[str, Any] | None = None
+        qa: dict[str, Any] | None = None
+        for attempt in reversed(attempt_rows):
+            candidate = _qa_from_attempt(attempt)
+            if candidate is not None and _attempt_was_accepted(attempt):
+                chosen, qa = attempt, candidate
+                break
+        if qa is None:
+            for attempt in reversed(attempt_rows):
+                candidate = _qa_from_attempt(attempt)
+                if candidate is not None:
+                    chosen, qa = attempt, candidate
+                    break
+        if qa is None and _qa_shaped(row.get("qa")):
+            chosen, qa = row, copy.deepcopy(row["qa"])
+        if qa is None or chosen is None:
+            raise ValueError(
+                f"{source}:{row_number}: accepted intermediate row does not contain "
+                "a recoverable parsed QA"
+            )
+        accepted.append(_enrich_intermediate_qa(qa, row=row, attempt=chosen))
+    return accepted, skipped
 
 
 def _parse_inputs(values: list[str]) -> list[tuple[str, Path]]:
@@ -157,6 +325,8 @@ def _source_videos(row: dict[str, Any]) -> list[dict[str, Any]]:
                     "time_token": str(metadata.get("time_token") or ""),
                     "clip_clock": str(metadata.get("clip_clock") or ""),
                     "url": str(raw_url),
+                    "role": "selected evidence pair",
+                    "alignment": "source metadata",
                 }
             )
     if videos:
@@ -179,13 +349,86 @@ def _source_videos(row: dict[str, Any]) -> list[dict[str, Any]]:
                 "time_token": str(metadata.get("time_token") or ""),
                 "clip_clock": str(metadata.get("clip_clock") or ""),
                 "url": str(raw_url),
+                "role": "selected evidence pair",
+                "alignment": "source metadata",
             }
         )
     return videos
 
 
+def _video_key(video: dict[str, Any]) -> tuple[str, str, str]:
+    agent_dir = str(video.get("agent_dir") or "").upper()
+    day = str(video.get("day") or "").upper()
+    time_token = str(video.get("time_token") or "")
+    match = _VIDEO_KEY_RE.search(str(video.get("url") or ""))
+    if match:
+        agent_dir = agent_dir or match.group("agent_dir").upper()
+        day = day or match.group("day").upper()
+        time_token = time_token or match.group("time_token")
+    return agent_dir, day, time_token
+
+
+def _six_user_videos(
+    videos: list[dict[str, Any]],
+    *,
+    evidence_id: str,
+) -> list[dict[str, Any]]:
+    """Expand a synchronized selected pair to the six EgoLife participants."""
+
+    known_names = {name.lower(): agent_dir for agent_dir, name in SIX_PARTICIPANTS}
+    by_agent: dict[str, dict[str, Any]] = {}
+    day = ""
+    time_token = ""
+    for video in videos:
+        agent_dir, video_day, video_token = _video_key(video)
+        if not agent_dir:
+            agent_dir = known_names.get(str(video.get("user") or "").lower(), "")
+        if agent_dir:
+            by_agent.setdefault(agent_dir, video)
+        day = day or video_day
+        time_token = time_token or video_token
+
+    if not day or not time_token:
+        raise ValueError(
+            f"{evidence_id}: cannot derive DAY and time token needed for six-user review"
+        )
+
+    expanded: list[dict[str, Any]] = []
+    for agent_dir, name in SIX_PARTICIPANTS:
+        existing = by_agent.get(agent_dir)
+        if existing is not None:
+            item = copy.deepcopy(existing)
+            item["user"] = str(item.get("user") or name)
+            item["agent_dir"] = agent_dir
+            item["day"] = str(item.get("day") or day)
+            item["time_token"] = str(item.get("time_token") or time_token)
+            item["role"] = str(item.get("role") or "selected evidence pair")
+            item["alignment"] = str(item.get("alignment") or "source metadata")
+        else:
+            item = {
+                "user": name,
+                "agent_dir": agent_dir,
+                "day": day,
+                "time_token": time_token,
+                "clip_clock": (
+                    f"{time_token[0:2]}:{time_token[2:4]}:"
+                    f"{time_token[4:6]}.{time_token[6:8]}"
+                ),
+                "url": (
+                    f"{VIDEO_DATASET_URL}/{agent_dir}/{day}/"
+                    f"{day}_{agent_dir}_{time_token}.mp4"
+                ),
+                "role": "additional participant context",
+                "alignment": "constructed exact DAY/time candidate",
+            }
+        expanded.append(item)
+    return expanded
+
+
 def _evidence_claims(row: dict[str, Any]) -> str:
     claims = row.get("evidence")
+    if not isinstance(claims, list):
+        claims = row.get("per_user_evidence_claims")
     if not isinstance(claims, list):
         return ""
     rendered: list[str] = []
@@ -193,7 +436,7 @@ def _evidence_claims(row: dict[str, Any]) -> str:
         if not isinstance(claim, dict):
             continue
         user = str(claim.get("user") or "Unknown user")
-        fact = str(claim.get("needed_fact") or "")
+        fact = str(claim.get("needed_fact") or claim.get("claim") or "")
         timeframe = str(claim.get("timeframe") or "")
         suffix = f" [{timeframe}]" if timeframe else ""
         rendered.append(f"{user}: {fact}{suffix}".strip())
@@ -272,6 +515,8 @@ def _normalize_qa(
 
 def build_review_data(
     inputs: list[tuple[str, Path]],
+    *,
+    six_user: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     run_order = {run_id: index for index, (run_id, _) in enumerate(inputs)}
     run_summaries: list[dict[str, Any]] = []
@@ -283,7 +528,10 @@ def build_review_data(
     for run_id, path in inputs:
         if not path.is_file():
             raise FileNotFoundError(path)
-        raw, rows = _read_jsonl(path)
+        raw, source_rows = _read_jsonl(path)
+        rows, skipped_row_count = _accepted_qa_rows(source_rows, source=path)
+        if not rows:
+            raise ValueError(f"{path}: no accepted QAs were found")
         file_hash = hashlib.sha256(raw).hexdigest()
         file_hashes.append(f"{run_id}:{file_hash}")
         key_counts = collections.Counter(key for row in rows for key in row)
@@ -314,6 +562,8 @@ def build_review_data(
                 "sha256": file_hash,
                 "bytes": len(raw),
                 "mib": round(len(raw) / 1024 / 1024, 3),
+                "source_row_count": len(source_rows),
+                "skipped_nonaccepted_row_count": skipped_row_count,
                 "accepted_qa_count": len(rows),
                 "unique_evidence_count": len(set(evidence_ids)),
                 "bytes_per_qa": round(len(raw) / len(rows)) if rows else 0,
@@ -342,6 +592,8 @@ def build_review_data(
         for row in rows:
             evidence_id = str(row["evidence_id"])
             videos = _source_videos(row)
+            if six_user:
+                videos = _six_user_videos(videos, evidence_id=evidence_id)
             entry = evidence_map.setdefault(
                 evidence_id,
                 {
@@ -411,10 +663,19 @@ def build_review_data(
                     "required_users": " | ".join(qa["required_users"]),
                     "attempt_count": qa["attempt_count"],
                     "judge_video_source": qa["judge_video_source"],
+                    "video_count": len(videos),
                     "video_1_user": videos[0]["user"] if len(videos) > 0 else "",
                     "video_1_url": videos[0]["url"] if len(videos) > 0 else "",
                     "video_2_user": videos[1]["user"] if len(videos) > 1 else "",
                     "video_2_url": videos[1]["url"] if len(videos) > 1 else "",
+                    "video_3_user": videos[2]["user"] if len(videos) > 2 else "",
+                    "video_3_url": videos[2]["url"] if len(videos) > 2 else "",
+                    "video_4_user": videos[3]["user"] if len(videos) > 3 else "",
+                    "video_4_url": videos[3]["url"] if len(videos) > 3 else "",
+                    "video_5_user": videos[4]["user"] if len(videos) > 4 else "",
+                    "video_5_url": videos[4]["url"] if len(videos) > 4 else "",
+                    "video_6_user": videos[5]["user"] if len(videos) > 5 else "",
+                    "video_6_url": videos[5]["url"] if len(videos) > 5 else "",
                     "generator_rationale": qa["generator_rationale"],
                     "evidence_claims": qa["evidence_claims"],
                     "referred_timestamps": qa["referred_timestamps"],
@@ -437,12 +698,16 @@ def build_review_data(
             collections.Counter(entry["qa_count"] for entry in evidence).items()
         )
     )
+    fingerprint_lines = list(file_hashes)
+    if six_user:
+        fingerprint_lines.append("review_mode:six_user")
     dataset_fingerprint = hashlib.sha256(
-        "\n".join(file_hashes).encode("utf-8")
+        "\n".join(fingerprint_lines).encode("utf-8")
     ).hexdigest()[:20]
     analysis = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "dataset_fingerprint": dataset_fingerprint,
+        "review_mode": "six_user" if six_user else "source_evidence",
         "format_comparison": {
             "all_utf8_without_bom": all(not run["utf8_bom"] for run in run_summaries),
             "all_lf_newlines": all(run["newline"] == "LF" for run in run_summaries),
@@ -461,6 +726,7 @@ def build_review_data(
     data = {
         "generated_at": analysis["generated_at"],
         "dataset_fingerprint": dataset_fingerprint,
+        "review_mode": analysis["review_mode"],
         "runs": [
             {
                 "run_id": run["run_id"],
@@ -474,6 +740,7 @@ def build_review_data(
         "summary": {
             "evidence_count": len(evidence),
             "qa_count": len(review_rows),
+            "video_count": max((len(entry["videos"]) for entry in evidence), default=0),
             "qa_count_per_evidence_distribution": qa_count_distribution,
         },
         "evidence": evidence,
@@ -563,7 +830,18 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="LABEL=PATH",
-        help="JSONL run input; repeat in the desired display order",
+        help=(
+            "Accepted-QA or generation-intermediate JSONL input; repeat in the "
+            "desired display order. Non-accepted intermediate rows are skipped."
+        ),
+    )
+    parser.add_argument(
+        "--six-user",
+        action="store_true",
+        help=(
+            "Show all six EgoLife participant videos. Missing participant URLs are "
+            "constructed from the accepted row's exact DAY/time token."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -578,7 +856,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     inputs = _parse_inputs(args.input)
-    data, analysis, review_rows = build_review_data(inputs)
+    data, analysis, review_rows = build_review_data(inputs, six_user=args.six_user)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     (args.output_dir / "review_data.json").write_text(
@@ -610,6 +888,8 @@ def main(argv: list[str] | None = None) -> int:
                 "output_dir": str(args.output_dir.resolve()),
                 "evidence_count": data["summary"]["evidence_count"],
                 "qa_count": data["summary"]["qa_count"],
+                "video_count": data["summary"]["video_count"],
+                "review_mode": data["review_mode"],
                 "dataset_fingerprint": data["dataset_fingerprint"],
             }
         )

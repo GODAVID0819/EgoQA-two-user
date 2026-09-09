@@ -10,9 +10,10 @@ import shutil
 import statistics
 import subprocess
 import tempfile
+import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Collection, Iterator
 
 from .gaze_projection import (
     find_clip_calibration,
@@ -823,6 +824,95 @@ def build_evidence_packet(
     }
 
 
+def iter_evidence_packets(
+    *,
+    manifest_path: str | Path,
+    cache_dir: str | Path,
+    output_root: str | Path,
+    target_count: int = 20,
+    users_per_case: int = 2,
+    frames_per_clip: int = 3,
+    evidence_duration_seconds: float = DEFAULT_EVIDENCE_DURATION_SECONDS,
+    aria_calibration_dir: str | Path | None = None,
+    max_groups: int | None = None,
+    download_media: bool = True,
+    random_seed: int | None = None,
+    stratify_by_day: bool = False,
+    progress: bool = False,
+    excluded_group_keys: Collection[tuple[str, str]] | None = None,
+    skip_failed_groups: bool = False,
+) -> Iterator[dict[str, Any]]:
+    """Build selected evidence packets lazily so callers can stop early."""
+
+    manifest = read_json(manifest_path)
+    groups = group_manifest_clips(
+        manifest,
+        evidence_duration_seconds=evidence_duration_seconds,
+    )
+    excluded = {
+        (str(day), str(time_token))
+        for day, time_token in (excluded_group_keys or ())
+    }
+    if excluded:
+        groups = [
+            group
+            for group in groups
+            if (str(group.get("day")), str(group.get("time_token"))) not in excluded
+        ]
+    if max_groups is not None:
+        groups = groups[:max_groups]
+    groups = select_evidence_groups(
+        groups,
+        target_count=target_count,
+        random_seed=random_seed,
+        stratify_by_day=stratify_by_day,
+    )
+    rng = random.Random(random_seed) if random_seed is not None else None
+
+    for group_index, group in enumerate(groups):
+        started = time.monotonic()
+        if progress:
+            print(
+                "evidence_window "
+                f"status=preparing index={group_index + 1} total={len(groups)} "
+                f"day={group.get('day')} time_token={group.get('time_token')}",
+                flush=True,
+            )
+        try:
+            packet = build_evidence_packet(
+                group,
+                cache_dir=cache_dir,
+                output_root=output_root,
+                users_per_case=users_per_case,
+                frames_per_clip=frames_per_clip,
+                aria_calibration_dir=aria_calibration_dir,
+                download_media=download_media,
+                rng=rng,
+            )
+        except Exception as exc:
+            if not skip_failed_groups:
+                raise
+            if progress:
+                print(
+                    "evidence_window "
+                    f"status=skipped index={group_index + 1} total={len(groups)} "
+                    f"day={group.get('day')} time_token={group.get('time_token')} "
+                    f"error_type={type(exc).__name__} "
+                    f"seconds={time.monotonic() - started:.3f}",
+                    flush=True,
+                )
+            continue
+        if progress:
+            print(
+                "evidence_window "
+                f"status=prepared index={group_index + 1} total={len(groups)} "
+                f"evidence_id={packet.get('evidence_id')} "
+                f"seconds={time.monotonic() - started:.3f}",
+                flush=True,
+            )
+        yield packet
+
+
 def prepare_evidence(
     *,
     manifest_path: str | Path,
@@ -838,38 +928,25 @@ def prepare_evidence(
     download_media: bool = True,
     random_seed: int | None = None,
     stratify_by_day: bool = False,
+    excluded_group_keys: Collection[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
-    manifest = read_json(manifest_path)
-    groups = group_manifest_clips(
-        manifest,
-        evidence_duration_seconds=evidence_duration_seconds,
-    )
-    if max_groups is not None:
-        groups = groups[:max_groups]
-    groups = select_evidence_groups(
-        groups,
-        target_count=target_count,
-        random_seed=random_seed,
-        stratify_by_day=stratify_by_day,
-    )
-    rng = random.Random(random_seed) if random_seed is not None else None
-
-    packets = []
-    for group in groups:
-        if len(packets) >= target_count:
-            break
-        packets.append(
-            build_evidence_packet(
-                group,
-                cache_dir=cache_dir,
-                output_root=output_root,
-                users_per_case=users_per_case,
-                frames_per_clip=frames_per_clip,
-                aria_calibration_dir=aria_calibration_dir,
-                download_media=download_media,
-                rng=rng,
-            )
+    packets = list(
+        iter_evidence_packets(
+            manifest_path=manifest_path,
+            cache_dir=cache_dir,
+            output_root=output_root,
+            target_count=target_count,
+            users_per_case=users_per_case,
+            frames_per_clip=frames_per_clip,
+            evidence_duration_seconds=evidence_duration_seconds,
+            aria_calibration_dir=aria_calibration_dir,
+            max_groups=max_groups,
+            download_media=download_media,
+            random_seed=random_seed,
+            stratify_by_day=stratify_by_day,
+            excluded_group_keys=excluded_group_keys,
         )
+    )
     write_jsonl(output_path, packets)
     return packets
 

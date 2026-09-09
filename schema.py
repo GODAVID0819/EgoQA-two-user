@@ -12,40 +12,6 @@ from .io_utils import iter_jsonl
 
 
 OPTION_LETTERS = ("A", "B", "C", "D", "E")
-
-
-def six_user_media_role_contracts(
-    required_users: list[str],
-) -> tuple[dict[str, str], ...]:
-    """返回当前与备份六用户剪枝模式共享的角色合同。"""
-
-    if len(required_users) != 6:
-        return ()
-    return (
-        {
-            required_users[0]: "speaker_reference_unpruned",
-            **{
-                user: "provider_similarity_pruned"
-                for user in required_users[1:]
-            },
-        },
-        {
-            required_users[0]: "speaker_consensus_pruned",
-            **{
-                user: "provider_consensus_pruned"
-                for user in required_users[1:]
-            },
-        },
-        {
-            required_users[0]: "speaker_all_clustering_frames",
-            **{
-                user: "provider_retained_cluster_frames"
-                for user in required_users[1:]
-            },
-        },
-    )
-
-
 REQUIRED_QA_FIELDS = {
     "qa_id",
     "question",
@@ -64,6 +30,7 @@ REQUIRED_QA_FIELDS = {
 VIDEO_FIRST_REQUIRED_FIELDS = {
     "question_type",
     "generator_rationale",
+    "why_two_users_needed",
     "per_user_evidence_claims",
     "attempt_count",
     "video_evidence",
@@ -93,19 +60,15 @@ DECISION_ENTROPY_JUDGE_CHECKS = {
 
 def extract_json_object(text: str) -> dict[str, Any]:
     cleaned = text.strip()
-    decoder = json.JSONDecoder()
-    candidates: list[tuple[int, int, dict[str, Any]]] = []
-    for match in re.finditer(r"\{", cleaned):
-        try:
-            value, consumed = decoder.raw_decode(cleaned[match.start() :])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            candidates.append((match.start() + consumed, match.start(), value))
-    if not candidates:
-        raise ValueError("No complete JSON object found in model output")
-    _, _, selected = max(candidates, key=lambda row: (row[0], -row[1]))
-    return selected
+    if cleaned.startswith("```"):
+        match = re.search(r"```(?:json)?\s*(.*?)\s*```", cleaned, re.DOTALL)
+        if match:
+            cleaned = match.group(1).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("No JSON object found in model output")
+    return json.loads(cleaned[start : end + 1])
 
 
 def normalize_correct(value: Any) -> str:
@@ -173,7 +136,15 @@ def validate_qa_item(
                     f"{field} must match the ordered six-user required_users contract"
                 )
 
-        if item.get("media_roles") not in six_user_media_role_contracts(required_users):
+        expected_media_roles = {
+            required_users[0]: "speaker_all_clustering_frames",
+            required_users[1]: "provider_retained_cluster_frames",
+            required_users[2]: "provider_retained_cluster_frames",
+            required_users[3]: "provider_retained_cluster_frames",
+            required_users[4]: "provider_retained_cluster_frames",
+            required_users[5]: "provider_retained_cluster_frames",
+        }
+        if item.get("media_roles") != expected_media_roles:
             errors.append("media_roles must cover all six ordered input users with valid roles")
 
         supporting_claims = item.get("supporting_user_claims")
@@ -299,51 +270,12 @@ def validate_qa_item(
                 errors.append("review.answerability.gate.passed must be true in strict mode")
             if not isinstance(evaluations, list):
                 errors.append("review.answerability.evaluations must be a list in strict mode")
-            if isinstance(required_users, list) and len(required_users) == 6:
-                minimum_required_users = item.get("minimum_required_users")
-                if (
-                    not isinstance(minimum_required_users, list)
-                    or not minimum_required_users
-                    or len(set(minimum_required_users)) != len(minimum_required_users)
-                    or any(user not in required_users for user in minimum_required_users)
-                ):
-                    errors.append(
-                        "minimum_required_users must be a non-empty ordered subset of "
-                        "required_users in strict six-user mode"
-                    )
-                elif isinstance(gate, dict) and gate.get(
-                    "minimum_required_users"
-                ) != minimum_required_users:
-                    errors.append(
-                        "minimum_required_users must match "
-                        "review.answerability.gate.minimum_required_users"
-                    )
 
         schema_validation = review.get("schema_validation")
         if not isinstance(schema_validation, dict):
             errors.append("review.schema_validation must be an object in strict mode")
         elif schema_validation.get("passed") is not True:
             errors.append("review.schema_validation.passed must be true in strict mode")
-
-    minimum_status = item.get("minimum_required_users_status")
-    if minimum_status is not None and minimum_status not in {
-        "confirmed",
-        "not_determined",
-        "not_applicable",
-    }:
-        errors.append(
-            "minimum_required_users_status must be confirmed, not_determined, or not_applicable"
-        )
-    if minimum_status == "confirmed" and not item.get("minimum_required_users"):
-        errors.append(
-            "confirmed minimum_required_users_status requires a non-empty minimum_required_users"
-        )
-    if minimum_status in {"not_determined", "not_applicable"} and item.get(
-        "minimum_required_users"
-    ):
-        errors.append(
-            "non-confirmed minimum_required_users_status requires an empty minimum_required_users"
-        )
 
     return errors
 
@@ -367,10 +299,6 @@ def write_qa_csv(jsonl_path: str | Path, csv_path: str | Path) -> int:
         "correct",
         "answer",
         "required_users",
-        "minimum_required_users",
-        "minimum_required_users_status",
-        "minimum_required_users_reason",
-        "minimum_required_users_basis",
         "combined_answerability",
         "review_passed",
         "question_type",
@@ -394,18 +322,6 @@ def write_qa_csv(jsonl_path: str | Path, csv_path: str | Path) -> int:
                     "correct": row.get("correct", ""),
                     "answer": row.get("answer", ""),
                     "required_users": ";".join(row.get("required_users", [])),
-                    "minimum_required_users": ";".join(
-                        row.get("minimum_required_users", [])
-                    ),
-                    "minimum_required_users_status": row.get(
-                        "minimum_required_users_status", ""
-                    ),
-                    "minimum_required_users_reason": row.get(
-                        "minimum_required_users_reason", ""
-                    ),
-                    "minimum_required_users_basis": row.get(
-                        "minimum_required_users_basis", ""
-                    ),
                     "combined_answerability": row.get("combined_answerability", ""),
                     "review_passed": review.get("review_passed", review.get("status", "")),
                     "question_type": row.get("question_type", ""),
@@ -456,10 +372,6 @@ def write_human_review_sheet(jsonl_path: str | Path, sheet_path: str | Path) -> 
                 f"- Evidence ID: `{row.get('evidence_id', '')}`",
                 f"- Question type: {_markdown_value(row.get('question_type'))}",
                 f"- Required users: {', '.join(row.get('required_users', []))}",
-                f"- Minimum required users: {', '.join(row.get('minimum_required_users', []))}",
-                f"- Minimum set status: {_markdown_value(row.get('minimum_required_users_status'))}",
-                f"- Minimum set reason: {_markdown_value(row.get('minimum_required_users_reason'))}",
-                f"- Minimum set basis: {_markdown_value(row.get('minimum_required_users_basis'))}",
                 f"- Review status: {_markdown_value(review.get('status'))}",
                 f"- Review passed: {_markdown_value(review.get('review_passed'))}",
                 f"- Judger gate passed: {_markdown_value((judger.get('gate') or {}).get('passed') if isinstance(judger.get('gate'), dict) else '')}",
@@ -485,6 +397,10 @@ def write_human_review_sheet(jsonl_path: str | Path, sheet_path: str | Path) -> 
                 "### Answer",
                 "",
                 _markdown_value(row.get("answer")),
+                "",
+                "### Why Two Users Are Needed",
+                "",
+                _markdown_value(row.get("why_two_users_needed")),
                 "",
                 "### Combined Answerability",
                 "",

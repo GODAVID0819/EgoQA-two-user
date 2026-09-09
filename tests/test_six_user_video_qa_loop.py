@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import argparse
 import json
 import shutil
 import sys
+import threading
 import types
 import unittest
 import uuid
@@ -17,303 +17,35 @@ if "egolife_two_user_qa" not in sys.modules:
     package.__path__ = [str(ROOT)]
     sys.modules["egolife_two_user_qa"] = package
 
+from egolife_two_user_qa.group_relative_clip_sampling import (  # noqa: E402
+    build_candidate_packet,
+)
+from egolife_two_user_qa.prompts import (  # noqa: E402
+    QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
+)
 from egolife_two_user_qa.video_qa_loop import (  # noqa: E402
+    SIX_USER_JUDGE_MODE_LEGACY,
+    SIX_USER_JUDGE_MODE_SEQUENTIAL,
+    JudgeInfrastructureError,
     answerability_gate,
     build_answerability_conditions,
+    compact_prompt_record,
     complete_generator_metadata,
     condition_media_for_clips,
     human_audit_packet,
+    intermediate_checkpoint_row,
     media_for_clips,
     merge_parallel_judges,
-    parsed_answerability_sufficiency,
+    run_combined_direct_judge,
     run_parallel_review_judges,
     run_answerability_eval,
-    six_user_ten_minute_reasoning_profiles,
     video_evidence_for_packet,
 )
 from egolife_two_user_qa import video_qa_loop  # noqa: E402
-from egolife_two_user_qa.prompts import (  # noqa: E402
-    build_evidence_groundedness_judge_prompt,
-    build_qa_formality_judge_prompt,
-)
-from egolife_two_user_qa.schema import (  # noqa: E402
-    VIDEO_FIRST_REQUIRED_FIELDS,
-    validate_qa_item,
-)
+from egolife_two_user_qa.schema import validate_qa_item  # noqa: E402
 
 
 SIX_USERS = ["speaker", "provider_one", "provider_two", "provider_three", "provider_four", "provider_five"]
-
-
-def test_six_user_ten_minute_reasoning_profiles_are_stage_specific() -> None:
-    profiles = six_user_ten_minute_reasoning_profiles()
-
-    assert profiles["generator"].max_new_tokens == 8192
-    assert profiles["generator"].disable_thinking is False
-    assert profiles["evidence_segment_observation"] is profiles["generator"]
-    assert profiles["evidence_groundedness_aggregation"] is profiles["generator"]
-    assert profiles["answerability"] is profiles["generator"]
-    assert profiles["qa_formality"].max_new_tokens == 2048
-    assert profiles["qa_formality"].disable_thinking is True
-    assert profiles["json_repair"] is profiles["qa_formality"]
-
-
-def test_six_user_ten_minute_reasoning_profiles_allow_formality_token_override() -> None:
-    profiles = six_user_ten_minute_reasoning_profiles(formality_max_new_tokens=3072)
-
-    assert profiles["generator"].max_new_tokens == 8192
-    assert profiles["qa_formality"].max_new_tokens == 3072
-    assert profiles["json_repair"] is profiles["qa_formality"]
-
-
-def test_six_user_ten_minute_fast_profiles_disable_thinking_stage_contract() -> None:
-    profiles = video_qa_loop.six_user_ten_minute_fast_profiles()
-
-    assert (profiles["generator"].max_new_tokens, profiles["generator"].disable_thinking) == (
-        8192,
-        True,
-    )
-    assert (
-        profiles["qa_formality"].max_new_tokens,
-        profiles["qa_formality"].disable_thinking,
-    ) == (1024, True)
-    assert (
-        profiles["speaker_only_answerability"].max_new_tokens,
-        profiles["speaker_only_answerability"].disable_thinking,
-    ) == (2048, True)
-    assert (
-        profiles["all_six_answerability"].max_new_tokens,
-        profiles["all_six_answerability"].disable_thinking,
-    ) == (4096, True)
-    assert (
-        profiles["evidence_groundedness"].max_new_tokens,
-        profiles["evidence_groundedness"].disable_thinking,
-    ) == (4096, True)
-    assert (profiles["json_repair"].max_new_tokens, profiles["json_repair"].disable_thinking) == (
-        1024,
-        True,
-    )
-
-
-def test_six_user_one_pass_profiles_use_stage_specific_video_quality() -> None:
-    profiles = video_qa_loop.six_user_one_pass_profiles()
-
-    assert (
-        profiles["generator_reasoning"].max_new_tokens,
-        profiles["generator_reasoning"].disable_thinking,
-        profiles["generator_reasoning"].video_fps,
-        profiles["generator_reasoning"].max_image_pixels,
-    ) == (
-        6144,
-        False,
-        1.0,
-        131_072,
-    )
-    assert (
-        profiles["generator_finalizer"].max_new_tokens,
-        profiles["generator_finalizer"].disable_thinking,
-    ) == (2048, True)
-    assert (
-        profiles["evidence_groundedness_reasoning"].max_new_tokens,
-        profiles["evidence_groundedness_reasoning"].disable_thinking,
-    ) == (5120, False)
-    assert profiles["evidence_groundedness_finalizer"].max_new_tokens == 1024
-    assert profiles["evidence_groundedness_finalizer"].disable_thinking is True
-    assert profiles["speaker_only_answerability_reasoning"].max_new_tokens == 4096
-    assert profiles["speaker_only_answerability_finalizer"].max_new_tokens == 1536
-    assert profiles["all_six_answerability_reasoning"].max_new_tokens == 6144
-    assert profiles["all_six_answerability_finalizer"].max_new_tokens == 2048
-    assert profiles["minimum_set_answerability_reasoning"].max_new_tokens == 3072
-    assert profiles["minimum_set_answerability_finalizer"].max_new_tokens == 1536
-    assert profiles["generator_json_repair"].max_new_tokens == 1536
-    assert profiles["json_repair"].max_new_tokens == 1024
-
-
-def test_reasoned_then_finalize_reserves_independent_final_budget() -> None:
-    class Runner:
-        def __init__(self) -> None:
-            self.calls: list[dict[str, object]] = []
-
-        def generate(self, prompt, *, image_paths, video_paths, call_profile=None, **kwargs):
-            self.calls.append(
-                {
-                    "prompt": prompt,
-                    "image_paths": list(image_paths),
-                    "video_paths": list(video_paths),
-                    "call_profile": call_profile,
-                    "kwargs": kwargs,
-                }
-            )
-            return "reasoning draft" if len(self.calls) == 1 else '{"status":"PASS"}'
-
-    runner = Runner()
-    reasoning_profile = video_qa_loop.GenerationCallProfile(
-        max_new_tokens=6144,
-        disable_thinking=False,
-        max_image_pixels=131_072,
-    )
-    finalizer_profile = video_qa_loop.GenerationCallProfile(
-        max_new_tokens=2048,
-        disable_thinking=True,
-        max_image_pixels=131_072,
-    )
-
-    result = video_qa_loop.reasoned_then_finalize(
-        runner=runner,
-        task_prompt="original task",
-        output_schema={"status": "PASS or FAIL"},
-        stage_name="generation",
-        image_paths=["frame.jpg"],
-        video_paths=[],
-        reasoning_profile=reasoning_profile,
-        finalizer_profile=finalizer_profile,
-        finalizer_reuses_media=True,
-        reasoning_generation_kwargs={"decoding_mode": "sampling", "temperature": 0.7},
-    )
-
-    assert result["reasoning_output"] == "reasoning draft"
-    assert result["final_output"] == '{"status":"PASS"}'
-    assert [call["call_profile"] for call in runner.calls] == [
-        reasoning_profile,
-        finalizer_profile,
-    ]
-    assert runner.calls[0]["image_paths"] == ["frame.jpg"]
-    assert runner.calls[1]["image_paths"] == ["frame.jpg"]
-    assert runner.calls[0]["kwargs"]["decoding_mode"] == "sampling"
-    assert runner.calls[1]["kwargs"] == {}
-    assert "reasoning draft" in str(runner.calls[1]["prompt"])
-
-
-def test_generator_stage_uses_text_only_greedy_finalizer() -> None:
-    class Runner:
-        def __init__(self) -> None:
-            self.calls: list[dict[str, object]] = []
-
-        def generate(self, prompt, *, image_paths, video_paths, call_profile=None, **kwargs):
-            self.calls.append(
-                {
-                    "prompt": prompt,
-                    "image_paths": list(image_paths),
-                    "call_profile": call_profile,
-                    "kwargs": kwargs,
-                }
-            )
-            return "candidate reasoning" if len(self.calls) == 1 else '{"qa_id":"QA_1"}'
-
-    runner = Runner()
-    profiles = video_qa_loop.six_user_one_pass_profiles()
-    result = video_qa_loop.run_generator_stage(
-        runner=runner,
-        prompt="generate one QA",
-        image_paths=["speaker.jpg", "provider.jpg"],
-        video_paths=[],
-        stage_profiles=profiles,
-        decode_mode="sampling",
-        temperature=0.7,
-        top_p=0.9,
-        top_k=None,
-    )
-
-    assert result["raw_output"] == '{"qa_id":"QA_1"}'
-    assert result["reasoning_output"] == "candidate reasoning"
-    assert result["execution_mode"] == "reasoned_then_finalize"
-    assert runner.calls[0]["kwargs"]["decoding_mode"] == "sampling"
-    assert runner.calls[0]["call_profile"] is profiles["generator_reasoning"]
-    assert runner.calls[1]["kwargs"] == {}
-    assert runner.calls[1]["call_profile"] is profiles["generator_finalizer"]
-    assert runner.calls[1]["image_paths"] == []
-
-
-def test_generator_output_repair_is_text_only_and_no_thinking() -> None:
-    class Runner:
-        def __init__(self) -> None:
-            self.calls: list[dict[str, object]] = []
-
-        def generate(self, prompt, *, image_paths, video_paths, call_profile=None):
-            self.calls.append(
-                {
-                    "prompt": prompt,
-                    "image_paths": list(image_paths),
-                    "video_paths": list(video_paths),
-                    "call_profile": call_profile,
-                }
-            )
-            return '{"qa_id":"QA_1"}'
-
-    runner = Runner()
-    repair_profile = video_qa_loop.six_user_one_pass_profiles()["generator_json_repair"]
-    qa, trace = video_qa_loop.parse_generator_output_with_repair(
-        raw_output="truncated reasoning without JSON",
-        runner=runner,
-        repair_profile=repair_profile,
-    )
-
-    assert qa == {"qa_id": "QA_1"}
-    assert trace["attempted"] is True
-    assert trace["succeeded"] is True
-    assert runner.calls[0]["image_paths"] == []
-    assert runner.calls[0]["video_paths"] == []
-    assert runner.calls[0]["call_profile"].max_new_tokens == 1536
-    assert runner.calls[0]["call_profile"].disable_thinking is True
-
-
-def test_groundedness_judge_reasons_with_media_then_finalizes_text_only() -> None:
-    class Runner:
-        def __init__(self) -> None:
-            self.calls: list[dict[str, object]] = []
-
-        def generate(self, prompt, *, image_paths, video_paths, call_profile=None):
-            self.calls.append(
-                {
-                    "prompt": prompt,
-                    "image_paths": list(image_paths),
-                    "video_paths": list(video_paths),
-                    "call_profile": call_profile,
-                }
-            )
-            if len(self.calls) == 1:
-                return "groundedness reasoning"
-            return json.dumps(
-                {
-                    "review_passed": True,
-                    "checks": {
-                        "evidence_groundedness": {
-                            "status": "PASS",
-                            "reason": "supported",
-                            "fix": "",
-                        }
-                    },
-                    "blocking_failures": [],
-                    "feedback_to_generator": "",
-                }
-            )
-
-    runner = Runner()
-    profiles = video_qa_loop.six_user_one_pass_profiles()
-    result = video_qa_loop.run_model_judge_branch(
-        check_name="evidence_groundedness",
-        prompt="judge evidence",
-        runner=runner,
-        image_paths=[],
-        video_paths=["full.mp4"],
-        evidence_id="evidence",
-        qa_id="qa",
-        attempt=1,
-        reasoning_call_profile=profiles["evidence_groundedness_reasoning"],
-        finalizer_call_profile=profiles["evidence_groundedness_finalizer"],
-        repair_call_profile=profiles["json_repair"],
-    )
-
-    assert result["checks"]["evidence_groundedness"]["status"] == "PASS"
-    assert result["reasoning_output"] == "groundedness reasoning"
-    assert runner.calls[0]["video_paths"] == ["full.mp4"]
-    assert runner.calls[1]["video_paths"] == []
-    assert runner.calls[0]["call_profile"].disable_thinking is False
-    assert runner.calls[1]["call_profile"].disable_thinking is True
-
-
-def test_video_first_schema_does_not_require_why_two_users_needed() -> None:
-    assert "why_two_users_needed" not in VIDEO_FIRST_REQUIRED_FIELDS
 
 
 def six_user_qa(*, correct: str = "A") -> dict[str, object]:
@@ -326,110 +58,68 @@ def six_user_qa(*, correct: str = "A") -> dict[str, object]:
     }
 
 
-def evaluation(condition: dict[str, object], choice: object) -> dict[str, object]:
-    return {
-        **condition,
-        "choice": choice,
-        "answer_text": "selected option",
-        "evidence_used": "visible evidence",
-    }
-
-
-def status_evaluation(
-    condition: dict[str, object],
-    status: str,
-    choice: object,
-) -> dict[str, object]:
-    return {
-        **condition,
-        "answerability_status": status,
-        "choice": choice,
-        "answer_text": "selected option" if choice else "",
-        "evidence_used": "visible evidence",
-    }
-
-
-def sufficiency_evaluation(
-    condition: dict[str, object],
-    answerable: bool,
-    *,
-    confidence: str = "HIGH",
-    available_evidence: list[str] | None = None,
-    missing_evidence: list[str] | None = None,
-) -> dict[str, object]:
-    visibility = "VISIBLE" if answerable else "NOT_VISIBLE"
-    return {
-        **condition,
-        "reason": "The supplied videos provide the required evidence.",
-        "needed_facts": [
+def evaluation(condition: dict[str, object], answerable: object) -> dict[str, object]:
+    users = list(condition.get("users") or [])
+    source_user = users[-1] if users else "speaker"
+    if answerable is None:
+        audits = []
+    else:
+        audits = [
             {
                 "fact_id": "F1",
-                "fact": "the later destination",
-                "why_needed": "the question asks where the object ended up",
-                "visibility": visibility,
-                "confidence": confidence,
-                "source_user": condition.get("users", [None])[0] if answerable else None,
-                "original_time_range": "00:01:10-00:01:20" if answerable else None,
+                "visibility": "VISIBLE",
+                "source_users": [users[0]],
+                "segment_references": ["segment_001"],
+                "visual_description": "The question anchor is visible.",
+            },
+            {
+                "fact_id": "F2",
+                "visibility": "VISIBLE" if answerable else "NOT_VISIBLE",
+                "source_users": [source_user] if answerable else [],
+                "segment_references": ["segment_002"] if answerable else [],
                 "visual_description": (
-                    (available_evidence or ["The handoff is visible."])[0]
+                    "The answer-bearing detail is visible."
                     if answerable
-                    else (missing_evidence or ["The later destination is not visible."])[0]
+                    else "The answer-bearing detail is absent."
                 ),
-            }
-        ],
+            },
+        ]
+    return {
+        **condition,
+        "reason": "the frozen visual facts are available or missing",
+        "fact_audits": audits,
+        "shared_fact_ids": ["F1", "F2"],
     }
 
 
 def six_user_packet() -> dict[str, object]:
-    return {
-        "evidence_id": "six-user-packet",
-        "required_users": list(SIX_USERS),
-        "input_users": list(SIX_USERS),
-        "speaker_user": SIX_USERS[0],
-        "provider_users": SIX_USERS[1:],
-        "evidence_provider_user": SIX_USERS[1],
-        "evidence_provider_users": SIX_USERS[1:],
-        "media_roles": {
-            SIX_USERS[0]: "speaker_consensus_pruned",
-            SIX_USERS[1]: "provider_consensus_pruned",
-            SIX_USERS[2]: "provider_consensus_pruned",
-            SIX_USERS[3]: "provider_consensus_pruned",
-            SIX_USERS[4]: "provider_consensus_pruned",
-            SIX_USERS[5]: "provider_consensus_pruned",
-        },
-        "clips": [
-            {
-                "agent_name": user,
-                "local_video": f"{user}.mp4",
-                "generator_video": f"generator-{user}.mp4",
-                "media_role": role,
-            }
-            for user, role in (
-                (SIX_USERS[0], "speaker_consensus_pruned"),
-                (SIX_USERS[1], "provider_consensus_pruned"),
-                (SIX_USERS[2], "provider_consensus_pruned"),
-                (SIX_USERS[3], "provider_consensus_pruned"),
-                (SIX_USERS[4], "provider_consensus_pruned"),
-                (SIX_USERS[5], "provider_consensus_pruned"),
-            )
-        ],
-        "source_urls": {},
-    }
-
-
-def provider_only_similarity_packet() -> dict[str, object]:
-    packet = six_user_packet()
-    media_roles = {
-        SIX_USERS[0]: "speaker_reference_unpruned",
-        **{user: "provider_similarity_pruned" for user in SIX_USERS[1:]},
-    }
-    packet["media_roles"] = media_roles
-    packet["generator_media_mode"] = "speaker_full_five_provider_pruned_videos"
-    packet["clips"] = [
-        {**clip, "media_role": media_roles[str(clip["agent_name"])]}
-        for clip in packet["clips"]
-    ]
-    return packet
+    roles = ["speaker_all_clustering_frames", *(["provider_retained_cluster_frames"] * 5)]
+    return build_candidate_packet(
+        {
+            "day": "DAY1",
+            "time_token": "12000000",
+            "selected_clips": [
+                {
+                    "agent_name": user,
+                    "generator_media_mode": (
+                        "all_clustering_frames_only"
+                        if index == 0
+                        else "retained_cluster_frames_only"
+                    ),
+                    "force_frame_inputs": True,
+                    "media_role": role,
+                    "is_pruned": index != 0,
+                }
+                for index, (user, role) in enumerate(zip(SIX_USERS, roles))
+            ],
+            "selection": {
+                "method": "six_user_speaker_consensus",
+                "speaker_index": 0,
+            },
+            "speaker_consensus_pruning": {},
+            "speaker_attempts": [],
+        }
+    )
 
 
 def qa_for_metadata(*, supporting_user: str = "provider_one") -> dict[str, object]:
@@ -465,575 +155,45 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         packet = six_user_packet()
         clips = []
         for index, clip in enumerate(packet["clips"]):
-            generator_video = self.tmp_path / f"generator_{index}.mp4"
             full_video = self.tmp_path / f"full_{index}.mp4"
-            generator_video.write_bytes(b"generator")
             full_video.write_bytes(b"full")
+            frames = []
+            for frame_index in range(3 if index == 0 else 2):
+                frame_path = self.tmp_path / f"generator_{index}_{frame_index}.jpg"
+                frame_path.write_bytes(b"frame")
+                frames.append(
+                    {
+                        "path": str(frame_path),
+                        "timestamp_seconds": float(frame_index),
+                    }
+                )
+            source_segments = []
+            for segment_index in range(20):
+                segment_path = self.tmp_path / f"source_{index}_{segment_index:03d}.mp4"
+                segment_path.write_bytes(b"segment")
+                source_segments.append(
+                    {
+                        "segment_index": segment_index,
+                        "local_video": str(segment_path),
+                        "time_token": f"SECRET_TIME_{segment_index}",
+                        "window_start_seconds": float(segment_index * 30),
+                        "window_end_seconds": float((segment_index + 1) * 30),
+                    }
+                )
             clips.append(
                 {
                     **clip,
-                    "local_video": str(generator_video),
-                    "generator_local_video": str(generator_video),
                     "full_local_video": str(full_video),
                     "original_local_video": str(full_video),
+                    "frames": frames,
+                    "source_segments": source_segments,
+                    "segment_count": len(source_segments),
                     "duration_seconds": 10.0,
-                    "is_pruned": index < 3,
+                    "is_pruned": index != 0,
                 }
             )
         packet["clips"] = clips
         return packet
-
-    def test_fail_fast_review_stops_after_formality_on_first_attempt(self) -> None:
-        packet = self.media_packet()
-        qa_item = six_user_qa()
-
-        def failed_formality(*, check_name, **_kwargs):
-            self.assertEqual(check_name, "qa_formality")
-            return {
-                "review_passed": False,
-                "checks": {
-                    "qa_formality": {
-                        "status": "FAIL",
-                        "reason": "not a natural first-person question",
-                        "fix": "rewrite naturally",
-                        "semantic_subchecks": {
-                            name: {"status": "FAIL", "reason": "failed"}
-                            for name in video_qa_loop.QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
-                        },
-                    }
-                },
-                "blocking_failures": ["qa_formality"],
-                "feedback_to_generator": "rewrite naturally",
-                "raw_output": "{}",
-                "elapsed_seconds": 0.1,
-            }
-
-        with (
-            mock.patch.object(
-                video_qa_loop,
-                "run_model_judge_branch",
-                side_effect=failed_formality,
-            ) as model_judge,
-            mock.patch.object(video_qa_loop, "run_answerability_condition_eval") as answerability,
-            mock.patch.object(video_qa_loop, "run_evidence_groundedness_review") as groundedness,
-        ):
-            judge, answerability_result, trace = video_qa_loop.run_fail_fast_review_judges(
-                qa_item=qa_item,
-                packet=packet,
-                schema_errors=[],
-                runner=object(),
-                media_backend="transformers-local",
-                allow_openai_video_input=False,
-                prompt_rows=[],
-                full_image_paths=[],
-                full_video_paths=[clip["full_local_video"] for clip in packet["clips"]],
-                attempt=1,
-                max_attempts=3,
-                stage_profiles=video_qa_loop.six_user_ten_minute_fast_profiles(),
-            )
-
-        self.assertFalse(judge["gate"]["passed"])
-        self.assertTrue(answerability_result["gate"]["skipped"])
-        self.assertEqual(
-            answerability_result["gate"]["minimum_required_users"],
-            [],
-        )
-        self.assertEqual(
-            answerability_result["gate"]["minimum_required_users_status"],
-            "not_determined",
-        )
-        self.assertEqual(
-            answerability_result["gate"]["minimum_required_users_reason"],
-            "answerability_skipped_after_formality_failure",
-        )
-        self.assertEqual(qa_item["minimum_required_users"], [])
-        self.assertEqual(qa_item["minimum_required_users_status"], "not_determined")
-        self.assertEqual(
-            trace["skipped_checks"],
-            ["speaker_only_answerability", "all_six_answerability", "evidence_groundedness"],
-        )
-        model_judge.assert_called_once()
-        answerability.assert_not_called()
-        groundedness.assert_not_called()
-
-    def test_answerability_condition_reasons_with_media_then_finalizes_text_only(self) -> None:
-        packet = self.media_packet()
-        condition = build_answerability_conditions(SIX_USERS)[0]
-
-        class Runner:
-            def __init__(self) -> None:
-                self.calls: list[dict[str, object]] = []
-
-            def generate(self, prompt, *, image_paths, video_paths, call_profile=None):
-                self.calls.append(
-                    {
-                        "prompt": prompt,
-                        "image_paths": list(image_paths),
-                        "video_paths": list(video_paths),
-                        "call_profile": call_profile,
-                    }
-                )
-                if len(self.calls) == 1:
-                    return "speaker answerability reasoning"
-                return json.dumps(sufficiency_evaluation(condition, False))
-
-        runner = Runner()
-        profiles = video_qa_loop.six_user_one_pass_profiles()
-        prompt_rows: list[dict[str, object]] = []
-        result = video_qa_loop.run_answerability_condition_eval(
-            qa_item=six_user_qa(),
-            packet=packet,
-            condition=condition,
-            runner=runner,
-            media_backend="transformers-local",
-            allow_openai_video_input=False,
-            prompt_rows=prompt_rows,
-            attempt=1,
-            reasoning_call_profile=profiles["speaker_only_answerability_reasoning"],
-            finalizer_call_profile=profiles["speaker_only_answerability_finalizer"],
-        )
-
-        self.assertEqual(result["reasoning_output"], "speaker answerability reasoning")
-        self.assertEqual(runner.calls[0]["video_paths"], [packet["clips"][0]["full_local_video"]])
-        self.assertEqual(runner.calls[1]["video_paths"], [])
-        self.assertFalse(runner.calls[0]["call_profile"].disable_thinking)
-        self.assertTrue(runner.calls[1]["call_profile"].disable_thinking)
-        self.assertEqual(prompt_rows[0]["reasoning_max_new_tokens"], 4096)
-        self.assertEqual(prompt_rows[0]["finalizer_max_new_tokens"], 1536)
-
-    def test_fail_fast_review_third_attempt_runs_every_metric_after_failure(self) -> None:
-        packet = self.media_packet()
-        observed_conditions: list[str] = []
-
-        def judge_branch(*, check_name, **_kwargs):
-            status = "FAIL" if check_name == "qa_formality" else "PASS"
-            check = {"status": status, "reason": check_name, "fix": ""}
-            if check_name == "qa_formality":
-                check["semantic_subchecks"] = {
-                    name: {"status": status, "reason": status.lower()}
-                    for name in video_qa_loop.QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
-                }
-            return {
-                "review_passed": status == "PASS",
-                "checks": {check_name: check},
-                "blocking_failures": [] if status == "PASS" else [check_name],
-                "feedback_to_generator": "",
-                "raw_output": "{}",
-                "elapsed_seconds": 0.1,
-            }
-
-        def condition_eval(*, condition, **_kwargs):
-            observed_conditions.append(condition["condition_type"])
-            return sufficiency_evaluation(
-                condition,
-                condition["condition_type"] == "combined_all_six_users",
-            )
-
-        groundedness_result = {
-            "review_passed": True,
-            "checks": {
-                "evidence_groundedness": {
-                    "status": "PASS",
-                    "reason": "supported",
-                    "fix": "",
-                }
-            },
-            "blocking_failures": [],
-            "feedback_to_generator": "",
-            "raw_output": "{}",
-            "elapsed_seconds": 0.1,
-        }
-        with (
-            mock.patch.object(
-                video_qa_loop,
-                "run_model_judge_branch",
-                side_effect=judge_branch,
-            ),
-            mock.patch.object(
-                video_qa_loop,
-                "run_answerability_condition_eval",
-                side_effect=condition_eval,
-            ),
-            mock.patch.object(
-                video_qa_loop,
-                "run_evidence_groundedness_review",
-                return_value=groundedness_result,
-            ) as groundedness,
-        ):
-            judge, _answerability, trace = video_qa_loop.run_fail_fast_review_judges(
-                qa_item=six_user_qa(),
-                packet=packet,
-                schema_errors=[],
-                runner=object(),
-                media_backend="transformers-local",
-                allow_openai_video_input=False,
-                prompt_rows=[],
-                full_image_paths=[],
-                full_video_paths=[clip["full_local_video"] for clip in packet["clips"]],
-                attempt=3,
-                max_attempts=3,
-                stage_profiles=video_qa_loop.six_user_ten_minute_fast_profiles(),
-            )
-
-        self.assertFalse(judge["gate"]["passed"])
-        self.assertEqual(
-            observed_conditions,
-            ["speaker_only", "combined_all_six_users", "minimum_required_users"],
-        )
-        groundedness.assert_called_once()
-        self.assertTrue(trace["force_complete_review"])
-        self.assertEqual(trace["skipped_checks"], [])
-
-    def test_sufficiency_parser_derives_false_from_missing_fact(self) -> None:
-        condition = build_answerability_conditions(SIX_USERS)[0]
-        self.assertEqual(
-            parsed_answerability_sufficiency(sufficiency_evaluation(condition, False)),
-            (False, None),
-        )
-
-    def test_sufficiency_parser_rejects_answer_fields_and_invalid_visible_provenance(self) -> None:
-        condition = build_answerability_conditions(SIX_USERS)[0]
-        answer_field_result = parsed_answerability_sufficiency(
-            {
-                **sufficiency_evaluation(condition, True),
-                "choice": "A",
-            }
-        )
-        self.assertIsNone(answer_field_result[0])
-        self.assertIn("forbidden answer fields", answer_field_result[1])
-
-        inconsistent = sufficiency_evaluation(condition, True)
-        inconsistent["needed_facts"][0]["original_time_range"] = None
-        inconsistent_result = parsed_answerability_sufficiency(inconsistent)
-        self.assertIsNone(inconsistent_result[0])
-        self.assertIn("original_time_range", inconsistent_result[1])
-
-    def test_visible_fact_requires_high_confidence_for_sufficiency(self) -> None:
-        condition = build_answerability_conditions(SIX_USERS)[0]
-        evaluation_row = sufficiency_evaluation(
-            condition,
-            True,
-            confidence="MEDIUM",
-        )
-
-        answerable, error = parsed_answerability_sufficiency(evaluation_row)
-
-        self.assertIsNone(error)
-        self.assertFalse(answerable)
-
-    def test_six_user_gate_requires_speaker_insufficient_and_all_six_sufficient(self) -> None:
-        conditions = build_answerability_conditions(SIX_USERS)
-        result = answerability_gate(
-            six_user_qa(),
-            [
-                sufficiency_evaluation(conditions[0], False),
-                sufficiency_evaluation(conditions[1], True),
-            ],
-        )
-        self.assertTrue(result["passed"])
-        self.assertEqual(result["answerability_mode"], "evidence_sufficiency_reasoning")
-
-    def test_answerability_fact_contract_rejects_rewritten_all_six_fact(self) -> None:
-        conditions = build_answerability_conditions(SIX_USERS)
-        speaker = sufficiency_evaluation(conditions[0], False)
-        all_six = sufficiency_evaluation(conditions[1], True)
-        all_six["needed_facts"][0]["fact"] = "a rewritten fact"
-
-        result = answerability_gate(six_user_qa(), [speaker, all_six])
-
-        self.assertFalse(result["passed"])
-        self.assertEqual(
-            result["failure_label"],
-            "answerability_fact_contract_mismatch",
-        )
-
-    def test_six_user_answerability_passes_speaker_facts_to_all_six(self) -> None:
-        observed: list[tuple[str, object]] = []
-
-        def fake_condition_eval(*, condition, canonical_facts=None, **_kwargs):
-            observed.append((condition["condition_type"], canonical_facts))
-            row = sufficiency_evaluation(
-                condition,
-                condition["condition_type"] != "speaker_only",
-            )
-            if canonical_facts:
-                row["needed_facts"][0].update(canonical_facts[0])
-            return row
-
-        with mock.patch.object(
-            video_qa_loop,
-            "run_answerability_condition_eval",
-            side_effect=fake_condition_eval,
-        ):
-            result = run_answerability_eval(
-                qa_item=six_user_qa(),
-                packet=six_user_packet(),
-                runner=object(),
-                media_backend="transformers-local",
-                allow_openai_video_input=False,
-                prompt_rows=[],
-            )
-
-        self.assertTrue(result["gate"]["passed"])
-        self.assertEqual(observed[0], ("speaker_only", None))
-        self.assertEqual(observed[1][0], "combined_all_six_users")
-        self.assertEqual(
-            observed[1][1],
-            [
-                {
-                    "fact_id": "F1",
-                    "fact": "the later destination",
-                    "why_needed": "the question asks where the object ended up",
-                }
-            ],
-        )
-
-    def test_six_user_answerability_judge_verifies_minimum_subset(self) -> None:
-        observed: list[tuple[str, list[str]]] = []
-        observed_budgets: list[tuple[int | None, int | None]] = []
-        conditions = build_answerability_conditions(SIX_USERS)
-        speaker_condition = conditions[0]
-        all_six_condition = conditions[1]
-        canonical_facts = [
-            {
-                "fact_id": "F1",
-                "fact": "the destination",
-                "why_needed": "the question asks where the object ended up",
-            },
-            {
-                "fact_id": "F2",
-                "fact": "the final state",
-                "why_needed": "the final state distinguishes the answer",
-            },
-        ]
-
-        def fact_evaluation(
-            condition: dict[str, object],
-            *,
-            visible_fact_ids: set[str],
-            source_users: dict[str, str | None],
-        ) -> dict[str, object]:
-            return {
-                **condition,
-                "reason": "judge audited the supplied condition",
-                "needed_facts": [
-                    {
-                        **fact,
-                        "visibility": (
-                            "VISIBLE" if fact["fact_id"] in visible_fact_ids else "NOT_VISIBLE"
-                        ),
-                        "confidence": (
-                            "HIGH" if fact["fact_id"] in visible_fact_ids else "LOW"
-                        ),
-                        "source_user": source_users.get(fact["fact_id"]),
-                        "original_time_range": (
-                            "00:01:10-00:01:20"
-                            if fact["fact_id"] in visible_fact_ids
-                            else None
-                        ),
-                        "visual_description": "judge observation",
-                    }
-                    for fact in canonical_facts
-                ],
-            }
-
-        def fake_condition_eval(
-            *,
-            condition,
-            canonical_facts=None,
-            reasoning_call_profile=None,
-            finalizer_call_profile=None,
-            **_kwargs,
-        ):
-            condition_type = str(condition["condition_type"])
-            users = [str(user) for user in condition["users"]]
-            observed.append((condition_type, users))
-            observed_budgets.append(
-                (
-                    getattr(reasoning_call_profile, "max_new_tokens", None),
-                    getattr(finalizer_call_profile, "max_new_tokens", None),
-                )
-            )
-            if condition_type == "speaker_only":
-                return fact_evaluation(
-                    condition,
-                    visible_fact_ids=set(),
-                    source_users={"F1": None, "F2": None},
-                )
-            if condition_type == "combined_all_six_users":
-                return fact_evaluation(
-                    condition,
-                    visible_fact_ids={"F1", "F2"},
-                    source_users={"F1": "provider_two", "F2": "provider_four"},
-                )
-            if users == ["provider_two"]:
-                return fact_evaluation(
-                    condition,
-                    visible_fact_ids={"F1"},
-                    source_users={"F1": "provider_two", "F2": None},
-                )
-            if users == ["provider_four"]:
-                return fact_evaluation(
-                    condition,
-                    visible_fact_ids={"F2"},
-                    source_users={"F1": None, "F2": "provider_four"},
-                )
-            return fact_evaluation(
-                condition,
-                visible_fact_ids={"F1", "F2"},
-                source_users={"F1": "provider_two", "F2": "provider_four"},
-            )
-
-        with mock.patch.object(
-            video_qa_loop,
-            "run_answerability_condition_eval",
-            side_effect=fake_condition_eval,
-        ):
-            result = run_answerability_eval(
-                qa_item=six_user_qa(),
-                packet=six_user_packet(),
-                runner=object(),
-                media_backend="transformers-local",
-                allow_openai_video_input=False,
-                prompt_rows=[],
-                condition_call_profiles=video_qa_loop.six_user_one_pass_profiles(),
-            )
-
-        self.assertEqual(
-            observed,
-            [
-                ("speaker_only", ["speaker"]),
-                ("combined_all_six_users", SIX_USERS),
-                ("minimum_required_users", ["provider_two"]),
-                ("minimum_required_users", ["provider_four"]),
-            ],
-        )
-        self.assertEqual(
-            result["gate"]["minimum_required_users"],
-            ["provider_two", "provider_four"],
-        )
-        self.assertEqual(result["gate"]["minimum_required_users_status"], "confirmed")
-        self.assertEqual(
-            result["gate"]["minimum_required_users_basis"],
-            "judge_verified_subset",
-        )
-        self.assertEqual(
-            result["minimum_set_audit"]["selected_users"],
-            ["provider_two", "provider_four"],
-        )
-        self.assertEqual(
-            observed_budgets,
-            [
-                (4096, 1536),
-                (6144, 1536),
-                (3072, 1024),
-                (3072, 1024),
-            ],
-        )
-
-    def test_six_user_gate_emits_minimum_union_of_fact_source_users(self) -> None:
-        conditions = build_answerability_conditions(SIX_USERS)
-        all_six = sufficiency_evaluation(conditions[1], True)
-        all_six["needed_facts"] = [
-            {
-                "fact_id": "F1",
-                "fact": "the destination",
-                "why_needed": "the question asks where the object ended up",
-                "visibility": "VISIBLE",
-                "confidence": "HIGH",
-                "source_user": "provider_two",
-                "original_time_range": "00:04:10-00:04:20",
-                "visual_description": "Provider two shows the destination.",
-            },
-            {
-                "fact_id": "F2",
-                "fact": "the final state",
-                "why_needed": "the final state distinguishes the answer",
-                "visibility": "VISIBLE",
-                "confidence": "HIGH",
-                "source_user": "provider_four",
-                "original_time_range": "00:07:30-00:07:40",
-                "visual_description": "Provider four shows the final state.",
-            },
-            {
-                "fact_id": "F3",
-                "fact": "the destination label",
-                "why_needed": "the label disambiguates the destination",
-                "visibility": "VISIBLE",
-                "confidence": "HIGH",
-                "source_user": "provider_two",
-                "original_time_range": "00:04:18-00:04:24",
-                "visual_description": "Provider two also shows the label.",
-            },
-        ]
-        speaker = sufficiency_evaluation(conditions[0], False)
-        speaker["needed_facts"] = [
-            {
-                "fact_id": fact["fact_id"],
-                "fact": fact["fact"],
-                "why_needed": fact["why_needed"],
-                "visibility": "NOT_VISIBLE",
-                "confidence": "LOW",
-                "source_user": None,
-                "original_time_range": None,
-                "visual_description": "The speaker view does not show this fact.",
-            }
-            for fact in all_six["needed_facts"]
-        ]
-
-        result = answerability_gate(
-            six_user_qa(),
-            [
-                speaker,
-                all_six,
-            ],
-        )
-
-        self.assertTrue(result["passed"])
-        self.assertEqual(
-            result["minimum_required_users"],
-            ["provider_two", "provider_four"],
-        )
-        self.assertEqual(result["minimum_required_user_count"], 2)
-        self.assertEqual(
-            result["minimum_required_users_basis"],
-            "visible_high_needed_fact_source_union",
-        )
-        self.assertEqual(result["minimum_required_users_status"], "confirmed")
-
-    def test_six_user_gate_marks_minimum_set_undetermined_when_all_six_is_not_answerable(self) -> None:
-        conditions = build_answerability_conditions(SIX_USERS)
-        result = answerability_gate(
-            six_user_qa(),
-            [
-                sufficiency_evaluation(conditions[0], False),
-                sufficiency_evaluation(conditions[1], False),
-            ],
-        )
-
-        self.assertFalse(result["passed"])
-        self.assertEqual(result["failure_label"], "all_six_not_answerable")
-        self.assertEqual(result["minimum_required_users"], [])
-        self.assertEqual(result["minimum_required_users_status"], "not_determined")
-        self.assertEqual(
-            result["minimum_required_users_reason"],
-            "all_six_not_answerable",
-        )
-
-    def test_six_user_gate_does_not_consume_choice_or_gold_answer(self) -> None:
-        conditions = build_answerability_conditions(SIX_USERS)
-        result = answerability_gate(
-            six_user_qa(correct="E"),
-            [
-                {
-                    **sufficiency_evaluation(conditions[0], False),
-                    "choice": "E",
-                },
-                sufficiency_evaluation(conditions[1], True),
-            ],
-        )
-        self.assertFalse(result["passed"])
-        self.assertIn("unparsed", result["failure_label"])
 
     def test_six_user_audit_and_metadata_expose_explicit_roles(self) -> None:
         packet = six_user_packet()
@@ -1056,6 +216,17 @@ class SixUserAnswerabilityTests(unittest.TestCase):
             self.assertEqual(set(output["media_roles"]), set(SIX_USERS))
 
         self.assertEqual(
+            qa["media_roles"],
+            {
+                SIX_USERS[0]: "speaker_all_clustering_frames",
+                **{
+                    user: "provider_retained_cluster_frames"
+                    for user in SIX_USERS[1:]
+                },
+            },
+        )
+
+        self.assertEqual(
             qa["supporting_user_claims"],
             [
                 {
@@ -1065,50 +236,11 @@ class SixUserAnswerabilityTests(unittest.TestCase):
             ],
         )
         self.assertNotIn("provider_two", {row["user"] for row in qa["supporting_user_claims"]})
+        for provider in SIX_USERS[1:]:
+            self.assertIn("not preclassified", qa["single_user_answerability"][provider])
+        self.assertIn("one or more provider views", qa["generator_rationale"])
+        self.assertIn("naturally want to ask", qa["review"]["generator_self_check"])
         self.assertEqual(validate_qa_item(qa), [])
-
-    def test_six_user_audit_accepts_provider_only_similarity_pruning_roles(self) -> None:
-        packet = provider_only_similarity_packet()
-
-        audit = human_audit_packet(packet)
-
-        self.assertEqual(audit["media_roles"], packet["media_roles"])
-
-    def test_six_user_schema_accepts_sampled_frame_media_roles(self) -> None:
-        packet = six_user_packet()
-        packet["media_roles"] = {
-            SIX_USERS[0]: "speaker_all_clustering_frames",
-            **{user: "provider_retained_cluster_frames" for user in SIX_USERS[1:]},
-        }
-        qa = qa_for_metadata()
-
-        complete_generator_metadata(qa, packet=packet, question_type="neutral")
-
-        self.assertEqual(validate_qa_item(qa), [])
-
-    def test_provider_only_packet_crosses_zero_gpu_qa_contract_pipeline(self) -> None:
-        packet = provider_only_similarity_packet()
-        qa = qa_for_metadata()
-
-        audit = human_audit_packet(packet)
-        complete_generator_metadata(qa, packet=packet, question_type="neutral")
-        schema_errors = validate_qa_item(qa)
-        formality_prompt = build_qa_formality_judge_prompt(
-            qa,
-            packet,
-            schema_errors=schema_errors,
-        )
-        groundedness_prompt = build_evidence_groundedness_judge_prompt(qa, packet)
-        answerability_conditions = build_answerability_conditions(SIX_USERS)
-
-        self.assertEqual(audit["media_roles"], packet["media_roles"])
-        self.assertEqual(schema_errors, [])
-        self.assertIn("six-user", formality_prompt)
-        self.assertIn("six-user", groundedness_prompt)
-        self.assertEqual(
-            [condition["condition_type"] for condition in answerability_conditions],
-            ["speaker_only", "combined_all_six_users"],
-        )
 
     def test_six_user_schema_rejects_supporting_claim_outside_input_users(self) -> None:
         qa = qa_for_metadata(supporting_user="outsider")
@@ -1163,117 +295,109 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         conditions = build_answerability_conditions(SIX_USERS)
 
         self.assertEqual(
-            [condition["condition_type"] for condition in conditions],
-            ["speaker_only", "combined_all_six_users"],
-        )
-
-    def test_prompt_identity_separates_reused_qa_id_across_slots(self) -> None:
-        self.assertTrue(hasattr(video_qa_loop, "prompt_rows_by_generation_identity"))
-        rows = [
-            {
-                "stage": "answerability",
-                "generation_slot_id": slot_id,
-                "qa_id": "reused-qa-id",
-                "attempt": 1,
-                "condition_type": condition_type,
-            }
-            for slot_id in ("slot-1", "slot-2")
-            for condition_type in ("speaker_only", "combined_all_six_users")
-        ]
-
-        indexed = video_qa_loop.prompt_rows_by_generation_identity(
-            rows,
-            stage="answerability",
-        )
-
-        self.assertEqual(len(indexed), 2)
-        self.assertEqual(len(indexed[("slot-1", "reused-qa-id", 1)]), 2)
-        self.assertEqual(len(indexed[("slot-2", "reused-qa-id", 1)]), 2)
-
-    def test_six_user_gate_blocks_when_all_six_is_missing(self) -> None:
-        conditions = build_answerability_conditions(SIX_USERS)
-        gate = answerability_gate(
-            six_user_qa(),
-            [sufficiency_evaluation(conditions[0], False)],
-        )
-
-        self.assertFalse(gate["passed"])
-        self.assertEqual(gate["failure_label"], "all_six_missing")
-
-    def test_speaker_answerable_is_blocking(self) -> None:
-        condition = build_answerability_conditions(SIX_USERS)[0]
-
-        gate = answerability_gate(
-            six_user_qa(),
-            [sufficiency_evaluation(condition, True)],
-        )
-
-        self.assertFalse(gate["passed"])
-        self.assertEqual(gate["failure_label"], "speaker_only_answerable")
-
-    def test_all_six_insufficient_is_blocking(self) -> None:
-        conditions = build_answerability_conditions(SIX_USERS)
-        gate = answerability_gate(
-            six_user_qa(),
+            conditions,
             [
-                sufficiency_evaluation(conditions[0], False),
-                sufficiency_evaluation(conditions[1], False),
+                {
+                    "condition_id": "speaker_only::speaker",
+                    "condition_type": "speaker_only",
+                    "users": ["speaker"],
+                },
+                {
+                    "condition_id": "combined_all_six_users::" + "+".join(SIX_USERS),
+                    "condition_type": "combined_all_six_users",
+                    "users": SIX_USERS,
+                },
             ],
         )
 
-        self.assertFalse(gate["passed"])
-        self.assertEqual(gate["failure_label"], "all_six_not_answerable")
+    def test_six_user_gate_passes_when_speaker_is_insufficient_and_all_six_is_sufficient(self) -> None:
+        qa = six_user_qa(correct="A")
+        conditions = build_answerability_conditions(SIX_USERS)
+        gate = answerability_gate(
+            qa,
+            [evaluation(conditions[0], False), evaluation(conditions[1], True)],
+        )
 
-    def test_invalid_speaker_sufficiency_is_blocking(self) -> None:
+        self.assertTrue(gate["passed"])
+        self.assertEqual(gate["answerability_mode"], "shared_fact_visibility_audit")
+        self.assertFalse(gate["speaker_only_answerable"])
+        self.assertTrue(gate["all_six_answerable"])
+        self.assertEqual(gate["answerability_evaluated_condition_count"], 2)
+        self.assertEqual(gate["shared_fact_ids"], ["F1", "F2"])
+        self.assertEqual(gate["provider_resolved_fact_ids"], ["F2"])
+        self.assertNotIn("speaker_only_choice", gate)
+        self.assertNotIn("all_six_choice", gate)
+
+    def test_speaker_only_answerable_is_blocking(self) -> None:
+        qa = six_user_qa(correct="A")
+        conditions = build_answerability_conditions(SIX_USERS)
+        gate = answerability_gate(
+            qa,
+            [evaluation(conditions[0], True), evaluation(conditions[1], True)],
+        )
+
+        self.assertFalse(gate["passed"])
+        self.assertTrue(gate["speaker_only_answerable"])
+        self.assertEqual(gate["failure_label"], "speaker_only_answerable")
+        self.assertIn("speaker-only", gate["reason"])
+
+    def test_unparsed_speaker_sufficiency_is_blocking(self) -> None:
+        qa = six_user_qa(correct="A")
         conditions = build_answerability_conditions(SIX_USERS)
 
         speaker_invalid = answerability_gate(
-            six_user_qa(),
-            [{**conditions[0], "answerable": True, "reason": "model decided directly", "needed_facts": []}],
+            qa,
+            [evaluation(conditions[0], None), evaluation(conditions[1], True)],
         )
 
         self.assertFalse(speaker_invalid["passed"])
         self.assertEqual(speaker_invalid["failure_label"], "speaker_only_unparsed")
 
-    def test_program_derives_sufficiency_from_every_needed_fact(self) -> None:
-        condition = build_answerability_conditions(SIX_USERS)[0]
-        evaluation_row = sufficiency_evaluation(condition, True)
-        evaluation_row["needed_facts"].append(
-            {
-                "fact_id": "F2",
-                "fact": "the recipient identity",
-                "why_needed": "the question asks who received the object",
-                "visibility": "AMBIGUOUS",
-                "confidence": "LOW",
-                "source_user": None,
-                "original_time_range": None,
-                "visual_description": "Several people could be the recipient.",
-            }
+    def test_all_six_insufficient_missing_or_unparsed_is_blocking(self) -> None:
+        qa = six_user_qa(correct="A")
+        conditions = build_answerability_conditions(SIX_USERS)
+
+        insufficient = answerability_gate(
+            qa,
+            [evaluation(conditions[0], False), evaluation(conditions[1], False)],
+        )
+        missing = answerability_gate(qa, [evaluation(conditions[0], False)])
+        unparsed = answerability_gate(
+            qa,
+            [evaluation(conditions[0], False), evaluation(conditions[1], None)],
         )
 
-        answerable, error = parsed_answerability_sufficiency(evaluation_row)
+        self.assertEqual(insufficient["failure_label"], "all_six_not_answerable")
+        self.assertEqual(missing["failure_label"], "all_six_missing")
+        self.assertEqual(unparsed["failure_label"], "all_six_unparsed")
 
-        self.assertIsNone(error)
-        self.assertFalse(answerable)
+    def test_six_user_gate_does_not_read_the_gold_answer_or_accept_answer_fields(self) -> None:
+        qa = six_user_qa(correct="A")
+        qa.pop("correct")
+        conditions = build_answerability_conditions(SIX_USERS)
 
-    def test_visible_fact_requires_a_condition_user_and_time_range(self) -> None:
-        condition = build_answerability_conditions(SIX_USERS)[0]
-        evaluation_row = sufficiency_evaluation(condition, True)
-        evaluation_row["needed_facts"][0]["source_user"] = "provider_one"
+        gate = answerability_gate(
+            qa,
+            [evaluation(conditions[0], False), evaluation(conditions[1], True)],
+        )
+        leaked = evaluation(conditions[0], False)
+        leaked["choice"] = "B"
+        leaked_gate = answerability_gate(
+            qa,
+            [leaked, evaluation(conditions[1], True)],
+        )
 
-        answerable, error = parsed_answerability_sufficiency(evaluation_row)
+        self.assertTrue(gate["passed"])
+        self.assertFalse(leaked_gate["passed"])
+        self.assertEqual(leaked_gate["failure_label"], "speaker_only_unparsed")
+        self.assertIn("forbidden answer fields", leaked_gate["reason"])
 
-        self.assertIsNone(answerable)
-        self.assertIn("source_user", error)
-
-    def test_run_eval_calls_runner_for_speaker_and_all_six_conditions(self) -> None:
+    def test_run_eval_uses_shared_plan_six_user_maps_and_two_reductions(self) -> None:
         class Runner:
             def __init__(self) -> None:
                 self.calls: list[dict[str, object]] = []
-                self.answers = iter((False, True, True))
 
             def generate(self, prompt, *, image_paths, video_paths):
-                answerable = next(self.answers)
                 self.calls.append(
                     {
                         "prompt": prompt,
@@ -1281,80 +405,846 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                         "video_paths": list(video_paths),
                     }
                 )
-                return json.dumps(
-                    sufficiency_evaluation(
+                if "Stage marker: answerability_fact_plan" in prompt:
+                    return json.dumps(
                         {
-                            "condition_type": (
-                                "speaker_only" if len(self.calls) == 1 else "combined_all_six_users"
-                            ),
-                            "users": ["speaker"] if len(self.calls) == 1 else list(SIX_USERS),
-                        },
-                        answerable,
+                            "reason": "Two facts are required.",
+                            "needed_facts": [
+                                {"fact_id": "F1", "fact": "The setup is visible.", "why_needed": "It anchors the question."},
+                                {"fact_id": "F2", "fact": "The completing item is visible.", "why_needed": "It resolves the detail."},
+                            ],
+                        }
                     )
+                if "Stage marker: answerability_user_fact_audit" in prompt:
+                    user = next(user for user in SIX_USERS if f'user "{user}"' in prompt)
+                    second_visible = user == "provider_one"
+                    return json.dumps(
+                        {
+                            "reason": "This user establishes some frozen facts.",
+                            "fact_audits": [
+                                {
+                                    "fact_id": "F1",
+                                    "visibility": "VISIBLE" if user == "speaker" else "NOT_VISIBLE",
+                                    "source_users": [user] if user == "speaker" else [],
+                                    "segment_references": ["segment_001"] if user == "speaker" else [],
+                                    "visual_description": "The anchor is visible or absent.",
+                                },
+                                {
+                                    "fact_id": "F2",
+                                    "visibility": "VISIBLE" if second_visible else "NOT_VISIBLE",
+                                    "source_users": [user] if second_visible else [],
+                                    "segment_references": ["segment_020"] if second_visible else [],
+                                    "visual_description": "The detail is visible or absent.",
+                                },
+                            ],
+                        }
+                    )
+                all_six = '"condition_type": "combined_all_six_users"' in prompt
+                return json.dumps(
+                    {
+                        "reason": "The included audits were combined.",
+                        "fact_audits": [
+                            {
+                                "fact_id": "F1",
+                                "visibility": "VISIBLE",
+                                "source_users": ["speaker"],
+                                "segment_references": ["segment_001"],
+                                "visual_description": "The anchor is visible.",
+                            },
+                            {
+                                "fact_id": "F2",
+                                "visibility": "VISIBLE" if all_six else "NOT_VISIBLE",
+                                "source_users": ["provider_one"] if all_six else [],
+                                "segment_references": ["segment_020"] if all_six else [],
+                                "visual_description": "The detail is visible only with a provider.",
+                            },
+                        ],
+                    }
                 )
 
         runner = Runner()
         result = run_answerability_eval(
-            qa_item={**six_user_qa(correct="A"), "generation_slot_id": "slot-001"},
-            packet={"clips": []},
+            qa_item=six_user_qa(correct="A"),
+            packet=self.media_packet(),
             runner=runner,
             media_backend="transformers-local",
             allow_openai_video_input=False,
             prompt_rows=[],
         )
 
-        self.assertEqual(len(runner.calls), 3)
-        self.assertEqual(len(result["evaluations"]), 2)
-        self.assertTrue(all("generation_slot_id" in row for row in result["evaluations"]))
-        self.assertTrue(all(row["generation_slot_id"] == "slot-001" for row in result["evaluations"]))
-        self.assertTrue(result["gate"]["passed"])
+        self.assertEqual(len(runner.calls), 9)
         self.assertEqual(
-            result["gate"]["answerability_mode"],
-            "evidence_sufficiency_reasoning",
+            [len(call["video_paths"]) for call in runner.calls],
+            [0, 20, 20, 20, 20, 20, 20, 0, 0],
         )
+        self.assertEqual(len(result["evaluations"]), 2)
+        self.assertTrue(result["gate"]["passed"])
 
-    def test_run_eval_propagates_answerability_call_profile(self) -> None:
+    def test_sequential_fact_audit_runs_speaker_gate_before_other_users(self) -> None:
         class Runner:
-            def __init__(self) -> None:
-                self.calls: list[object] = []
+            supports_concurrent_batching = True
 
-            def generate(self, prompt, *, image_paths, video_paths, call_profile=None):
-                self.calls.append(call_profile)
-                condition = {
-                    "condition_type": (
-                        "speaker_only" if len(self.calls) == 1 else "combined_all_six_users"
-                    ),
-                    "users": ["speaker"] if len(self.calls) == 1 else list(SIX_USERS),
-                }
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def generate(self, prompt, *, image_paths, video_paths):
+                self.calls.append(
+                    {
+                        "prompt": prompt,
+                        "image_paths": list(image_paths),
+                        "video_paths": list(video_paths),
+                    }
+                )
+                if "Stage marker: answerability_fact_plan" in prompt:
+                    return json.dumps(
+                        {
+                            "reason": "Two facts are required.",
+                            "needed_facts": [
+                                {
+                                    "fact_id": "F1",
+                                    "fact": "The setup is visible.",
+                                    "why_needed": "It anchors the question.",
+                                },
+                                {
+                                    "fact_id": "F2",
+                                    "fact": "The completing item is visible.",
+                                    "why_needed": "It resolves the detail.",
+                                },
+                            ],
+                        }
+                    )
+                if "Stage marker: answerability_user_fact_audit" in prompt:
+                    user = next(user for user in SIX_USERS if f'user "{user}"' in prompt)
+                    second_visible = user == "provider_one"
+                    return json.dumps(
+                        {
+                            "reason": "This user establishes some frozen facts.",
+                            "fact_audits": [
+                                {
+                                    "fact_id": "F1",
+                                    "visibility": "VISIBLE" if user == "speaker" else "NOT_VISIBLE",
+                                    "source_users": [user] if user == "speaker" else [],
+                                    "segment_references": ["segment_001"] if user == "speaker" else [],
+                                    "visual_description": "The anchor is visible or absent.",
+                                },
+                                {
+                                    "fact_id": "F2",
+                                    "visibility": "VISIBLE" if second_visible else "NOT_VISIBLE",
+                                    "source_users": [user] if second_visible else [],
+                                    "segment_references": ["segment_020"] if second_visible else [],
+                                    "visual_description": "The detail is visible or absent.",
+                                },
+                            ],
+                        }
+                    )
+                answerable_condition = any(
+                    marker in prompt
+                    for marker in (
+                        '"condition_type": "combined_all_six_users"',
+                        '"condition_type": "minimum_required_users"',
+                    )
+                )
                 return json.dumps(
-                    sufficiency_evaluation(condition, len(self.calls) in {2, 3})
+                    {
+                        "reason": "The included audits were combined.",
+                        "fact_audits": [
+                            {
+                                "fact_id": "F1",
+                                "visibility": "VISIBLE",
+                                "source_users": ["speaker"],
+                                "segment_references": ["segment_001"],
+                                "visual_description": "The anchor is visible.",
+                            },
+                            {
+                                "fact_id": "F2",
+                                "visibility": (
+                                    "VISIBLE" if answerable_condition else "NOT_VISIBLE"
+                                ),
+                                "source_users": (
+                                    ["provider_one"] if answerable_condition else []
+                                ),
+                                "segment_references": (
+                                    ["segment_020"] if answerable_condition else []
+                                ),
+                                "visual_description": "The detail is visible only with a provider.",
+                            },
+                        ],
+                    }
                 )
 
-        profile = six_user_ten_minute_reasoning_profiles()["answerability"]
+        runner = Runner()
+        result = run_answerability_eval(
+            qa_item=six_user_qa(correct="A"),
+            packet=self.media_packet(),
+            runner=runner,
+            media_backend="transformers-local",
+            allow_openai_video_input=False,
+            prompt_rows=[],
+            six_user_judge_mode=SIX_USER_JUDGE_MODE_SEQUENTIAL,
+        )
+
+        self.assertEqual(
+            [len(call["video_paths"]) for call in runner.calls],
+            [0, 20, 0, 20, 20, 20, 20, 20, 0, 0],
+        )
+        self.assertEqual(len(result["evaluations"]), 3)
+        self.assertIsNone(result["early_exit"])
+        self.assertTrue(result["gate"]["passed"], result["gate"])
+        self.assertEqual(
+            result["trial_order"],
+            ["combined_all_six_users", "minimum_required_users"],
+        )
+        self.assertEqual(
+            result["minimum_required_users"],
+            ["speaker", "provider_one"],
+        )
+        self.assertEqual(
+            result["gate"]["minimum_required_users"],
+            ["speaker", "provider_one"],
+        )
+        self.assertEqual(
+            result["remaining_user_audit_execution"],
+            "concurrent_vllm_batch",
+        )
+        self.assertEqual(
+            result["condition_aggregation_execution"],
+            "concurrent_vllm_batch",
+        )
+
+    def test_sequential_fact_audit_stops_when_speaker_is_sufficient(self) -> None:
+        class Runner:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def generate(self, prompt, *, image_paths, video_paths):
+                self.calls.append(
+                    {
+                        "prompt": prompt,
+                        "image_paths": list(image_paths),
+                        "video_paths": list(video_paths),
+                    }
+                )
+                if "Stage marker: answerability_fact_plan" in prompt:
+                    return json.dumps(
+                        {
+                            "reason": "One fact is required.",
+                            "needed_facts": [
+                                {
+                                    "fact_id": "F1",
+                                    "fact": "The answer detail is visible.",
+                                    "why_needed": "It resolves the question.",
+                                }
+                            ],
+                        }
+                    )
+                return json.dumps(
+                    {
+                        "reason": "The speaker already sees the fact.",
+                        "fact_audits": [
+                            {
+                                "fact_id": "F1",
+                                "visibility": "VISIBLE",
+                                "source_users": ["speaker"],
+                                "segment_references": ["segment_001"],
+                                "visual_description": "The answer detail is visible.",
+                            }
+                        ],
+                    }
+                )
+
+        runner = Runner()
+        result = run_answerability_eval(
+            qa_item=six_user_qa(correct="A"),
+            packet=self.media_packet(),
+            runner=runner,
+            media_backend="transformers-local",
+            allow_openai_video_input=False,
+            prompt_rows=[],
+            six_user_judge_mode=SIX_USER_JUDGE_MODE_SEQUENTIAL,
+        )
+
+        self.assertEqual(
+            [len(call["video_paths"]) for call in runner.calls],
+            [0, 20, 0],
+        )
+        self.assertEqual(result["early_exit"], "speaker_only")
+        self.assertFalse(result["gate"]["passed"])
+        self.assertEqual(result["gate"]["failure_label"], "speaker_only_answerable")
+
+    def test_legacy_zero_shot_answerability_uses_one_and_six_full_videos(self) -> None:
+        class Runner:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def generate(self, prompt, *, image_paths, video_paths):
+                self.calls.append(
+                    {
+                        "prompt": prompt,
+                        "image_paths": list(image_paths),
+                        "video_paths": list(video_paths),
+                    }
+                )
+                speaker_only = '"condition_type": "speaker_only"' in prompt
+                return json.dumps(
+                    {
+                        "answerable": not speaker_only,
+                        "reason": "The needed visible facts are absent or present.",
+                        "available_evidence": [] if speaker_only else ["answer fact"],
+                        "missing_evidence": ["answer fact"] if speaker_only else [],
+                    }
+                )
+
         runner = Runner()
         prompt_rows: list[dict[str, object]] = []
-
-        run_answerability_eval(
+        result = run_answerability_eval(
             qa_item=six_user_qa(correct="A"),
-            packet={"clips": []},
+            packet=self.media_packet(),
             runner=runner,
             media_backend="transformers-local",
             allow_openai_video_input=False,
             prompt_rows=prompt_rows,
-            call_profile=profile,
+            six_user_judge_mode=SIX_USER_JUDGE_MODE_LEGACY,
         )
 
-        self.assertEqual(runner.calls, [profile, profile, profile])
+        self.assertEqual(len(runner.calls), 2)
+        self.assertEqual([len(call["video_paths"]) for call in runner.calls], [1, 6])
+        self.assertEqual([row["stage"] for row in prompt_rows], ["answerability"] * 2)
+        self.assertTrue(result["gate"]["passed"])
         self.assertEqual(
-            [(row["reasoning_enabled"], row["max_new_tokens"]) for row in prompt_rows],
-            [(True, 8192), (True, 8192), (True, 8192)],
+            result["gate"]["answerability_mode"],
+            "direct_video_sufficiency_zero_shot",
         )
+
+    def test_legacy_zero_shot_parallel_review_uses_direct_six_video_groundedness(self) -> None:
+        packet = self.media_packet()
+        _images, full_videos = media_for_clips(
+            packet["clips"],
+            backend="transformers-local",
+            allow_openai_video_input=False,
+            media_role="full",
+        )
+        prompt_rows: list[dict[str, object]] = []
+
+        def fake_judge_branch(*, check_name, video_paths, **kwargs):
+            return {
+                "checks": {
+                    check_name: {"status": "PASS", "reason": "ok", "fix": ""}
+                },
+                "blocking_failures": [],
+                "feedback_to_generator": "",
+                "raw_output": "{}",
+                "elapsed_seconds": 0.01,
+                "seen_video_count": len(video_paths),
+            }
+
+        with (
+            mock.patch.object(
+                video_qa_loop,
+                "run_model_judge_branch",
+                side_effect=fake_judge_branch,
+            ),
+            mock.patch.object(
+                video_qa_loop,
+                "run_answerability_eval",
+                return_value={
+                    "evaluations": [],
+                    "gate": {"passed": True, "reason": "test"},
+                },
+            ) as answerability_mock,
+        ):
+            _judge, _answerability, trace = run_parallel_review_judges(
+                qa_item=six_user_qa(correct="A"),
+                packet=packet,
+                schema_errors=[],
+                runner=object(),
+                media_backend="transformers-local",
+                allow_openai_video_input=False,
+                prompt_rows=prompt_rows,
+                full_image_paths=[],
+                full_video_paths=full_videos,
+                attempt=1,
+                six_user_judge_mode=SIX_USER_JUDGE_MODE_LEGACY,
+            )
+
+        stages = [row["stage"] for row in prompt_rows]
+        self.assertEqual(stages.count("evidence_groundedness_judge"), 1)
+        self.assertNotIn("evidence_segment_observation", stages)
+        self.assertNotIn("evidence_groundedness_aggregation", stages)
+        groundedness_row = next(
+            row for row in prompt_rows if row["stage"] == "evidence_groundedness_judge"
+        )
+        self.assertEqual(groundedness_row["media_summary"]["video_count"], 6)
+        self.assertEqual(trace["evidence_groundedness"]["mode"], "single_full_media_call")
+        self.assertEqual(trace["six_user_judge_mode"], SIX_USER_JUDGE_MODE_LEGACY)
+        self.assertEqual(
+            answerability_mock.call_args.kwargs["six_user_judge_mode"],
+            SIX_USER_JUDGE_MODE_LEGACY,
+        )
+
+    def test_sequential_separated_review_runs_strictly_in_gate_order(self) -> None:
+        packet = self.media_packet()
+        generator_images = ["speaker-frame.jpg", "provider-frame.jpg"]
+        _images, full_videos = media_for_clips(
+            packet["clips"],
+            backend="transformers-local",
+            allow_openai_video_input=False,
+            media_role="full",
+        )
+        events: list[str] = []
+        formality_judge = {
+            "review_passed": True,
+            "checks": {
+                "qa_formality": {
+                    "status": "PASS",
+                    "reason": "form is valid",
+                    "fix": "",
+                    "semantic_subchecks": {
+                        name: {"status": "PASS", "reason": "ok"}
+                        for name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
+                    },
+                },
+            },
+            "blocking_failures": [],
+            "why_generator_asked_this": "",
+            "feedback_to_generator": "",
+            "elapsed_seconds": 0.01,
+        }
+        evidence_judge = {
+            "review_passed": True,
+            "checks": {
+                "evidence_groundedness": {
+                    "status": "PASS",
+                    "reason": "sampled evidence is grounded",
+                    "fix": "",
+                },
+            },
+            "blocking_failures": [],
+            "why_generator_asked_this": "",
+            "feedback_to_generator": "",
+            "elapsed_seconds": 0.01,
+        }
+
+        def fake_judge_branch(*, check_name, image_paths, video_paths, **_kwargs):
+            events.append(check_name)
+            if check_name == "qa_formality":
+                self.assertEqual(image_paths, [])
+                self.assertEqual(video_paths, [])
+                return formality_judge
+            self.assertEqual(check_name, "evidence_groundedness")
+            self.assertEqual(image_paths, generator_images)
+            self.assertEqual(video_paths, [])
+            return evidence_judge
+
+        def fake_answerability(**kwargs):
+            events.append("answerability")
+            self.assertEqual(
+                kwargs["six_user_judge_mode"],
+                SIX_USER_JUDGE_MODE_SEQUENTIAL,
+            )
+            return {
+                "evaluations": [],
+                "gate": {"passed": True, "reason": "fact audit passed"},
+            }
+
+        prompt_rows: list[dict[str, object]] = []
+        with (
+            mock.patch.object(
+                video_qa_loop,
+                "run_model_judge_branch",
+                side_effect=fake_judge_branch,
+            ),
+            mock.patch.object(
+                video_qa_loop,
+                "run_answerability_eval",
+                side_effect=fake_answerability,
+            ),
+        ):
+            judge, _answerability, trace = run_parallel_review_judges(
+                qa_item=six_user_qa(correct="A"),
+                packet=packet,
+                schema_errors=[],
+                runner=object(),
+                media_backend="transformers-local",
+                allow_openai_video_input=False,
+                prompt_rows=prompt_rows,
+                full_image_paths=[],
+                full_video_paths=full_videos,
+                generator_image_paths=generator_images,
+                generator_video_paths=[],
+                attempt=1,
+                six_user_judge_mode=SIX_USER_JUDGE_MODE_SEQUENTIAL,
+            )
+
+        self.assertEqual(
+            events,
+            ["qa_formality", "evidence_groundedness", "answerability"],
+        )
+        self.assertTrue(judge["gate"]["passed"])
+        self.assertFalse(trace["parallel"])
+        self.assertEqual(
+            [row["stage"] for row in prompt_rows],
+            ["qa_formality_judge", "evidence_groundedness_judge"],
+        )
+        self.assertEqual(prompt_rows[0]["media_summary"]["image_count"], 0)
+        self.assertEqual(prompt_rows[0]["media_summary"]["video_count"], 0)
+        self.assertEqual(prompt_rows[1]["media_summary"]["image_count"], len(generator_images))
+        self.assertEqual(prompt_rows[1]["media_summary"]["video_count"], 0)
+        self.assertEqual(
+            trace["execution_order"][:3],
+            [
+                "deterministic_schema",
+                "qa_formality_judge",
+                "evidence_groundedness_judge",
+            ],
+        )
+
+    def test_vllm_sequential_fact_mode_runs_all_three_review_branches_together(self) -> None:
+        class BatchingRunner:
+            supports_concurrent_batching = True
+            model_id = "fake-vllm"
+
+        barrier = threading.Barrier(3)
+        entered: list[str] = []
+
+        formality_judge = {
+            "review_passed": True,
+            "checks": {
+                "qa_formality": {
+                    "status": "PASS",
+                    "reason": "form is valid",
+                    "fix": "",
+                    "semantic_subchecks": {
+                        name: {"status": "PASS", "reason": "ok"}
+                        for name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
+                    },
+                }
+            },
+            "blocking_failures": [],
+            "feedback_to_generator": "",
+            "elapsed_seconds": 0.01,
+        }
+        groundedness_judge = {
+            "review_passed": False,
+            "checks": {
+                "evidence_groundedness": {
+                    "status": "FAIL",
+                    "reason": "the evidence is not grounded",
+                    "fix": "regenerate",
+                }
+            },
+            "blocking_failures": ["evidence_groundedness"],
+            "feedback_to_generator": "regenerate",
+            "elapsed_seconds": 0.01,
+        }
+
+        def fake_judge_branch(*, check_name, **_kwargs):
+            entered.append(check_name)
+            barrier.wait(timeout=2)
+            return (
+                formality_judge
+                if check_name == "qa_formality"
+                else groundedness_judge
+            )
+
+        def fake_answerability(**kwargs):
+            entered.append("answerability")
+            self.assertEqual(
+                kwargs["six_user_judge_mode"],
+                SIX_USER_JUDGE_MODE_SEQUENTIAL,
+            )
+            barrier.wait(timeout=2)
+            return {
+                "evaluations": [],
+                "gate": {"passed": True, "reason": "fact audit passed"},
+            }
+
+        with (
+            mock.patch.object(
+                video_qa_loop,
+                "run_model_judge_branch",
+                side_effect=fake_judge_branch,
+            ),
+            mock.patch.object(
+                video_qa_loop,
+                "run_answerability_eval",
+                side_effect=fake_answerability,
+            ),
+        ):
+            judge, answerability, trace = run_parallel_review_judges(
+                qa_item=six_user_qa(correct="A"),
+                packet=self.media_packet(),
+                schema_errors=[],
+                runner=BatchingRunner(),
+                media_backend="vllm-local",
+                allow_openai_video_input=False,
+                prompt_rows=[],
+                full_image_paths=[],
+                full_video_paths=[],
+                generator_image_paths=["sampled.jpg"],
+                generator_video_paths=[],
+                attempt=1,
+                six_user_judge_mode=SIX_USER_JUDGE_MODE_SEQUENTIAL,
+            )
+
+        self.assertCountEqual(
+            entered,
+            ["qa_formality", "evidence_groundedness", "answerability"],
+        )
+        self.assertTrue(answerability["gate"]["passed"])
+        self.assertFalse(judge["gate"]["passed"])
+        self.assertTrue(trace["parallel"])
+        self.assertTrue(trace["single_packet_batching"])
+        self.assertEqual(
+            trace["evidence_groundedness"]["mode"],
+            "single_generator_media_call",
+        )
+
+    def test_combined_direct_gate_does_not_require_downstream_answerability(self) -> None:
+        class Runner:
+            def generate(self, _prompt, *, image_paths, video_paths):
+                self.assert_media = (list(image_paths), list(video_paths))
+                return json.dumps(
+                    {
+                        "review_passed": False,
+                        "checks": {
+                            "qa_formality": {
+                                "status": "PASS",
+                                "reason": "form is valid",
+                                "fix": "",
+                                "semantic_subchecks": {
+                                    name: {"status": "PASS", "reason": "ok"}
+                                    for name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
+                                },
+                            },
+                            "evidence_groundedness": {
+                                "status": "PASS",
+                                "reason": "evidence is grounded",
+                                "fix": "",
+                            },
+                        },
+                        "blocking_failures": ["answerability"],
+                        "why_generator_asked_this": "",
+                        "feedback_to_generator": "",
+                    }
+                )
+
+        runner = Runner()
+        result = run_combined_direct_judge(
+            prompt="review",
+            runner=runner,
+            image_paths=["sampled.jpg"],
+            video_paths=[],
+            evidence_id="evidence",
+            qa_id="qa",
+            attempt=1,
+        )
+
+        self.assertTrue(result["gate"]["passed"], result["gate"])
+        self.assertEqual(result["gate"]["failed_checks"], [])
+        self.assertIn("answerability", result["gate"]["model_blocking_failures"])
+        self.assertNotIn("missing checks", result["gate"]["reason"])
+
+    def test_sequential_separated_review_stops_after_grounding_failure(self) -> None:
+        packet = self.media_packet()
+        formality_judge = {
+            "review_passed": True,
+            "checks": {
+                "qa_formality": {
+                    "status": "PASS",
+                    "reason": "form is valid",
+                    "fix": "",
+                    "semantic_subchecks": {
+                        name: {"status": "PASS", "reason": "ok"}
+                        for name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
+                    },
+                },
+            },
+            "blocking_failures": [],
+            "feedback_to_generator": "",
+        }
+        evidence_judge = {
+            "review_passed": False,
+            "checks": {
+                "evidence_groundedness": {
+                    "status": "FAIL",
+                    "reason": "answer claim is not visible",
+                    "fix": "regenerate from visible evidence",
+                },
+            },
+            "blocking_failures": ["evidence_groundedness"],
+            "feedback_to_generator": "regenerate from visible evidence",
+        }
+
+        def fake_judge_branch(*, check_name, **_kwargs):
+            return (
+                formality_judge
+                if check_name == "qa_formality"
+                else evidence_judge
+            )
+
+        with (
+            mock.patch.object(
+                video_qa_loop,
+                "run_model_judge_branch",
+                side_effect=fake_judge_branch,
+            ),
+            mock.patch.object(
+                video_qa_loop,
+                "run_answerability_eval",
+            ) as answerability_mock,
+        ):
+            judge, answerability, trace = run_parallel_review_judges(
+                qa_item=six_user_qa(correct="A"),
+                packet=packet,
+                schema_errors=[],
+                runner=object(),
+                media_backend="transformers-local",
+                allow_openai_video_input=False,
+                prompt_rows=[],
+                full_image_paths=[],
+                full_video_paths=[],
+                generator_image_paths=["sampled.jpg"],
+                generator_video_paths=[],
+                attempt=1,
+                six_user_judge_mode=SIX_USER_JUDGE_MODE_SEQUENTIAL,
+            )
+
+        answerability_mock.assert_not_called()
+        self.assertFalse(judge["gate"]["passed"])
+        self.assertEqual(
+            answerability["gate"]["failure_label"],
+            "upstream_evidence_groundedness_failed",
+        )
+        self.assertEqual(
+            trace["execution_order"],
+            [
+                "deterministic_schema",
+                "qa_formality_judge",
+                "evidence_groundedness_judge",
+            ],
+        )
+
+    def test_sequential_separated_review_does_not_start_grounding_after_formality_failure(self) -> None:
+        packet = self.media_packet()
+        formality_judge = {
+            "review_passed": False,
+            "checks": {
+                "qa_formality": {
+                    "status": "FAIL",
+                    "reason": "question wording is ambiguous",
+                    "fix": "rewrite the question",
+                    "semantic_subchecks": {
+                        name: {
+                            "status": "FAIL" if name == "reference_clarity" else "PASS",
+                            "reason": "ambiguous" if name == "reference_clarity" else "ok",
+                        }
+                        for name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
+                    },
+                }
+            },
+            "blocking_failures": ["qa_formality"],
+            "feedback_to_generator": "rewrite the question",
+        }
+
+        with (
+            mock.patch.object(
+                video_qa_loop,
+                "run_model_judge_branch",
+                return_value=formality_judge,
+            ) as judge_branch_mock,
+            mock.patch.object(
+                video_qa_loop,
+                "run_answerability_eval",
+            ) as answerability_mock,
+        ):
+            judge, answerability, trace = run_parallel_review_judges(
+                qa_item=six_user_qa(correct="A"),
+                packet=packet,
+                schema_errors=[],
+                runner=object(),
+                media_backend="transformers-local",
+                allow_openai_video_input=False,
+                prompt_rows=[],
+                full_image_paths=[],
+                full_video_paths=[],
+                generator_image_paths=["sampled.jpg"],
+                generator_video_paths=[],
+                attempt=1,
+                six_user_judge_mode=SIX_USER_JUDGE_MODE_SEQUENTIAL,
+            )
+
+        self.assertEqual(judge_branch_mock.call_count, 1)
+        self.assertEqual(
+            judge_branch_mock.call_args.kwargs["check_name"],
+            "qa_formality",
+        )
+        answerability_mock.assert_not_called()
+        self.assertFalse(judge["gate"]["passed"])
+        self.assertEqual(
+            answerability["gate"]["failure_label"],
+            "upstream_qa_formality_failed",
+        )
+        self.assertEqual(
+            trace["execution_order"],
+            ["deterministic_schema", "qa_formality_judge"],
+        )
+
+    def test_cuda_oom_in_legacy_judge_is_infrastructure_failure(self) -> None:
+        packet = self.media_packet()
+        _images, full_videos = media_for_clips(
+            packet["clips"],
+            backend="transformers-local",
+            allow_openai_video_input=False,
+            media_role="full",
+        )
+
+        def fake_judge_branch(*, check_name, **kwargs):
+            if check_name == "evidence_groundedness":
+                raise RuntimeError("CUDA out of memory while allocating tensor")
+            return {
+                "checks": {
+                    check_name: {"status": "PASS", "reason": "ok", "fix": ""}
+                },
+                "blocking_failures": [],
+                "feedback_to_generator": "",
+                "raw_output": "{}",
+                "elapsed_seconds": 0.01,
+            }
+
+        with (
+            mock.patch.object(
+                video_qa_loop,
+                "run_model_judge_branch",
+                side_effect=fake_judge_branch,
+            ),
+            mock.patch.object(
+                video_qa_loop,
+                "run_answerability_eval",
+                return_value={"evaluations": [], "gate": {"passed": True}},
+            ),
+            self.assertRaises(JudgeInfrastructureError) as raised,
+        ):
+            run_parallel_review_judges(
+                qa_item=six_user_qa(correct="A"),
+                packet=packet,
+                schema_errors=[],
+                runner=object(),
+                media_backend="transformers-local",
+                allow_openai_video_input=False,
+                prompt_rows=[],
+                full_image_paths=[],
+                full_video_paths=full_videos,
+                attempt=1,
+                six_user_judge_mode=SIX_USER_JUDGE_MODE_LEGACY,
+            )
+
+        self.assertEqual(raised.exception.stage, "evidence_groundedness_judge")
 
     def test_six_user_media_routes_generator_and_judges_in_order(self) -> None:
         packet = self.media_packet()
         clips = packet["clips"]
 
-        _images, generator_videos = media_for_clips(
+        generator_images, generator_videos = media_for_clips(
             clips,
             backend="transformers-local",
             allow_openai_video_input=False,
@@ -1367,19 +1257,27 @@ class SixUserAnswerabilityTests(unittest.TestCase):
             media_role="full",
         )
 
-        self.assertEqual(generator_videos, [clip["local_video"] for clip in clips])
+        self.assertEqual(
+            generator_images,
+            [frame["path"] for clip in clips for frame in clip["frames"]],
+        )
+        self.assertEqual(generator_videos, [])
         self.assertEqual(full_videos, [clip["full_local_video"] for clip in clips])
         self.assertEqual(
             [row["media_role"] for row in video_evidence_for_packet(packet)],
             [
-                "speaker_consensus_pruned",
-                "provider_consensus_pruned",
-                "provider_consensus_pruned",
-                "provider_consensus_pruned",
-                "provider_consensus_pruned",
-                "provider_consensus_pruned",
+                "speaker_all_clustering_frames",
+                "provider_retained_cluster_frames",
+                "provider_retained_cluster_frames",
+                "provider_retained_cluster_frames",
+                "provider_retained_cluster_frames",
+                "provider_retained_cluster_frames",
             ],
         )
+        self.assertFalse(clips[0]["is_pruned"])
+        self.assertTrue(all(clip["is_pruned"] for clip in clips[1:]))
+        self.assertTrue(all("local_video" not in clip for clip in clips))
+        self.assertTrue(all("generator_local_video" not in clip for clip in clips))
 
         condition_media = condition_media_for_clips(
             condition={
@@ -1394,7 +1292,114 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         )
         self.assertEqual(condition_media["total_duration_seconds"], 60.0)
 
-    def test_answerability_uses_full_speaker_then_all_six_videos(self) -> None:
+    def test_intermediate_checkpoint_and_prompt_log_omit_frame_manifests(self) -> None:
+        frame_paths = [
+            f"/scratch/private/frame_mapping/frame_{index:05d}.png"
+            for index in range(6000)
+        ]
+        condition_media = {
+            "condition_id": "combined_all_six_users::all",
+            "condition_type": "combined_all_six_users",
+            "users": SIX_USERS,
+            "media_role": "full",
+            "image_paths": frame_paths,
+            "video_paths": [f"/scratch/private/user_{index}.mp4" for index in range(6)],
+            "total_duration_seconds": 3600.0,
+            "video_evidence": [
+                {
+                    "sampled_frames": [
+                        {"path": path, "timestamp_seconds": float(index)}
+                        for index, path in enumerate(frame_paths)
+                    ]
+                }
+            ],
+        }
+        answerability = {
+            "evaluations": [
+                {
+                    "condition_id": condition_media["condition_id"],
+                    "answerable": True,
+                    "raw_output": '{"answerable": true}',
+                    "condition_media": condition_media,
+                }
+            ],
+            "gate": {"passed": True},
+        }
+        attempt = {
+            "evidence_id": "large-packet",
+            "qa_id": "qa-large",
+            "question_type": "neutral",
+            "generation_mode": "baseline",
+            "attempt": 1,
+            "media": {
+                "image_paths": frame_paths,
+                "video_paths": [],
+                "judge_image_paths": [],
+                "judge_video_paths": condition_media["video_paths"],
+                "human_audit": {"video_evidence": condition_media["video_evidence"]},
+            },
+            "generation": {
+                "prompt": "small prompt",
+                "raw_output": '{"question": "What was moved?"}',
+            },
+            "judge": {
+                "qa_formality": {
+                    "prompt": "judge prompt",
+                    "raw_output": "x" * 1_000_000,
+                    "parsed": {"status": "PASS", "raw_output": "y" * 1_000_000},
+                },
+                "answerability": answerability,
+                "merged": {
+                    "gate": {"passed": True},
+                    "branches": {"qa_formality": {"raw_output": "z" * 1_000_000}},
+                },
+            },
+            "answerability": answerability,
+            "result": {"accepted": True},
+        }
+        qa = {
+            **six_user_qa(),
+            "generation_trace": [attempt],
+            "human_audit": {"video_evidence": condition_media["video_evidence"]},
+            "video_evidence": condition_media["video_evidence"],
+            "review": {"answerability": answerability},
+        }
+
+        checkpoint = intermediate_checkpoint_row(
+            evidence_id="large-packet",
+            qa_id="qa-large",
+            question_type="neutral",
+            generation_mode="baseline",
+            status="accepted",
+            attempts=[attempt],
+            qa=qa,
+        )
+        prompt_record = compact_prompt_record(
+            {
+                "stage": "generation",
+                "evidence_id": "large-packet",
+                "prompt": "small prompt",
+                "image_paths": frame_paths,
+                "video_paths": [],
+                "condition_media": condition_media,
+            }
+        )
+        serialized_checkpoint = json.dumps(checkpoint)
+        serialized_prompt_record = json.dumps(prompt_record)
+
+        self.assertLess(len(serialized_checkpoint), 50_000)
+        self.assertNotIn(frame_paths[0], serialized_checkpoint)
+        self.assertNotIn(frame_paths[-1], serialized_checkpoint)
+        self.assertNotIn("sampled_frames", serialized_checkpoint)
+        self.assertNotIn('"raw_output"', serialized_checkpoint)
+        self.assertNotIn("x" * 1000, serialized_checkpoint)
+        self.assertNotIn("image_paths", prompt_record)
+        self.assertNotIn("video_paths", prompt_record)
+        self.assertNotIn("condition_media", prompt_record)
+        self.assertNotIn(frame_paths[0], serialized_prompt_record)
+        self.assertEqual(prompt_record["media_summary"]["image_count"], 6000)
+
+    def test_answerability_reuses_cached_source_segments_without_media_mappings(self) -> None:
         class Runner:
             def __init__(self) -> None:
                 self.calls = []
@@ -1407,17 +1412,46 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                         "video_paths": list(video_paths),
                     }
                 )
-                answerable = len(self.calls) in {2, 3}
-                return json.dumps(
-                    sufficiency_evaluation(
+                if "Stage marker: answerability_fact_plan" in prompt:
+                    return json.dumps(
                         {
-                            "condition_type": (
-                                "speaker_only" if len(self.calls) == 1 else "combined_all_six_users"
-                            ),
-                            "users": ["speaker"] if len(self.calls) == 1 else list(SIX_USERS),
-                        },
-                        answerable,
+                            "reason": "One external fact is needed.",
+                            "needed_facts": [
+                                {"fact_id": "F1", "fact": "The completing item is visible.", "why_needed": "It resolves the question."}
+                            ],
+                        }
                     )
+                if "Stage marker: answerability_user_fact_audit" in prompt:
+                    user = next(user for user in SIX_USERS if f'user "{user}"' in prompt)
+                    visible = user == "provider_one"
+                    return json.dumps(
+                        {
+                            "reason": "The fact is visible or absent.",
+                            "fact_audits": [
+                                {
+                                    "fact_id": "F1",
+                                    "visibility": "VISIBLE" if visible else "NOT_VISIBLE",
+                                    "source_users": [user] if visible else [],
+                                    "segment_references": ["segment_019"] if visible else [],
+                                    "visual_description": "The item is visible or absent.",
+                                }
+                            ],
+                        }
+                    )
+                all_six = '"condition_type": "combined_all_six_users"' in prompt
+                return json.dumps(
+                    {
+                        "reason": "The included audits were reduced.",
+                        "fact_audits": [
+                            {
+                                "fact_id": "F1",
+                                "visibility": "VISIBLE" if all_six else "NOT_VISIBLE",
+                                "source_users": ["provider_one"] if all_six else [],
+                                "segment_references": ["segment_019"] if all_six else [],
+                                "visual_description": "Only the combined condition contains the fact.",
+                            }
+                        ],
+                    }
                 )
 
         packet = self.media_packet()
@@ -1432,28 +1466,46 @@ class SixUserAnswerabilityTests(unittest.TestCase):
             prompt_rows=prompt_rows,
         )
 
-        full_videos = [clip["full_local_video"] for clip in packet["clips"]]
-        self.assertEqual(len(runner.calls), 3)
-        self.assertEqual(runner.calls[0]["video_paths"], full_videos[:1])
-        self.assertEqual(runner.calls[1]["video_paths"], full_videos)
-        self.assertEqual(runner.calls[2]["video_paths"], full_videos[:1])
-        self.assertEqual(len(prompt_rows), 3)
+        expected_segment_paths = [
+            [row["local_video"] for row in clip["source_segments"]]
+            for clip in packet["clips"]
+        ]
+        self.assertEqual(len(runner.calls), 9)
+        visual_calls = [call for call in runner.calls if call["video_paths"]]
+        self.assertEqual(len(visual_calls), 6)
+        self.assertEqual(
+            [call["video_paths"] for call in visual_calls],
+            expected_segment_paths,
+        )
+        self.assertEqual(len(prompt_rows), 9)
         self.assertTrue(all("elapsed_seconds" in row for row in prompt_rows))
+        self.assertTrue(all("video_paths" not in row for row in prompt_rows))
+        for row in prompt_rows:
+            self.assertNotIn("SECRET_TIME_", row["prompt"])
+            self.assertNotIn(str(self.tmp_path), row["prompt"])
         self.assertTrue(
             all("elapsed_seconds" in evaluation for evaluation in result["evaluations"])
         )
-        self.assertTrue(result["gate"]["passed"])
         self.assertFalse(result["gate"]["speaker_only_answerable"])
         self.assertTrue(result["gate"]["all_six_answerable"])
 
-    def test_qa_formality_failure_remains_blocking_for_six_users(self) -> None:
+    def test_concurrent_activity_subcheck_remains_blocking_for_six_users(self) -> None:
+        semantic_subchecks = {
+            name: {"status": "PASS", "reason": "passed"}
+            for name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
+        }
+        semantic_subchecks["other_person_activity_query"] = {
+            "status": "FAIL",
+            "reason": "the answer is another person's concurrent activity",
+        }
         merged = merge_parallel_judges(
             qa_formality_judge={
                 "checks": {
                     "qa_formality": {
-                        "status": "FAIL",
-                        "reason": "synthetic formality failure",
-                        "fix": "rewrite the question",
+                        "status": "PASS",
+                        "reason": "model overall pass",
+                        "fix": "",
+                        "semantic_subchecks": semantic_subchecks,
                     }
                 }
             },
@@ -1473,8 +1525,16 @@ class SixUserAnswerabilityTests(unittest.TestCase):
 
         self.assertFalse(merged["review_passed"])
         self.assertIn("qa_formality", merged["blocking_failures"])
+        self.assertIn(
+            "other_person_activity_query fail",
+            merged["checks"]["qa_formality"]["reason"],
+        )
+        self.assertIn(
+            "replace any concurrent-activity report",
+            merged["checks"]["qa_formality"]["fix"],
+        )
 
-    def test_groundedness_prompt_row_uses_all_six_full_videos(self) -> None:
+    def test_groundedness_maps_each_user_source_sequence_then_reduces_text_only(self) -> None:
         packet = self.media_packet()
         _images, full_videos = media_for_clips(
             packet["clips"],
@@ -1483,7 +1543,37 @@ class SixUserAnswerabilityTests(unittest.TestCase):
             media_role="full",
         )
         prompt_rows = []
-        qa_item = six_user_qa(correct="A")
+
+        class Runner:
+            model_id = "test-runner"
+
+            def __init__(self) -> None:
+                self.calls = []
+
+            def generate(self, prompt, *, image_paths, video_paths):
+                self.calls.append(
+                    {
+                        "prompt": prompt,
+                        "image_paths": list(image_paths),
+                        "video_paths": list(video_paths),
+                    }
+                )
+                user = next(user for user in SIX_USERS if f'user "{user}"' in prompt)
+                return json.dumps(
+                    {
+                        "user": user,
+                        "claims": [
+                            {
+                                "claim": "The material event is visible.",
+                                "status": "SUPPORTED",
+                                "segment_references": ["segment_010"],
+                                "visual_description": "The event appears clearly.",
+                            }
+                        ],
+                    }
+                )
+
+        runner = Runner()
 
         def fake_judge_branch(*, check_name, **kwargs):
             return {
@@ -1507,20 +1597,15 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                 "run_answerability_eval",
                 return_value={
                     "evaluations": [],
-                    "gate": {
-                        "passed": True,
-                        "reason": "test",
-                        "minimum_required_users": ["provider_two", "provider_four"],
-                        "minimum_required_user_count": 2,
-                    },
+                    "gate": {"passed": True, "reason": "test"},
                 },
             ),
         ):
             _judge, _answerability, trace = run_parallel_review_judges(
-                qa_item=qa_item,
+                qa_item=six_user_qa(correct="A"),
                 packet=packet,
                 schema_errors=[],
-                runner=object(),
+                runner=runner,
                 media_backend="transformers-local",
                 allow_openai_video_input=False,
                 prompt_rows=prompt_rows,
@@ -1529,423 +1614,25 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                 attempt=1,
             )
 
-        groundedness_rows = [
-            row for row in prompt_rows if row["stage"] == "evidence_groundedness_judge"
+        map_rows = [
+            row for row in prompt_rows if row["stage"] == "evidence_segment_observation"
         ]
-        self.assertEqual(len(groundedness_rows), 1)
-        self.assertEqual(groundedness_rows[0]["video_paths"], full_videos)
+        reduce_rows = [
+            row for row in prompt_rows if row["stage"] == "evidence_groundedness_aggregation"
+        ]
+        self.assertEqual(len(map_rows), 6)
+        self.assertEqual(len(reduce_rows), 1)
+        self.assertEqual([row["media_summary"]["video_count"] for row in map_rows], [20] * 6)
+        self.assertEqual(reduce_rows[0]["media_summary"]["video_count"], 0)
+        self.assertEqual(len(runner.calls), 6)
+        self.assertTrue(all(len(call["video_paths"]) == 20 for call in runner.calls))
+        self.assertTrue(all("SECRET_TIME_" not in row["prompt"] for row in map_rows))
+        self.assertFalse(any(row["stage"] == "evidence_groundedness_judge" for row in prompt_rows))
         self.assertEqual(trace["evidence_groundedness"]["elapsed_seconds"], 0.01)
         self.assertEqual(
-            qa_item["minimum_required_users"],
-            ["provider_two", "provider_four"],
+            trace["evidence_groundedness"]["mode"],
+            "per_user_source_segment_map_reduce",
         )
-        self.assertEqual(qa_item["minimum_required_user_count"], 2)
-
-    def test_parallel_review_holds_shared_vllm_runner_for_one_batch(self) -> None:
-        packet = self.media_packet()
-        events = []
-
-        class BatchRunner:
-            model_id = "fake-vllm"
-
-            def begin_concurrent_batch(self, expected_requests):
-                events.append(("begin", expected_requests))
-                return True
-
-            def release_concurrent_batch(self):
-                events.append(("release", None))
-                return 3
-
-        runner = BatchRunner()
-        judge_result = {
-            "review_passed": True,
-            "checks": {},
-            "blocking_failures": [],
-            "feedback_to_generator": "",
-            "raw_output": "{}",
-            "elapsed_seconds": 0.01,
-        }
-
-        with (
-            mock.patch.object(
-                video_qa_loop,
-                "run_model_judge_branch",
-                return_value=judge_result,
-            ),
-            mock.patch.object(
-                video_qa_loop,
-                "run_answerability_eval",
-                return_value={
-                    "evaluations": [],
-                    "gate": {"passed": True, "reason": "test"},
-                },
-            ),
-        ):
-            run_parallel_review_judges(
-                qa_item=six_user_qa(),
-                packet=packet,
-                schema_errors=[],
-                runner=runner,
-                qa_formality_runner=runner,
-                media_backend="vllm-local",
-                allow_openai_video_input=False,
-                prompt_rows=[],
-                full_image_paths=[],
-                full_video_paths=[clip["full_local_video"] for clip in packet["clips"]],
-                attempt=1,
-            )
-
-        self.assertEqual(events, [("begin", 3), ("release", None)])
-
-
-    def test_video_loop_cli_accepts_vllm_as_primary_and_judge_backend(self) -> None:
-        parser = argparse.ArgumentParser()
-        video_qa_loop.add_video_loop_args(parser)
-
-        args = parser.parse_args(
-            ["--backend", "vllm-local", "--judge-backend", "vllm-local"]
-        )
-
-        self.assertEqual(args.backend, "vllm-local")
-        self.assertEqual(args.judge_backend, "vllm-local")
-
-    def test_production_evidence_uses_one_full_video_call_for_all_segment_counts(self) -> None:
-        simple_result = {
-            "review_passed": True,
-            "checks": {
-                "evidence_groundedness": {
-                    "status": "PASS",
-                    "reason": "supported",
-                    "fix": "",
-                }
-            },
-            "blocking_failures": [],
-            "feedback_to_generator": "",
-            "raw_output": "{}",
-            "elapsed_seconds": 0.1,
-        }
-        for segment_count in (6, 20):
-            packet = self.media_packet()
-            for clip in packet["clips"]:
-                clip["segments"] = [
-                    {"time_token": f"segment-{index:02d}"}
-                    for index in range(segment_count)
-                ]
-            prompt_rows: list[dict[str, object]] = []
-
-            with (
-                mock.patch.object(
-                    video_qa_loop,
-                    "run_model_judge_branch",
-                    return_value=simple_result,
-                ) as simple,
-                mock.patch.object(
-                    video_qa_loop,
-                    "run_chunked_evidence_groundedness_eval",
-                    return_value={"chunked_evidence_review": True},
-                ) as chunked,
-            ):
-                result = video_qa_loop.run_evidence_groundedness_review(
-                    qa_item=six_user_qa(),
-                    packet=packet,
-                    runner=object(),
-                    prompt_rows=prompt_rows,
-                    full_image_paths=[],
-                    full_video_paths=[
-                        str(clip["full_local_video"])
-                        for clip in packet["clips"]
-                    ],
-                    attempt=1,
-                    judge_media_role="full",
-                    stage_profiles=video_qa_loop.six_user_ten_minute_fast_profiles(),
-                )
-
-            simple.assert_called_once()
-            chunked.assert_not_called()
-            self.assertEqual(
-                result["checks"]["evidence_groundedness"]["status"],
-                "PASS",
-            )
-            self.assertEqual(
-                [row["stage"] for row in prompt_rows],
-                ["evidence_groundedness_judge"],
-            )
-
-    def test_chunked_evidence_uses_six_user_calls_then_text_aggregation(self) -> None:
-        self.assertTrue(hasattr(video_qa_loop, "evidence_segment_specs"))
-        self.assertTrue(hasattr(video_qa_loop, "run_chunked_evidence_groundedness_eval"))
-        packet = six_user_packet()
-        for clip in packet["clips"]:
-            clip["segments"] = [
-                {
-                    "time_token": token,
-                    "clip_clock": f"20:0{6 + index // 2}:{30 * (index % 2):02d}.00",
-                    "video_url": f"https://example.test/{clip['agent_name']}/{token}.mp4",
-                }
-                for index, token in enumerate((
-                    "20060000",
-                    "20063000",
-                    "20070000",
-                    "20073000",
-                    "20080000",
-                    "20083000",
-                ))
-            ]
-        specs = video_qa_loop.evidence_segment_specs(
-            packet,
-            [f"/full/{user}.mp4" for user in SIX_USERS],
-        )
-        self.assertEqual(list(specs), SIX_USERS)
-        self.assertTrue(all(len(rows) == 6 for rows in specs.values()))
-        self.assertEqual(
-            [row["start_seconds"] for row in specs["speaker"]],
-            [0.0, 30.0, 60.0, 90.0, 120.0, 150.0],
-        )
-        self.assertEqual(
-            [row["original_time_range"] for row in specs["speaker"]],
-            [
-                "20:06:00-20:06:30",
-                "20:06:30-20:07:00",
-                "20:07:00-20:07:30",
-                "20:07:30-20:08:00",
-                "20:08:00-20:08:30",
-                "20:08:30-20:09:00",
-            ],
-        )
-
-        class Runner:
-            model_id = "chunk-test-runner"
-
-            def __init__(self) -> None:
-                self.calls: list[dict[str, object]] = []
-
-            def generate(self, prompt, *, image_paths, video_paths):
-                self.calls.append(
-                    {
-                        "prompt": prompt,
-                        "image_paths": list(image_paths),
-                        "video_paths": list(video_paths),
-                    }
-                )
-                if video_paths:
-                    user = SIX_USERS[len(self.calls) - 1]
-                    return json.dumps(
-                        {
-                            "user": user,
-                            "segments": [
-                                {
-                                    "segment_index": index,
-                                    "time_token": token,
-                                    "claims": [
-                                        {
-                                            "claim": "the relevant object is visible",
-                                            "status": "SUPPORTED",
-                                            "confidence": "HIGH",
-                                            "visual_description": "A concrete object is visible.",
-                                            "original_time_range": f"00:0{index}:00-00:0{index}:30",
-                                        }
-                                    ],
-                                }
-                                for index, token in enumerate(
-                                    (
-                                        "20060000",
-                                        "20063000",
-                                        "20070000",
-                                        "20073000",
-                                        "20080000",
-                                        "20083000",
-                                    )
-                                )
-                            ],
-                            "user_vote": {
-                                "visible": True,
-                                "confidence": "HIGH",
-                                "supported_option": "A",
-                                "supporting_segment_indices": [0],
-                                "reason": "The relevant object is directly visible.",
-                            },
-                        }
-                    )
-                return json.dumps(
-                    {
-                        "premises_supported": True,
-                        "high_confidence_material_conflict": False,
-                        "reason": "Every material premise is supported.",
-                    }
-                )
-
-        runner = Runner()
-        prompt_rows: list[dict[str, object]] = []
-        segment_paths = {
-            user: [f"/chunks/{user}/{index}.mp4" for index in range(6)]
-            for user in SIX_USERS
-        }
-
-        result = video_qa_loop.run_chunked_evidence_groundedness_eval(
-            qa_item={**six_user_qa(), "generation_slot_id": "slot-chunk"},
-            packet=packet,
-            runner=runner,
-            full_video_paths=[f"/full/{user}.mp4" for user in SIX_USERS],
-            prompt_rows=prompt_rows,
-            attempt=1,
-            segment_paths_by_user=segment_paths,
-        )
-
-        self.assertEqual(len(runner.calls), 7)
-        self.assertEqual([len(call["video_paths"]) for call in runner.calls[:6]], [6] * 6)
-        self.assertEqual(runner.calls[-1]["video_paths"], [])
-        self.assertNotIn('"raw_output"', runner.calls[-1]["prompt"])
-        self.assertEqual(result["checks"]["evidence_groundedness"]["status"], "PASS")
-        self.assertTrue(result["vote_summary"]["passed"])
-        self.assertEqual(result["vote_summary"]["option_support_counts"]["A"], 6)
-        self.assertTrue(result["premise_audit"]["premises_supported"])
-        self.assertEqual(len(result["chunk_observations"]), 6)
-        self.assertTrue(all("generation_slot_id" in row for row in prompt_rows))
-        self.assertTrue(all(row["generation_slot_id"] == "slot-chunk" for row in prompt_rows))
-        self.assertEqual(
-            [row["stage"] for row in prompt_rows],
-            ["evidence_segment_observation"] * 6 + ["evidence_groundedness_aggregation"],
-        )
-
-    def test_parallel_review_uses_simple_evidence_for_segmented_packet(self) -> None:
-        packet = self.media_packet()
-        for clip in packet["clips"]:
-            clip["segments"] = [
-                {"time_token": f"segment-{index}", "video_url": f"https://example/{index}.mp4"}
-                for index in range(6)
-            ]
-        observed_calls: list[dict[str, object]] = []
-
-        def fake_branch(
-            *,
-            check_name,
-            call_profile=None,
-            repair_call_profile=None,
-            video_paths,
-            **_kwargs,
-        ):
-            observed_calls.append(
-                {
-                    "check_name": check_name,
-                    "call_profile": call_profile,
-                    "repair_call_profile": repair_call_profile,
-                    "video_paths": list(video_paths),
-                }
-            )
-            check = {"status": "PASS", "reason": "ok", "fix": ""}
-            if check_name == "qa_formality":
-                check["semantic_subchecks"] = {
-                    name: {"status": "PASS", "reason": "ok"}
-                    for name in video_qa_loop.QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
-                }
-            return {
-                "review_passed": True,
-                "checks": {check_name: check},
-                "blocking_failures": [],
-                "feedback_to_generator": "",
-                "raw_output": "{}",
-                "elapsed_seconds": 0.1,
-            }
-
-        profiles = six_user_ten_minute_reasoning_profiles()
-        with (
-            mock.patch.object(video_qa_loop, "run_model_judge_branch", side_effect=fake_branch),
-            mock.patch.object(
-                video_qa_loop,
-                "run_chunked_evidence_groundedness_eval",
-            ) as chunked,
-            mock.patch.object(
-                video_qa_loop,
-                "run_answerability_eval",
-                return_value={"evaluations": [], "gate": {"passed": True, "reason": "test"}},
-            ) as answerability,
-        ):
-            _judge, _answerability, trace = run_parallel_review_judges(
-                qa_item=six_user_qa(),
-                packet=packet,
-                schema_errors=[],
-                runner=object(),
-                media_backend="transformers-local",
-                allow_openai_video_input=False,
-                prompt_rows=(prompt_rows := []),
-                full_image_paths=[],
-                full_video_paths=[clip["full_local_video"] for clip in packet["clips"]],
-                attempt=1,
-                stage_profiles=profiles,
-        )
-
-        chunked.assert_not_called()
-        self.assertEqual(
-            [row["check_name"] for row in observed_calls],
-            ["qa_formality", "evidence_groundedness"],
-        )
-        self.assertIs(
-            observed_calls[0]["call_profile"],
-            profiles["qa_formality"],
-        )
-        self.assertIs(
-            observed_calls[1]["call_profile"],
-            profiles["evidence_groundedness_aggregation"],
-        )
-        self.assertIs(
-            answerability.call_args.kwargs["call_profile"],
-            profiles["answerability"],
-        )
-        self.assertFalse(trace["evidence_groundedness"]["chunked_evidence_review"])
-        self.assertEqual(trace["evidence_groundedness"]["chunk_observations"], [])
-        self.assertEqual(
-            [row["stage"] for row in prompt_rows if row["stage"] == "evidence_groundedness_judge"],
-            ["evidence_groundedness_judge"],
-        )
-
-    def test_evidence_segment_materialization_uses_ffmpeg_cacheable_mp4_temporaries(self) -> None:
-        packet = six_user_packet()
-        for clip in packet["clips"]:
-            clip["segments"] = [
-                {"time_token": token, "video_url": f"https://example/{index}.mp4"}
-                for index, token in enumerate(
-                    (
-                        "20060000",
-                        "20063000",
-                        "20070000",
-                        "20073000",
-                        "20080000",
-                        "20083000",
-                    )
-                )
-            ]
-        full_paths = []
-        for index in range(6):
-            path = self.tmp_path / f"full-segment-source-{index}.mp4"
-            path.write_bytes(b"full")
-            full_paths.append(str(path))
-        specs = video_qa_loop.evidence_segment_specs(packet, full_paths)
-        commands = []
-
-        def fake_runner(command, **_kwargs):
-            commands.append(list(command))
-            Path(command[-1]).write_bytes(b"chunk")
-
-        cache = self.tmp_path / "evidence-cache"
-        first = video_qa_loop.materialize_evidence_segment_paths(
-            packet,
-            specs,
-            cache_dir=cache,
-            ffmpeg_binary="ffmpeg-test",
-            command_runner=fake_runner,
-        )
-        second = video_qa_loop.materialize_evidence_segment_paths(
-            packet,
-            specs,
-            cache_dir=cache,
-            ffmpeg_binary="ffmpeg-test",
-            command_runner=fake_runner,
-        )
-
-        self.assertEqual(len(commands), 36)
-        self.assertTrue(all(command[-1].endswith(".part.mp4") for command in commands))
-        self.assertEqual(first, second)
-        self.assertTrue(all(Path(path).is_file() for paths in first.values() for path in paths))
 
     def test_two_user_condition_contract_is_unchanged(self) -> None:
         conditions = build_answerability_conditions(["speaker", "provider"])

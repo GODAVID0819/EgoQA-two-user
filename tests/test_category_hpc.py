@@ -110,16 +110,21 @@ def test_production_launcher_verifies_recorded_category_free_prompts() -> None:
     assert "accepted_category_counts" not in script
 
 
-def test_implicit_family_launchers_forward_to_verified_production_run() -> None:
-    scripts = (
-        CONCURRENT_LAUNCHER.read_text(encoding="utf-8"),
-        IMPLICIT_FAMILIES_LAUNCHER.read_text(encoding="utf-8"),
-    )
+def test_concurrent_activity_launcher_fails_fast_as_archived() -> None:
+    script = CONCURRENT_LAUNCHER.read_text(encoding="utf-8")
+    guard = "error=archived_concurrent_activity_experiment_not_a_production_pipeline"
 
-    for script in scripts:
-        assert "#SBATCH --job-name=egolife_impl50" in script
-        assert "implicit_underrepresented_families_50" in script
-        assert "run_clip_pruned_sampling_neutral_pf_50.sbatch" in script
+    assert guard in script
+    assert script.index(guard) < script.index("exit 2")
+    assert script.index("exit 2") < script.index("PROJECT_ROOT=")
+
+
+def test_implicit_family_launcher_forwards_to_verified_production_run() -> None:
+    script = IMPLICIT_FAMILIES_LAUNCHER.read_text(encoding="utf-8")
+
+    assert "#SBATCH --job-name=egolife_impl50" in script
+    assert "implicit_underrepresented_families_50" in script
+    assert "run_clip_pruned_sampling_neutral_pf_50.sbatch" in script
 
 
 def test_category_free_hpc_embedded_python_blocks_compile() -> None:

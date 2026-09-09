@@ -14,49 +14,57 @@ if "egolife_two_user_qa" not in sys.modules:
     sys.modules["egolife_two_user_qa"] = package
 
 from egolife_two_user_qa.prompts import (  # noqa: E402
-    ANSWERABILITY_SUFFICIENCY_SCHEMA,
-    QA_FORMALITY_CHECK_SCHEMA,
+    LONG_HORIZON_FORMALITY_GUIDANCE,
+    LONG_HORIZON_GROUNDEDNESS_GUIDANCE,
+    OPTIONAL_LONG_HORIZON_GUIDANCE,
     QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
-    SAMPLED_FRAME_GENERATOR_MEDIA_MODES,
-    VIDEO_GENERATION_SCHEMA,
     build_answerability_prompt,
+    build_answerability_condition_aggregation_prompt,
+    build_answerability_fact_plan_prompt,
+    build_answerability_user_fact_audit_prompt,
     build_evidence_groundedness_judge_prompt,
+    build_evidence_observation_aggregation_prompt,
+    build_evidence_segment_observation_prompt,
     build_qa_formality_judge_prompt,
-    build_reasoned_finalizer_prompt,
     build_video_generation_prompt,
     video_packet_brief,
 )
-from egolife_two_user_qa import prompts as prompts_module  # noqa: E402
 
 
 USERS = ["speaker", "provider_one", "provider_two", "provider_three", "provider_four", "provider_five"]
 
 
-def test_generator_finalizer_prompt_enforces_compact_complete_json() -> None:
-    prompt = build_reasoned_finalizer_prompt(
-        task_prompt="generate one QA",
-        reasoning_output="draft reasoning",
-        output_schema=VIDEO_GENERATION_SCHEMA,
-        stage_name="generation",
-    )
-
-    assert "question: at most 45 English words" in prompt
-    assert "each option: at most 20 English words" in prompt
-    assert "generator_rationale: at most 80 English words" in prompt
-    assert "Do not copy the reasoning" in prompt
-    assert "Return exactly one valid JSON object" in prompt
-
-
 def six_user_packet() -> dict[str, object]:
+    roles = ["speaker_all_clustering_frames", *(["provider_retained_cluster_frames"] * 5)]
     return {
         "evidence_id": "six-user-example",
+        "generator_media_mode": (
+            "speaker_all_clustering_frames_five_provider_retained_cluster_frames"
+        ),
         "required_users": list(USERS),
         "input_users": list(USERS),
         "speaker_user": USERS[0],
         "provider_users": USERS[1:],
         "clips": [
-            {"agent_name": user, "local_video": f"{user}.mp4"}
-            for user in USERS
+            {
+                "agent_name": user,
+                "generator_media_mode": (
+                    "all_clustering_frames_only"
+                    if index == 0
+                    else "retained_cluster_frames_only"
+                ),
+                "force_frame_inputs": True,
+                "frames": [
+                    {
+                        "path": f"{user}-{frame_index}.jpg",
+                        "timestamp_seconds": float(frame_index),
+                    }
+                    for frame_index in range(3 if index == 0 else 2)
+                ],
+                "media_role": role,
+                "is_pruned": index != 0,
+            }
+            for index, (user, role) in enumerate(zip(USERS, roles))
         ],
     }
 
@@ -83,83 +91,6 @@ def two_user_packet() -> dict[str, object]:
 
 
 class SixUserPromptTests(unittest.TestCase):
-    def test_generator_schema_removes_only_why_two_users_needed(self) -> None:
-        self.assertNotIn("why_two_users_needed", VIDEO_GENERATION_SCHEMA)
-        for field in (
-            "qa_id",
-            "question_type",
-            "question",
-            "options",
-            "correct",
-            "answer",
-            "required_users",
-            "evidence",
-            "referred_timestamps",
-            "single_user_answerability",
-            "combined_answerability",
-            "generator_rationale",
-            "per_user_evidence_claims",
-            "review",
-        ):
-            self.assertIn(field, VIDEO_GENERATION_SCHEMA)
-
-    def test_all_six_answerability_prompt_reuses_canonical_facts(self) -> None:
-        condition = {
-            "condition_id": "combined_all_six_users::" + "+".join(USERS),
-            "condition_type": "combined_all_six_users",
-            "users": list(USERS),
-        }
-        canonical = [
-            {
-                "fact_id": "F1",
-                "fact": "the final destination",
-                "why_needed": "it distinguishes the options",
-            },
-            {
-                "fact_id": "F2",
-                "fact": "the final object state",
-                "why_needed": "it identifies the correct outcome",
-            },
-        ]
-
-        prompt = build_answerability_prompt(
-            six_user_qa(),
-            condition,
-            canonical_facts=canonical,
-        )
-
-        self.assertIn('"fact_id": "F1"', prompt)
-        self.assertIn(
-            "must not add, delete, reorder, merge, split, or rewrite facts",
-            prompt,
-        )
-
-    def test_minimum_subset_answerability_prompt_reuses_canonical_facts(self) -> None:
-        condition = {
-            "condition_id": "minimum_required_users::provider_two+provider_four",
-            "condition_type": "minimum_required_users",
-            "users": ["provider_two", "provider_four"],
-        }
-        canonical = [
-            {
-                "fact_id": "F1",
-                "fact": "the final destination",
-                "why_needed": "it distinguishes the options",
-            }
-        ]
-
-        prompt = build_answerability_prompt(
-            six_user_qa(),
-            condition,
-            canonical_facts=canonical,
-        )
-
-        self.assertIn('"fact_id": "F1"', prompt)
-        self.assertIn(
-            "must not add, delete, reorder, merge, split, or rewrite facts",
-            prompt,
-        )
-
     def test_packet_brief_exposes_six_user_roles(self) -> None:
         brief = video_packet_brief(six_user_packet())
 
@@ -168,272 +99,316 @@ class SixUserPromptTests(unittest.TestCase):
         self.assertNotIn('"anchor_provider_users"', brief)
         self.assertNotIn('"additional_provider_users"', brief)
         self.assertIn("required_users[1] through required_users[5] are providers", brief)
-        self.assertIn("full unpruned speaker video", brief)
-        self.assertIn("An unused provider does not invalidate the item", brief)
-
-    def test_packet_brief_supports_full_speaker_and_retained_provider_frames(self) -> None:
-        packet = six_user_packet()
-        packet["generator_media_mode"] = (
-            "speaker_all_clustering_frames_five_provider_retained_cluster_frames"
-        )
-        for index, clip in enumerate(packet["clips"]):
-            clip["generator_media_mode"] = (
-                "all_clustering_frames_only"
-                if index == 0
-                else "retained_cluster_frames_only"
-            )
-            clip["media_role"] = "speaker" if index == 0 else "provider"
-            clip["is_pruned"] = index != 0
-            clip["frames"] = [{"timestamp_seconds": float(index)}]
-            clip["temporal_pruning"] = {"enabled": True}
-
-        brief = json.loads(video_packet_brief(packet))
-
-        self.assertIn("all_clustering_frames_only", SAMPLED_FRAME_GENERATOR_MEDIA_MODES)
-        self.assertIn(
-            "speaker_all_clustering_frames_five_provider_retained_cluster_frames",
-            SAMPLED_FRAME_GENERATOR_MEDIA_MODES,
-        )
-        self.assertEqual(
-            brief["generator_media_contract"]["mode"],
-            "asker_all_clustering_frames_provider_retained_cluster_frames",
-        )
-        self.assertEqual(brief["clips"][0]["media_role"], "speaker")
-        self.assertFalse(brief["clips"][0]["is_pruned"])
-        self.assertNotIn("pruning_summary", brief["clips"][0])
+        self.assertIn("speaker_all_clustering_frames", brief)
+        self.assertIn("provider_retained_cluster_frames", brief)
+        self.assertIn("speaker input contains every frame sampled for CLIP clustering", brief)
+        self.assertIn("asker_all_clustering_frames_provider_retained_cluster_frames", brief)
 
     def test_generation_prompt_requires_cross_view_but_not_every_provider(self) -> None:
         prompt = build_video_generation_prompt(six_user_packet(), "neutral")
 
         self.assertIn("required_users[0] is the speaker", prompt)
         self.assertIn("required_users[1] through required_users[5] are providers", prompt)
-        self.assertIn("naturally have and genuinely want to ask", prompt)
-        self.assertIn("full unpruned speaker video", prompt)
-        self.assertIn("scan the full unpruned speaker video from beginning to end", prompt)
-        self.assertIn("speaker video must naturally motivate the question but remain insufficient", prompt)
+        self.assertIn("speaker's sampled frames alone must remain insufficient", prompt)
         self.assertIn(
-            "The combined six-user video input must directly support exactly one correct option",
+            "The combined six-user image input must directly support exactly one correct option",
             prompt,
         )
         self.assertIn("One or more provider views may supply the answer", prompt)
         self.assertIn("Do not require every provider to contribute", prompt)
-        self.assertIn("Provider videos may be pruned", prompt)
+        self.assertIn("speaker would naturally have and genuinely want to ask", prompt)
+        self.assertIn("every CLIP-sampled frame from the speaker", prompt)
+        self.assertIn("only sampled members of provider clusters that survived pruning", prompt)
+        self.assertIn("It receives no MP4", prompt)
         self.assertIn("Concurrent-activity restriction", prompt)
-        self.assertNotIn("Six-user interaction-chain example", prompt)
-        self.assertNotIn("red tape dispenser with a torn white label", prompt)
+        self.assertIn(
+            "Do not generate a question whose answer is what one person was doing",
+            prompt,
+        )
+        self.assertIn("Do not generate options that encode pairs of concurrent activities", prompt)
+        self.assertNotIn("small red tape dispenser with a torn white label", prompt)
+        self.assertNotIn("top drawer of the blue rolling cart beside the pantry door", prompt)
         self.assertNotIn("Only all three required users", prompt)
         self.assertNotIn("omitting either evidence provider", prompt)
 
-    def test_raw_six_user_prompt_audits_entire_speaker_video_before_claiming_missing_evidence(self) -> None:
-        prompt = build_video_generation_prompt(six_user_packet(), "neutral")
+    def test_ten_minute_prompt_injects_examples_and_sampled_frame_contract(self) -> None:
+        packet = six_user_packet()
+        packet["generator_context_budget"] = {
+            "policy": "complete_surviving_sampled_frames",
+            "analysis_sample_fps": 1.0,
+            "aggregate_frame_budget": 3600,
+            "model_input_frame_count": 12,
+        }
+        packet["speaker_consensus_pruning"] = {
+            "method": "speaker_provider_time_aware_provider_only",
+            "comparison_scope": (
+                "every_asker_cluster_x_every_provider_cluster_"
+                "within_plus_minus_time_window"
+            ),
+            "temporal_policy": "window_30s_all_pairs_contiguous_asker_preserved",
+            "pruned_side": "providers_only",
+            "asker_preserved": True,
+            "max_pair_time_difference_seconds": 30.0,
+            "mutual_nearest_only": False,
+            "split_noncontiguous_clusters": True,
+            "cluster_window_seconds": 30.0,
+            "cluster_count_per_window": 12,
+            "speaker_preserved": True,
+        }
+        for clip in packet["clips"]:
+            clip["context_sampling"] = {
+                "policy": "complete_surviving_sampled_frames",
+                "analysis_sample_fps": 1.0,
+                "source_frame_count": len(clip["frames"]),
+                "model_input_frame_count": len(clip["frames"]),
+                "aggregate_frame_budget": 3600,
+            }
+            clip["temporal_pruning"] = dict(packet["speaker_consensus_pruning"])
 
-        self.assertIn("full unpruned speaker video", prompt)
-        self.assertIn("scan the full unpruned speaker video from beginning to end", prompt)
-        self.assertIn("including the final minutes", prompt)
-        self.assertIn("If any speaker frame directly shows the answer", prompt)
-        self.assertNotIn("The generator receives images only", prompt)
+        prompt = build_video_generation_prompt(packet, "neutral")
+        judge = build_evidence_groundedness_judge_prompt(six_user_qa(), packet)
 
-    def test_groundedness_prompt_checks_speaker_motivation_and_provider_evidence(self) -> None:
+        self.assertEqual(OPTIONAL_LONG_HORIZON_GUIDANCE.count("Example structure:"), 5)
+        self.assertIn(OPTIONAL_LONG_HORIZON_GUIDANCE, prompt)
+        self.assertIn("every sampled frame from the speaker", prompt)
+        self.assertIn("sampled member of provider clusters that survived pruning", prompt)
+        self.assertIn("no MP4 or pruned video", prompt)
+        self.assertNotIn("window_30s_all_pairs_contiguous_asker_preserved", prompt)
+        self.assertNotIn(
+            "every_asker_cluster_x_every_provider_cluster_within_plus_minus_time_window",
+            prompt,
+        )
+        self.assertNotIn('"speaker_consensus_pruning"', prompt)
+        self.assertNotIn('"six_user_pruning_policy"', prompt)
+        self.assertNotIn('"pruning_summary"', prompt)
+        self.assertIn("samples at one frame per second", prompt)
+        self.assertIn("clusters each 30-second block independently with K=12", prompt)
+        self.assertIn("only full-video judge decoding is downsampled", prompt)
+        self.assertIn(LONG_HORIZON_GROUNDEDNESS_GUIDANCE, judge)
+
+    def test_prompt_packet_omits_exact_frame_mappings(self) -> None:
+        packet = six_user_packet()
+        packet["generator_context_budget"] = {
+            "policy": "complete_surviving_sampled_frames",
+            "model_input_frame_count": 13,
+            "selected_frame_indices": [0, 2, 7],
+        }
+        for clip in packet["clips"]:
+            clip["clip_clock"] = "12:34:56"
+            clip["local_video"] = "C:/private/exact/source.mp4"
+            clip["context_sampling"] = {
+                "policy": "complete_surviving_sampled_frames",
+                "model_input_frame_count": len(clip["frames"]),
+                "selected_frame_indices": [0, 2],
+                "frame_to_cluster": {"0": "cluster-17"},
+            }
+            clip["temporal_pruning"] = {
+                "method": "speaker_provider_time_aware_provider_only",
+                "kept_duration_seconds": 8.0,
+                "keep_intervals": [
+                    [float(index), float(index) + 0.5]
+                    for index in range(500)
+                ],
+                "pruned_to_original_time_map": [
+                    {
+                        "pruned_start_seconds": float(index),
+                        "pruned_end_seconds": float(index) + 0.5,
+                        "original_start_seconds": float(index) + 1000.0,
+                        "original_end_seconds": float(index) + 1000.5,
+                    }
+                    for index in range(500)
+                ],
+            }
+
+        brief = json.loads(video_packet_brief(packet))
+        serialized_brief = json.dumps(brief, sort_keys=True)
+        prompts = [
+            build_video_generation_prompt(packet, "neutral"),
+            build_qa_formality_judge_prompt(six_user_qa(), packet),
+            build_evidence_groundedness_judge_prompt(six_user_qa(), packet),
+        ]
+
+        for forbidden_key in (
+            "clip_clock",
+            "local_video",
+            "path",
+            "timestamp_seconds",
+            "selected_frame_indices",
+            "frame_to_cluster",
+            "keep_intervals",
+            "pruned_to_original_time_map",
+            "pruning_summary",
+            "six_user_pruning_policy",
+        ):
+            self.assertNotIn(f'"{forbidden_key}"', serialized_brief)
+        for exact_value in (
+            "speaker-0.jpg",
+            "provider_one-0.jpg",
+            "C:/private/exact/source.mp4",
+            "12:34:56",
+            "cluster-17",
+        ):
+            for prompt in prompts:
+                self.assertNotIn(exact_value, prompt)
+        for time_grid_key in (
+            "pruned_start_seconds",
+            "pruned_end_seconds",
+            "original_start_seconds",
+            "original_end_seconds",
+            "temporal_alignment_contract",
+        ):
+            for prompt in prompts:
+                self.assertNotIn(time_grid_key, prompt)
+        self.assertIn("exact per-frame paths, indices, timestamps", prompts[0])
+
+    def test_groundedness_prompt_allows_unused_providers(self) -> None:
         prompt = build_evidence_groundedness_judge_prompt(
             six_user_qa(),
             six_user_packet(),
         )
 
         self.assertIn("six-user", prompt)
-        self.assertIn("full original speaker view grounds", prompt)
         self.assertIn("at least one external provider view or provider combination", prompt)
         self.assertIn("Do not fail merely because an input provider is unused", prompt)
-        self.assertNotIn("answer-bearing evidence missing from the speaker view", prompt)
+        self.assertIn("full original speaker view grounds", prompt)
         self.assertNotIn("distinct answer-bearing contribution from each", prompt)
 
-    def test_chunked_evidence_prompts_preserve_user_segment_provenance(self) -> None:
-        self.assertTrue(hasattr(prompts_module, "build_evidence_segment_observation_prompt"))
-        self.assertTrue(hasattr(prompts_module, "build_evidence_observation_aggregation_prompt"))
-        segments = [
-            {
-                "segment_index": index,
-                "time_token": token,
-                "original_time_range": f"00:0{index}:00-00:0{index}:30",
-            }
-            for index, token in enumerate(
-                ["20060000", "20063000", "20070000", "20073000", "20080000", "20083000"]
-            )
-        ]
-
-        observation_prompt = prompts_module.build_evidence_segment_observation_prompt(
-            six_user_qa(),
+    def test_answerability_prompts_share_one_answer_neutral_fact_plan(self) -> None:
+        qa_with_secret_gold = six_user_qa()
+        qa_with_secret_gold["correct"] = "DO_NOT_EXPOSE_GOLD"
+        qa_with_secret_gold["answer"] = "DO_NOT_EXPOSE_ANSWER"
+        fact_plan = {
+            "reason": "Both facts are needed.",
+            "needed_facts": [
+                {"fact_id": "F1", "fact": "The referenced setup is visible.", "why_needed": "It anchors the question."},
+                {"fact_id": "F2", "fact": "The completing item is visible.", "why_needed": "It resolves the missing detail."},
+            ],
+        }
+        plan_prompt = build_answerability_fact_plan_prompt(qa_with_secret_gold)
+        speaker_audit_prompt = build_answerability_user_fact_audit_prompt(
+            qa_with_secret_gold,
             user="speaker",
-            segments=segments,
+            fact_plan=fact_plan,
+            segment_count=20,
         )
-        aggregation_prompt = prompts_module.build_evidence_observation_aggregation_prompt(
-            six_user_qa(),
+        aggregation_prompt = build_answerability_condition_aggregation_prompt(
+            qa_with_secret_gold,
+            condition={
+                "condition_id": "speaker_only::speaker",
+                "condition_type": "speaker_only",
+                "users": ["speaker"],
+            },
+            fact_plan=fact_plan,
+            user_audits=[],
+        )
+
+        for prompt in (plan_prompt, speaker_audit_prompt, aggregation_prompt):
+            self.assertNotIn("DO_NOT_EXPOSE_GOLD", prompt)
+            self.assertNotIn("DO_NOT_EXPOSE_ANSWER", prompt)
+            self.assertNotIn('"answerable"', prompt)
+            self.assertNotIn('"choice"', prompt)
+        self.assertIn("Stage marker: answerability_fact_plan", plan_prompt)
+        self.assertIn("exact frozen list", plan_prompt)
+        self.assertIn("20 ordered source-video segments", speaker_audit_prompt)
+        self.assertIn("segment_001", speaker_audit_prompt)
+        self.assertNotIn("segment_002", speaker_audit_prompt)
+        self.assertIn('"fact_id": "F1"', speaker_audit_prompt)
+        self.assertIn('"fact_id": "F1"', aggregation_prompt)
+        self.assertIn("caller derives sufficiency", aggregation_prompt)
+
+    def test_per_user_groundedness_prompts_are_generalized_and_path_free(self) -> None:
+        qa = six_user_qa()
+        qa["answer"] = "Third item"
+        observation_prompt = build_evidence_segment_observation_prompt(
+            qa,
+            user="speaker",
+            segment_count=20,
+        )
+        aggregation_prompt = build_evidence_observation_aggregation_prompt(
+            qa,
             six_user_packet(),
             observations=[
                 {
                     "user": "speaker",
-                    "segments": [
+                    "claims": [
                         {
-                            "segment_index": 0,
-                            "time_token": "20060000",
-                            "claims": [],
+                            "claim": "The setup is visible.",
+                            "status": "SUPPORTED",
+                            "segment_references": ["segment_011"],
+                            "visual_description": "The setup appears clearly.",
                         }
                     ],
                 }
             ],
-            vote_summary={
-                "passed": True,
-                "correct": "A",
-                "visible_user_count": 3,
-                "option_support_counts": {"A": 3, "B": 0, "C": 0, "D": 0, "E": 0},
-                "threshold_options": ["A"],
-            },
         )
 
-        self.assertIn("6 separate 30-second videos", observation_prompt)
-        self.assertIn("20083000", observation_prompt)
-        self.assertIn("SUPPORTED", observation_prompt)
-        self.assertIn("CONTRADICTED", observation_prompt)
-        self.assertIn("HIGH", observation_prompt)
-        self.assertIn("user_vote", observation_prompt)
-        self.assertIn("When visibility or identity is uncertain", observation_prompt)
-        self.assertIn("text-only evidence aggregator", aggregation_prompt)
-        self.assertIn("20060000", aggregation_prompt)
-        self.assertIn("authoritative deterministic vote summary", aggregation_prompt)
-        self.assertIn("premises_supported", aggregation_prompt)
-        self.assertIn("high_confidence_material_conflict", aggregation_prompt)
-        self.assertIn("Do not recalculate option support", aggregation_prompt)
-
-    def test_ten_minute_observation_prompt_uses_actual_segment_count(self) -> None:
-        segments = [
-            {
-                "segment_index": index,
-                "time_token": f"token-{index}",
-                "original_time_range": f"range-{index}",
-            }
-            for index in range(20)
-        ]
-
-        prompt = prompts_module.build_evidence_segment_observation_prompt(
-            six_user_qa(),
-            user="speaker",
-            segments=segments,
-        )
-
-        self.assertIn("20 separate 30-second videos", prompt)
-        self.assertIn("include all 20 segment rows", prompt)
-
-    def test_answerability_prompts_describe_only_two_conditions(self) -> None:
-        speaker_prompt = build_answerability_prompt(
-            six_user_qa(),
-            {
-                "condition_id": "speaker_only::speaker",
-                "condition_type": "speaker_only",
-                "users": ["speaker"],
-            },
-        )
-        all_six_prompt = build_answerability_prompt(
-            six_user_qa(),
-            {
-                "condition_id": "combined_all_six_users::" + "+".join(USERS),
-                "condition_type": "combined_all_six_users",
-                "users": USERS,
-            },
-        )
-
-        self.assertIn("speaker-only condition", speaker_prompt)
-        self.assertIn("six-video condition", all_six_prompt)
-        self.assertIn("evidence-sufficiency judge", speaker_prompt)
-        self.assertIn("Do not answer the question yourself", speaker_prompt)
-        self.assertIn("Do not select an option", speaker_prompt)
-        self.assertNotIn('"answerable"', speaker_prompt)
-        self.assertIn("needed_facts", all_six_prompt)
-        self.assertNotIn("You must choose exactly one answer", speaker_prompt)
-        self.assertNotIn('"choice"', speaker_prompt)
-        self.assertIn("full unpruned speaker video", speaker_prompt)
-        self.assertIn("full original speaker video", all_six_prompt)
-        self.assertIn("all five full original provider videos", all_six_prompt)
-        self.assertNotIn("proper-subset", speaker_prompt)
-        self.assertNotIn("every provider", all_six_prompt)
-
-    def test_six_user_answerability_uses_evidence_sufficiency_schema(self) -> None:
-        self.assertEqual(
-            ANSWERABILITY_SUFFICIENCY_SCHEMA["required"],
-            [
-                "reason",
-                "needed_facts",
-            ],
-        )
-        self.assertNotIn("answerable", ANSWERABILITY_SUFFICIENCY_SCHEMA["properties"])
-        fact_schema = ANSWERABILITY_SUFFICIENCY_SCHEMA["properties"]["needed_facts"]["items"]
-        self.assertEqual(
-            fact_schema["required"],
-            [
-                "fact_id",
-                "fact",
-                "why_needed",
-                "visibility",
-                "confidence",
-                "source_user",
-                "original_time_range",
-                "visual_description",
-            ],
-        )
-        prompt = build_answerability_prompt(
-            six_user_qa(),
-            {
-                "condition_id": "speaker_only::speaker",
-                "condition_type": "speaker_only",
-                "users": ["speaker"],
-            },
-        )
-        self.assertIn("Do not select an option", prompt)
-        self.assertNotIn('"answerable"', prompt)
-        self.assertIn("needed_facts", prompt)
-        self.assertIn("NOT_VISIBLE", prompt)
-        self.assertIn("AMBIGUOUS", prompt)
-        self.assertIn("HIGH", prompt)
-        self.assertIn("MEDIUM/LOW", prompt)
-        self.assertIn("does not make the condition sufficient", prompt)
-        self.assertIn("original_time_range", prompt)
-        self.assertIn("The program computes sufficiency", prompt)
-        self.assertIn("minimize the number of distinct source users", prompt)
-
-    def test_generation_prompt_records_round_diversity_focus(self) -> None:
-        packet = six_user_packet()
-        packet["generation_diversity_focus"] = {
-            "round_index": 2,
-            "temporal_band_seconds": [60, 90],
-            "focal_provider": "provider_three",
-            "relation_focus": "identity link",
-        }
-        packet["previous_questions_to_avoid"] = ["Where was the cup?"]
-
-        prompt = build_video_generation_prompt(packet, "neutral")
-
-        self.assertIn("speaker video must naturally motivate the question but remain insufficient", prompt)
-        self.assertIn("Do not require every provider to contribute", prompt)
-        self.assertNotIn("generation_diversity_focus", prompt)
+        self.assertIn("20 ordered source-video segments", observation_prompt)
+        self.assertIn(LONG_HORIZON_GROUNDEDNESS_GUIDANCE, observation_prompt)
+        self.assertIn(LONG_HORIZON_GROUNDEDNESS_GUIDANCE, aggregation_prompt)
+        self.assertNotIn("segment_002", observation_prompt)
+        for forbidden in ("local_video", "timestamp_seconds", "clip_clock", "C:/"):
+            self.assertNotIn(forbidden, observation_prompt)
+            self.assertNotIn(forbidden, aggregation_prompt)
 
     def test_formality_prompt_uses_six_user_scope(self) -> None:
         prompt = build_qa_formality_judge_prompt(six_user_qa(), six_user_packet())
 
         self.assertIn("qa_formality judge for a six-user multiple-choice question", prompt)
         self.assertIn("plausible information need the speaker would naturally have", prompt)
-        self.assertIn("contrived third-party quiz", prompt)
-        self.assertNotIn("three-user multiple-choice question", prompt)
-        self.assertIn("other_person_activity_query", prompt)
-        self.assertIn("concurrent activity report", prompt)
         self.assertIn("other_person_activity_query", QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES)
-        self.assertIn("other_person_activity_query", QA_FORMALITY_CHECK_SCHEMA["semantic_subchecks"])
+        self.assertIn("3. other_person_activity_query", prompt)
+        self.assertIn("one provider's event used to query another provider's activity", prompt)
+        self.assertIn("FAIL pair-matching questions", prompt)
+        self.assertIn("resolvable in its local sentence", prompt)
+        self.assertIn("not automatic failures when local context does resolve them", prompt)
+        self.assertNotIn("three-user multiple-choice question", prompt)
 
-    def test_formality_reference_clarity_uses_local_resolvability(self) -> None:
-        prompt = build_qa_formality_judge_prompt(six_user_qa(), six_user_packet())
+    def test_legacy_judges_receive_all_five_structural_hints(self) -> None:
+        qa_item = six_user_qa()
+        packet = six_user_packet()
+        prompts = {
+            "qa_formality": build_qa_formality_judge_prompt(qa_item, packet),
+            "evidence_groundedness": build_evidence_groundedness_judge_prompt(
+                qa_item,
+                packet,
+            ),
+            "answerability_speaker_only": build_answerability_prompt(
+                qa_item,
+                {
+                    "condition_id": "speaker_only::speaker",
+                    "condition_type": "speaker_only",
+                    "users": ["speaker"],
+                },
+            ),
+            "answerability_combined_all_six_users": build_answerability_prompt(
+                qa_item,
+                {
+                    "condition_id": "combined_all_six_users",
+                    "condition_type": "combined_all_six_users",
+                    "users": list(USERS),
+                },
+            ),
+        }
 
-        self.assertIn("multiple equally plausible referents", prompt)
-        self.assertIn("would change the meaning or answer", prompt)
-        self.assertIn("does not need to be globally unique", prompt)
-        self.assertIn("the wooden chair in the middle of the room", prompt)
-        self.assertNotIn('Examples that FAIL include "the other room", "the other person", "the cup"', prompt)
+        self.assertIn(LONG_HORIZON_FORMALITY_GUIDANCE, prompts["qa_formality"])
+        for prompt_name in (
+            "evidence_groundedness",
+            "answerability_speaker_only",
+            "answerability_combined_all_six_users",
+        ):
+            self.assertIn(LONG_HORIZON_GROUNDEDNESS_GUIDANCE, prompts[prompt_name])
+
+        structural_hints = (
+            "Object trajectory",
+            "Cross-user before/after state",
+            "Same-user revisit with a cross-user intervention",
+            "Last-seen or most-recent interaction",
+            "Cross-user temporal ordering",
+        )
+        for prompt_name, prompt in prompts.items():
+            with self.subTest(prompt=prompt_name):
+                for hint in structural_hints:
+                    self.assertIn(hint, prompt)
 
     def test_two_user_generation_prompt_keeps_legacy_dependency(self) -> None:
         prompt = build_video_generation_prompt(two_user_packet(), "neutral")
@@ -443,6 +418,7 @@ class SixUserPromptTests(unittest.TestCase):
             "required_users[1] supplies additional evidence; report each user's individual answerability truthfully",
             prompt,
         )
+        self.assertIn("Concurrent-activity restriction", prompt)
         self.assertNotIn("required_users[2]", prompt)
         self.assertNotIn("Six-user interaction-chain example", prompt)
 

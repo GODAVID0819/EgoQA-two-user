@@ -11,127 +11,122 @@
 #SBATCH --output=hpc/logs/%x_%j.out
 #SBATCH --error=hpc/logs/%x_%j.err
 
-set -euo pipefail
+set -Eeuo pipefail
 
 RUN_MODE="${RUN_MODE:-six_user_qa_runtime_probe}"
-JOB_START_EPOCH_SECONDS="${JOB_START_EPOCH_SECONDS:-$(date +%s)}"
 ACCEPTED_TARGET="${ACCEPTED_TARGET:-1}"
 EVIDENCE_TARGET="${EVIDENCE_TARGET:-1}"
 MAX_GROUPS="${MAX_GROUPS:-16}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-1}"
-ALLOW_PARTIAL="${ALLOW_PARTIAL:-1}"
-EVIDENCE_DURATION_SECONDS="${EVIDENCE_DURATION_SECONDS:-30}"
-PRUNING_BLOCK_SECONDS="${PRUNING_BLOCK_SECONDS:-30}"
-PRUNING_MAX_CROSS_GAP_SECONDS="${PRUNING_MAX_CROSS_GAP_SECONDS:-10}"
-QA_TIME_BUDGET_MODE="${QA_TIME_BUDGET_MODE:-0}"
-RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED="${RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED:-0}"
-QA_DEADLINE_EPOCH_SECONDS="${QA_DEADLINE_EPOCH_SECONDS:-0}"
-MAX_GENERATION_SLOTS="${MAX_GENERATION_SLOTS:-}"
-SINGLE_CANDIDATE_GROUP="${SINGLE_CANDIDATE_GROUP:-0}"
-TARGET_GENERATION_GROUPS="${TARGET_GENERATION_GROUPS:-1}"
-EXPECTED_QA_PER_GROUP="${EXPECTED_QA_PER_GROUP:-0}"
-ONE_CANDIDATE_PER_GROUP="${ONE_CANDIDATE_PER_GROUP:-0}"
-ONE_PASS_30_SLOT_MODE="${ONE_PASS_30_SLOT_MODE:-0}"
-PRECOMPUTED_CANDIDATE_ASSETS_ROOT="${PRECOMPUTED_CANDIDATE_ASSETS_ROOT:-}"
-PRECOMPUTED_SOURCE_JOB_ID="${PRECOMPUTED_SOURCE_JOB_ID:-16699348}"
-GENERATOR_DECODE_MODE="${GENERATOR_DECODE_MODE:-greedy}"
-GENERATOR_TEMPERATURE="${GENERATOR_TEMPERATURE:-0.7}"
-GENERATOR_TOP_P="${GENERATOR_TOP_P:-0.9}"
-MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-2048}"
-FORMALITY_MAX_NEW_TOKENS="${FORMALITY_MAX_NEW_TOKENS:-2048}"
-SIX_USER_TEN_MINUTE_REASONING_PROFILE="${SIX_USER_TEN_MINUTE_REASONING_PROFILE:-0}"
-SIX_USER_TEN_MINUTE_FAST_PROFILE="${SIX_USER_TEN_MINUTE_FAST_PROFILE:-0}"
-SIX_USER_ONE_PASS_PROFILE="${SIX_USER_ONE_PASS_PROFILE:-0}"
-FAIL_FAST_REVIEW="${FAIL_FAST_REVIEW:-0}"
-export PRUNING_MAX_CROSS_GAP_SECONDS MAX_NEW_TOKENS FORMALITY_MAX_NEW_TOKENS
-export SIX_USER_TEN_MINUTE_REASONING_PROFILE
-export SIX_USER_TEN_MINUTE_FAST_PROFILE SIX_USER_ONE_PASS_PROFILE FAIL_FAST_REVIEW
-export EXPECTED_QA_PER_GROUP
-export ONE_CANDIDATE_PER_GROUP ONE_PASS_30_SLOT_MODE
-export PRECOMPUTED_CANDIDATE_ASSETS_ROOT PRECOMPUTED_SOURCE_JOB_ID
+ALLOW_PARTIAL="${ALLOW_PARTIAL:-0}"
+PREPARED_EVIDENCE_SOURCE="${PREPARED_EVIDENCE_SOURCE:-}"
+PREPARED_EVIDENCE_OFFSET="${PREPARED_EVIDENCE_OFFSET:-0}"
+GENERATOR_DECODE_MODE="sampling"
+GENERATOR_TEMPERATURE="0.7"
+GENERATOR_TOP_P="0.9"
+GENERATOR_TOP_K="40"
 
-PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/outputs/six_user_qa}"
-TRAIN_ENV="${TRAIN_ENV:-/scratch/xl6775/conda/envs/qwen3vl-smoke}"
-FFMPEG_ENV="${FFMPEG_ENV:-/scratch/xl6775/envs/egoqa-ffmpeg-runtime}"
-MODEL_DIR="${MODEL_DIR:-/scratch/xl6775/models/Qwen3.6-27B}"
+PROJECT_ROOT="${PROJECT_ROOT:-/scratch/${USER}/Long-video-understanding-clip}"
+PACKAGE_ROOT="${PACKAGE_ROOT:-${PROJECT_ROOT}/egolife_two_user_qa/multi-user}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-${PROJECT_ROOT}/egolife_two_user_qa/multi-user/outputs/six_user_qa}"
+LOGIN_HF_TOKEN_PATH="${HF_TOKEN_PATH:-${HF_HOME:-${HOME}/.cache/huggingface}/token}"
+TRAIN_ENV="${TRAIN_ENV:-/scratch/${USER}/conda/envs/qwen3vl-smoke}"
+FFMPEG_ENV="${FFMPEG_ENV:-/scratch/${USER}/envs/egoqa-ffmpeg-runtime}"
+MODEL_ID="${MODEL_ID:-${QWEN_MODEL_ID:-Qwen/Qwen3.6-27B}}"
+MODEL_CACHE_ROOT="${MODEL_CACHE_ROOT:-/scratch/${USER}/hf_cache}"
 CLIP_MODEL_ID="${CLIP_MODEL_ID:-openai/clip-vit-base-patch32}"
-INFERENCE_BACKEND="${INFERENCE_BACKEND:-transformers-local-memory-safe}"
-VLLM_REQUIRED_VERSION="${VLLM_REQUIRED_VERSION:-0.28.0}"
-VLLM_TENSOR_PARALLEL_SIZE="${VLLM_TENSOR_PARALLEL_SIZE:-2}"
-VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
-VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-262144}"
-VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-8}"
-VLLM_BATCH_WAIT_MS="${VLLM_BATCH_WAIT_MS:-20}"
-VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-32768}"
-VLLM_MAX_IMAGES="${VLLM_MAX_IMAGES:-3600}"
-VLLM_MAX_VIDEOS="${VLLM_MAX_VIDEOS:-20}"
-VLLM_MM_PROCESSOR_CACHE_GB="${VLLM_MM_PROCESSOR_CACHE_GB:-8}"
-VLLM_MM_PROCESSOR_CACHE_TYPE="${VLLM_MM_PROCESSOR_CACHE_TYPE:-shm}"
-VLLM_MM_ENCODER_TP_MODE="${VLLM_MM_ENCODER_TP_MODE:-data}"
-VLLM_ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND:-FLASH_ATTN}"
-VLLM_MM_ENCODER_ATTN_BACKEND="${VLLM_MM_ENCODER_ATTN_BACKEND:-FLASH_ATTN}"
-VLLM_GDN_PREFILL_BACKEND="${VLLM_GDN_PREFILL_BACKEND:-flashinfer}"
-VLLM_MTP_SPECULATIVE_TOKENS="${VLLM_MTP_SPECULATIVE_TOKENS:-1}"
-VLLM_ENABLE_PREFIX_CACHING="${VLLM_ENABLE_PREFIX_CACHING:-0}"
-VLLM_VIDEO_FPS="${VLLM_VIDEO_FPS:-0.5}"
-VLLM_MIN_IMAGE_PIXELS="${VLLM_MIN_IMAGE_PIXELS:-3136}"
-VLLM_IMAGE_CONTEXT_TARGET_FRACTION="${VLLM_IMAGE_CONTEXT_TARGET_FRACTION:-0.85}"
-VLLM_IMAGE_TEXT_TOKEN_RESERVE="${VLLM_IMAGE_TEXT_TOKEN_RESERVE:-8192}"
-VLLM_IMAGE_ITEM_TOKEN_OVERHEAD="${VLLM_IMAGE_ITEM_TOKEN_OVERHEAD:-2}"
-VLLM_ALLOWED_LOCAL_MEDIA_PATH="${VLLM_ALLOWED_LOCAL_MEDIA_PATH:-/scratch/xl6775}"
-export INFERENCE_BACKEND VLLM_REQUIRED_VERSION
-export VLLM_TENSOR_PARALLEL_SIZE VLLM_GPU_MEMORY_UTILIZATION VLLM_MAX_MODEL_LEN
-export VLLM_MAX_NUM_SEQS VLLM_BATCH_WAIT_MS VLLM_MAX_NUM_BATCHED_TOKENS
-export VLLM_MAX_IMAGES VLLM_MAX_VIDEOS VLLM_MM_PROCESSOR_CACHE_GB
-export VLLM_MM_PROCESSOR_CACHE_TYPE VLLM_MM_ENCODER_TP_MODE
-export VLLM_ATTENTION_BACKEND VLLM_MM_ENCODER_ATTN_BACKEND
-export VLLM_GDN_PREFILL_BACKEND VLLM_MTP_SPECULATIVE_TOKENS
-export VLLM_ENABLE_PREFIX_CACHING VLLM_VIDEO_FPS VLLM_MIN_IMAGE_PIXELS
-export VLLM_IMAGE_CONTEXT_TARGET_FRACTION VLLM_IMAGE_TEXT_TOKEN_RESERVE
-export VLLM_IMAGE_ITEM_TOKEN_OVERHEAD VLLM_ALLOWED_LOCAL_MEDIA_PATH
+PYTHON="${TRAIN_ENV}/bin/python"
 JOB_SCRATCH_ROOT="/scratch/${USER}/job_scratch/${RUN_MODE}_${SLURM_JOB_ID}"
 OUTDIR="${OUTPUT_ROOT}/${RUN_MODE}_${SLURM_JOB_ID}"
 CACHE_DIR="${JOB_SCRATCH_ROOT}/media_cache"
 PYTHON_ALIAS_ROOT="${JOB_SCRATCH_ROOT}/pythonpath"
-VLLM_IPC_RUNTIME_LINK="/tmp/egoqa_vllm_${SLURM_JOB_ID}"
-
-CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-0}"
-CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/hpc/shared/cuda.py}"
+CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${PROJECT_ROOT}/hpc/cuda.py}"
 CUDA_KEEPER_THRESHOLD="${CUDA_KEEPER_THRESHOLD:-60}"
 CUDA_KEEPER_GPUS="${CUDA_KEEPER_GPUS:-0}"
-CUDA_KEEPER_RESERVE="${CUDA_KEEPER_RESERVE:-8.0}"
-CUDA_KEEPER_MAX_PREALLOC="${CUDA_KEEPER_MAX_PREALLOC:-2.5}"
-CUDA_KEEPER_START_AFTER_SECONDS="${CUDA_KEEPER_START_AFTER_SECONDS:-7200}"
-CUDA_KEEPER_AUTO_INSTALL="${CUDA_KEEPER_AUTO_INSTALL:-0}"
+CUDA_KEEPER_RESERVE="${CUDA_KEEPER_RESERVE:-12.0}"
 CUDA_KEEPER_PID=""
-TERMINATION_REQUESTED="0"
+CUDA_KEEPER_LOG="${OUTDIR}/cuda_keeper_${SLURM_JOB_ID}.log"
+STAGE_STATUS_PATH="${OUTDIR}/stage_status.json"
+CURRENT_STAGE="runtime_bootstrap"
+
+write_stage_status() {
+  local status_value="$1"
+  local stage_value="$2"
+  local exit_code_value="${3:-0}"
+  local signal_value="${4:-}"
+  local timestamp_value
+  timestamp_value="$(date --iso-8601=seconds)"
+  if [[ -d "${OUTDIR}" ]]; then
+    printf '{"status":"%s","stage":"%s","timestamp":"%s","job_id":"%s","host":"%s","exit_code":%s,"signal":"%s"}\n' \
+      "${status_value}" "${stage_value}" "${timestamp_value}" \
+      "${SLURM_JOB_ID:-unknown}" "$(hostname)" "${exit_code_value}" \
+      "${signal_value}" > "${STAGE_STATUS_PATH}"
+  fi
+}
+
+stage_start() {
+  CURRENT_STAGE="$1"
+  printf 'stage=%s status=started timestamp=%s job_id=%s host=%s\n' \
+    "${CURRENT_STAGE}" "$(date --iso-8601=seconds)" \
+    "${SLURM_JOB_ID:-unknown}" "$(hostname)"
+  write_stage_status "running" "${CURRENT_STAGE}" 0
+}
+
+stage_finish() {
+  CURRENT_STAGE="$1"
+  printf 'stage=%s status=completed timestamp=%s job_id=%s host=%s\n' \
+    "${CURRENT_STAGE}" "$(date --iso-8601=seconds)" \
+    "${SLURM_JOB_ID:-unknown}" "$(hostname)"
+  write_stage_status "completed" "${CURRENT_STAGE}" 0
+}
 
 cleanup() {
-  cleanup_status=$?
   if [[ -n "${CUDA_KEEPER_PID}" ]] && kill -0 "${CUDA_KEEPER_PID}" 2>/dev/null; then
-    echo "stage=stop_cuda_keeper pid=${CUDA_KEEPER_PID}"
+    printf 'stage=stop_cuda_keeper status=started timestamp=%s pid=%s\n' \
+      "$(date --iso-8601=seconds)" "${CUDA_KEEPER_PID}"
     kill "${CUDA_KEEPER_PID}" 2>/dev/null || true
     wait "${CUDA_KEEPER_PID}" 2>/dev/null || true
   fi
-  if [[ -L "${VLLM_IPC_RUNTIME_LINK}" ]] && \
-     [[ "$(readlink "${VLLM_IPC_RUNTIME_LINK}")" == "${JOB_SCRATCH_ROOT}/tmp" ]]; then
-    unlink "${VLLM_IPC_RUNTIME_LINK}"
-  fi
-  return "${cleanup_status}"
 }
 
-mark_termination() {
-  TERMINATION_REQUESTED="1"
-  echo "stage=termination_requested signal=TERM"
+on_error() {
+  local exit_code=$?
+  local line_number="$1"
+  local failed_command="$2"
+  trap - ERR
+  printf 'stage=%s status=failed timestamp=%s exit_code=%s line=%s command=%q\n' \
+    "${CURRENT_STAGE}" "$(date --iso-8601=seconds)" "${exit_code}" \
+    "${line_number}" "${failed_command}" >&2
+  write_stage_status "failed" "${CURRENT_STAGE}" "${exit_code}"
+  exit "${exit_code}"
 }
 
+on_signal() {
+  local signal_name="$1"
+  local exit_code="$2"
+  trap - INT TERM
+  printf 'stage=%s status=cancelled timestamp=%s signal=%s exit_code=%s\n' \
+    "${CURRENT_STAGE}" "$(date --iso-8601=seconds)" "${signal_name}" \
+    "${exit_code}" >&2
+  write_stage_status "cancelled" "${CURRENT_STAGE}" "${exit_code}" "${signal_name}"
+  exit "${exit_code}"
+}
+
+trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
 trap cleanup EXIT
-trap mark_termination INT TERM
 
+stage_start "runtime_bootstrap"
+
+if [[ -z "${HF_TOKEN:-}" && -s "${LOGIN_HF_TOKEN_PATH}" ]]; then
+  export HF_TOKEN_PATH="${LOGIN_HF_TOKEN_PATH}"
+fi
 export HOME="${JOB_SCRATCH_ROOT}/home"
 export XDG_CACHE_HOME="${JOB_SCRATCH_ROOT}/xdg_cache"
-export HF_HOME="${JOB_SCRATCH_ROOT}/hf"
+export HF_HOME="${MODEL_CACHE_ROOT}"
+export HF_HUB_CACHE="${MODEL_CACHE_ROOT}/hub"
+export TRANSFORMERS_CACHE="${MODEL_CACHE_ROOT}"
 export HF_DATASETS_CACHE="${JOB_SCRATCH_ROOT}/hf_datasets"
 export MODELSCOPE_CACHE="${JOB_SCRATCH_ROOT}/modelscope"
 export TORCH_HOME="${JOB_SCRATCH_ROOT}/torch"
@@ -150,17 +145,16 @@ export CONDA_NO_PLUGINS=true
 export CONDA_SOLVER=classic
 export CONDA_PKGS_DIRS="${JOB_SCRATCH_ROOT}/conda_pkgs"
 export PIP_CACHE_DIR="${JOB_SCRATCH_ROOT}/pip_cache"
-export PATH="${FFMPEG_ENV}/bin:${PATH}"
-export LD_LIBRARY_PATH="${FFMPEG_ENV}/lib:${LD_LIBRARY_PATH:-}"
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
-export QWEN_MEMORY_SAFE_VIDEO_FPS="${QWEN_MEMORY_SAFE_VIDEO_FPS:-1.0}"
-export QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS="${QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS:-3136}"
-export QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS="${QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS:-65536}"
-export QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS="${QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS:-32768}"
+export QWEN_MEMORY_SAFE_VIDEO_FPS="1.0"
+export QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS="3136"
+export QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS="32768"
 export QWEN_MEMORY_SAFE_GPU_RESERVE_GIB="5"
 export QWEN_MEMORY_SAFE_MIN_AVAILABLE_RAM_GIB="32"
 export QWEN_MEMORY_SAFE_ATTN_IMPLEMENTATION="sdpa"
+export QWEN_MEMORY_SAFE_DEVICE_MAP="${QWEN_MEMORY_SAFE_DEVICE_MAP:-cuda}"
 export QWEN_MEMORY_SAFE_TRANSCODE_LOCAL_VIDEOS="1"
 export QWEN_MEMORY_SAFE_TRANSCODE_MAX_EDGE="512"
 export QWEN_MEMORY_SAFE_VIDEO_CACHE_DIR="${JOB_SCRATCH_ROOT}/qwen_video_cache"
@@ -172,6 +166,7 @@ mkdir -p \
   "${HOME}" \
   "${XDG_CACHE_HOME}" \
   "${HF_HOME}" \
+  "${HF_HUB_CACHE}" \
   "${HF_DATASETS_CACHE}" \
   "${MODELSCOPE_CACHE}" \
   "${TORCH_HOME}" \
@@ -183,32 +178,308 @@ mkdir -p \
   "${TMPDIR}" \
   "${CONDA_PKGS_DIRS}" \
   "${PIP_CACHE_DIR}"
+printf 'hf_authentication=%s\n' \
+  "$([[ -n "${HF_TOKEN:-}" || -s "${HF_TOKEN_PATH:-/nonexistent}" ]] && printf configured || printf anonymous)"
 
-if [[ "${INFERENCE_BACKEND}" == "vllm-local" ]]; then
-  if [[ -e "${VLLM_IPC_RUNTIME_LINK}" || -L "${VLLM_IPC_RUNTIME_LINK}" ]]; then
-    echo "STOP: vLLM IPC path already exists: ${VLLM_IPC_RUNTIME_LINK}" >&2
-    exit 1
-  fi
-  ln -s "${JOB_SCRATCH_ROOT}/tmp" "${VLLM_IPC_RUNTIME_LINK}"
-  export TMPDIR="${VLLM_IPC_RUNTIME_LINK}"
-  export TMP="${VLLM_IPC_RUNTIME_LINK}"
-  export TEMP="${VLLM_IPC_RUNTIME_LINK}"
+stage_start "start_cuda_keeper"
+test -x "${PYTHON}"
+test -s "${CUDA_KEEPER_SCRIPT}"
+"${PYTHON}" -P -c "import torch, pynvml, psutil"
+"${PYTHON}" -P "${CUDA_KEEPER_SCRIPT}" \
+  --threshold "${CUDA_KEEPER_THRESHOLD}" \
+  --gpus "${CUDA_KEEPER_GPUS}" \
+  --reserve "${CUDA_KEEPER_RESERVE}" \
+  > "${CUDA_KEEPER_LOG}" 2>&1 &
+CUDA_KEEPER_PID=$!
+sleep 3
+if ! kill -0 "${CUDA_KEEPER_PID}" 2>/dev/null; then
+  echo "CUDA keeper exited during startup: ${CUDA_KEEPER_LOG}" >&2
+  tail -n 100 "${CUDA_KEEPER_LOG}" >&2 || true
+  exit 2
 fi
+printf 'stage=start_cuda_keeper status=ready timestamp=%s pid=%s log=%s\n' \
+  "$(date --iso-8601=seconds)" "${CUDA_KEEPER_PID}" "${CUDA_KEEPER_LOG}"
 
+stage_start "activate_environment"
 cd "${PROJECT_ROOT}"
 source /share/apps/anaconda3/2025.06/etc/profile.d/conda.sh
 conda activate "${TRAIN_ENV}"
-PYTHON="${TRAIN_ENV}/bin/python"
-unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH LIBRARY_PATH
-ln -s "${PROJECT_ROOT}" "${PYTHON_ALIAS_ROOT}/egolife_two_user_qa"
-export PYTHONPATH="${PYTHON_ALIAS_ROOT}:${PROJECT_ROOT}:${PYTHONPATH:-}"
+
+stage_start "validate_python_environment"
+"${PYTHON}" -P - "${TRAIN_ENV}" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+expected_prefix = Path(sys.argv[1]).resolve()
+actual_prefix = Path(sys.prefix).resolve()
+conda_prefix = Path(os.environ.get("CONDA_PREFIX", "")).resolve()
+if actual_prefix != expected_prefix:
+    raise SystemExit(
+        f"wrong Python environment: expected_prefix={expected_prefix} "
+        f"actual_prefix={actual_prefix} executable={sys.executable}"
+    )
+if conda_prefix != expected_prefix:
+    raise SystemExit(
+        f"wrong conda activation: expected_prefix={expected_prefix} "
+        f"CONDA_PREFIX={conda_prefix}"
+    )
+print(f"python_executable={sys.executable}")
+print(f"python_prefix={actual_prefix}")
+print(f"conda_prefix={conda_prefix}")
+PY
+
+stage_start "configure_pytorch_runtime_libraries"
+PYTHON_SITE_PACKAGES="$("${PYTHON}" -P -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+PYTORCH_CUDNN_LIB="${PYTHON_SITE_PACKAGES}/nvidia/cudnn/lib"
+PYTORCH_CORE_LIB="${PYTHON_SITE_PACKAGES}/torch/lib"
+TORCH_RUNTIME_LIBRARY_PATH=""
+if compgen -G "${PYTORCH_CUDNN_LIB}/libcudnn.so*" >/dev/null; then
+  TORCH_RUNTIME_LIBRARY_PATH="${PYTORCH_CUDNN_LIB}"
+fi
+if [[ -d "${PYTORCH_CORE_LIB}" ]]; then
+  TORCH_RUNTIME_LIBRARY_PATH="${TORCH_RUNTIME_LIBRARY_PATH}${TORCH_RUNTIME_LIBRARY_PATH:+:}${PYTORCH_CORE_LIB}"
+fi
+if [[ -n "${TORCH_RUNTIME_LIBRARY_PATH}" ]]; then
+  export LD_LIBRARY_PATH="${TORCH_RUNTIME_LIBRARY_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+printf 'python_site_packages=%s pytorch_runtime_library_path=%s\n' \
+  "${PYTHON_SITE_PACKAGES}" "${TORCH_RUNTIME_LIBRARY_PATH:-bundled_rpath_only}"
+
+stage_start "validate_runtime_paths"
+test -d "${PACKAGE_ROOT}"
+test -s "${PACKAGE_ROOT}/__main__.py"
+test -s "${PACKAGE_ROOT}/group_relative_clip_sampling.py"
+ln -s "${PACKAGE_ROOT}" "${PYTHON_ALIAS_ROOT}/egolife_two_user_qa"
+export PYTHONPATH="${PYTHON_ALIAS_ROOT}:${PROJECT_ROOT}:${PACKAGE_ROOT}:${PYTHONPATH:-}"
+
+stage_start "validate_multi_user_package_import"
+"${PYTHON}" -P - "${PACKAGE_ROOT}" <<'PY'
+import sys
+from pathlib import Path
+
+import egolife_two_user_qa
+import egolife_two_user_qa.prompts as prompts
+import egolife_two_user_qa.qwen3vl_runner as qwen3vl_runner
+
+expected = Path(sys.argv[1]).resolve()
+package_dir = Path(egolife_two_user_qa.__file__).resolve().parent
+prompts_dir = Path(prompts.__file__).resolve().parent
+runner_dir = Path(qwen3vl_runner.__file__).resolve().parent
+if package_dir != expected or prompts_dir != expected or runner_dir != expected:
+    raise SystemExit(
+        "wrong EgoLife package imported: "
+        f"expected={expected} package_dir={package_dir} prompts_dir={prompts_dir} "
+        f"runner_dir={runner_dir}"
+    )
+print(f"multi_user_package_dir={package_dir}")
+print(f"multi_user_prompts_path={Path(prompts.__file__).resolve()}")
+print(f"multi_user_runner_path={Path(qwen3vl_runner.__file__).resolve()}")
+PY
+
+stage_start "validate_baseline_neutral_prompt_contract"
+"${PYTHON}" -P - <<'PY'
+from egolife_two_user_qa.prompts import (
+    QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
+    build_answerability_condition_aggregation_prompt,
+    build_answerability_fact_plan_prompt,
+    build_answerability_user_fact_audit_prompt,
+    build_evidence_observation_aggregation_prompt,
+    build_evidence_segment_observation_prompt,
+    build_qa_formality_judge_prompt,
+    build_video_generation_prompt,
+)
+
+users = [f"User{index}" for index in range(6)]
+packet = {
+    "evidence_id": "prompt_contract_probe",
+    "required_users": users,
+    "provider_users": users[1:],
+    "clips": [
+        {
+            "agent_name": user,
+            "generator_media_mode": (
+                "all_clustering_frames_only"
+                if index == 0
+                else "retained_cluster_frames_only"
+            ),
+            "media_role": (
+                "speaker_all_clustering_frames"
+                if index == 0
+                else "provider_retained_cluster_frames"
+            ),
+            "frames": [{"path": f"unused-{index}.jpg", "timestamp_seconds": index}],
+        }
+        for index, user in enumerate(users)
+    ],
+}
+qa_item = {
+    "qa_id": "prompt_contract_probe",
+    "question": "What happened after I stepped away?",
+    "options": ["Option one", "Option two", "Option three", "Option four", "Option five"],
+    "correct": "A",
+    "answer": "Option one",
+    "required_users": users,
+}
+condition = {
+    "condition_id": "combined_all_six_users::all",
+    "condition_type": "combined_all_six_users",
+    "users": users,
+}
+fact_plan = {
+    "reason": "The question anchor and answer-bearing detail are needed.",
+    "needed_facts": [
+        {"fact_id": "F1", "fact": "The anchor is visible.", "why_needed": "It grounds the question."},
+        {"fact_id": "F2", "fact": "The external detail is visible.", "why_needed": "It resolves the question."},
+    ],
+}
+observations = [
+    {
+        "user": users[0],
+        "claims": [
+            {
+                "claim": "The material event is visible.",
+                "status": "SUPPORTED",
+                "segment_references": ["segment_001"],
+                "visual_description": "The event is directly visible.",
+            }
+        ],
+    }
+]
+
+rendered = {
+    "generation": build_video_generation_prompt(packet, "neutral"),
+    "qa_formality": build_qa_formality_judge_prompt(qa_item, packet),
+    "evidence_map": build_evidence_segment_observation_prompt(
+        qa_item, user=users[0], segment_count=1
+    ),
+    "evidence_reduce": build_evidence_observation_aggregation_prompt(
+        qa_item, packet, observations=observations
+    ),
+    "answerability_plan": build_answerability_fact_plan_prompt(qa_item),
+    "answerability_map": build_answerability_user_fact_audit_prompt(
+        qa_item, user=users[0], fact_plan=fact_plan, segment_count=1
+    ),
+    "answerability_reduce": build_answerability_condition_aggregation_prompt(
+        qa_item,
+        condition=condition,
+        fact_plan=fact_plan,
+        user_audits=[],
+    ),
+}
+forbidden = (
+    "The following are structural hints",
+    "Information gap.",
+    "Cross-view comparison or asymmetry.",
+    "Post-handoff recipient follow-up.",
+    "Temporal difference.",
+    "State verification or change.",
+    "Six-user interaction-chain example",
+    "red tape dispenser with a torn white label",
+    "2D gaze",
+    "gaze summary",
+    "gaze information",
+    "Object-detection hints",
+    "CLIP retrieval hints",
+    "packet_image_index",
+    "original_timestamp_seconds",
+    "packet_image_order",
+)
+for stage, prompt in rendered.items():
+    hits = [fragment for fragment in forbidden if fragment.lower() in prompt.lower()]
+    if hits:
+        raise SystemExit(f"retired prompt content rendered in {stage}: {hits}")
+
+generation = rendered["generation"]
+required_generation = (
+    "speaker would naturally have and genuinely want to ask",
+    "speaker's sampled frames alone must remain insufficient",
+    "every CLIP-sampled frame from the speaker",
+    "only sampled members of provider clusters that survived pruning",
+    "It receives no MP4",
+    "Concurrent-activity restriction",
+    "Do not generate a question whose answer is what one person was doing",
+    "Do not generate options that encode pairs of concurrent activities",
+)
+missing = [fragment for fragment in required_generation if fragment not in generation]
+if missing:
+    raise SystemExit(f"baseline-neutral generation contract is incomplete: {missing}")
+if "other_person_activity_query" not in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES:
+    raise SystemExit("qa_formality no longer blocks concurrent-activity questions")
+formality = rendered["qa_formality"]
+required_formality = (
+    "3. other_person_activity_query",
+    "one provider's event used to query another provider's activity",
+    "FAIL pair-matching questions",
+)
+missing = [fragment for fragment in required_formality if fragment not in formality]
+if missing:
+    raise SystemExit(f"concurrent-activity formality restriction is incomplete: {missing}")
+for stage_name, marker in {
+    "evidence_map": "Stage marker: evidence_segment_observation",
+    "evidence_reduce": "Stage marker: evidence_groundedness_aggregation",
+    "answerability_plan": "Stage marker: answerability_fact_plan",
+    "answerability_map": "Stage marker: answerability_user_fact_audit",
+    "answerability_reduce": "Stage marker: answerability_condition_aggregation",
+}.items():
+    if marker not in rendered[stage_name]:
+        raise SystemExit(f"six-user map/reduce prompt is missing {marker}")
+for stage_name, prompt in rendered.items():
+    for forbidden_mapping in ("local_video", "timestamp_seconds", "window_start_seconds"):
+        if forbidden_mapping in prompt:
+            raise SystemExit(
+                f"six-user prompt exposed exact media metadata in {stage_name}: "
+                f"{forbidden_mapping}"
+            )
+print("baseline_neutral_prompt_contract=passed")
+PY
 
 test -x "${PYTHON}"
-test -x "${FFMPEG_ENV}/bin/ffmpeg"
-test -x "${FFMPEG_ENV}/bin/ffprobe"
-test -s "${MODEL_DIR}/config.json"
-python -m training.torch_storage_preflight \
-  --allowed-root "${JOB_SCRATCH_ROOT}" \
+if [[ -d "${MODEL_ID}" ]]; then
+  test -s "${MODEL_ID}/config.json"
+  MODEL_SOURCE="local_directory"
+elif [[ "${MODEL_ID}" == */* ]]; then
+  MODEL_SOURCE="huggingface_model_id"
+else
+  echo "Invalid MODEL_ID: ${MODEL_ID}" >&2
+  exit 1
+fi
+export MODEL_ID MODEL_SOURCE MODEL_CACHE_ROOT
+
+stage_start "resolve_ffmpeg_runtime"
+FFMPEG_BINARY=""
+FFPROBE_BINARY=""
+FFMPEG_SOURCE=""
+if [[ -x "${FFMPEG_ENV}/bin/ffmpeg" && -x "${FFMPEG_ENV}/bin/ffprobe" ]]; then
+  FFMPEG_BINARY="${FFMPEG_ENV}/bin/ffmpeg"
+  FFPROBE_BINARY="${FFMPEG_ENV}/bin/ffprobe"
+  FFMPEG_SOURCE="FFMPEG_ENV"
+elif [[ -x "${TRAIN_ENV}/bin/ffmpeg" && -x "${TRAIN_ENV}/bin/ffprobe" ]]; then
+  FFMPEG_BINARY="${TRAIN_ENV}/bin/ffmpeg"
+  FFPROBE_BINARY="${TRAIN_ENV}/bin/ffprobe"
+  FFMPEG_SOURCE="TRAIN_ENV"
+else
+  FFMPEG_BINARY="$(command -v ffmpeg || true)"
+  FFPROBE_BINARY="$(command -v ffprobe || true)"
+  FFMPEG_SOURCE="activated_PATH"
+fi
+if [[ -z "${FFMPEG_BINARY}" || ! -x "${FFMPEG_BINARY}" || \
+      -z "${FFPROBE_BINARY}" || ! -x "${FFPROBE_BINARY}" ]]; then
+  printf 'FFmpeg runtime not found. Checked FFMPEG_ENV=%s, TRAIN_ENV=%s, and activated PATH=%s\n' \
+    "${FFMPEG_ENV}" "${TRAIN_ENV}" "${PATH}" >&2
+  printf 'ffmpeg_candidate=%s ffprobe_candidate=%s\n' \
+    "${FFMPEG_BINARY:-missing}" "${FFPROBE_BINARY:-missing}" >&2
+  exit 1
+fi
+export FFMPEG_BINARY FFPROBE_BINARY
+export PATH="$(dirname "${FFMPEG_BINARY}"):$(dirname "${FFPROBE_BINARY}"):${PATH}"
+printf 'stage=resolve_ffmpeg_runtime status=ready timestamp=%s source=%s ffmpeg=%s ffprobe=%s\n' \
+  "$(date --iso-8601=seconds)" "${FFMPEG_SOURCE}" \
+  "${FFMPEG_BINARY}" "${FFPROBE_BINARY}"
+
+stage_start "storage_preflight"
+"${PYTHON}" -P -m training.torch_storage_preflight \
+  --allowed-root "/scratch/${USER}" \
   --output "${OUTDIR}/storage_preflight.json"
 BRANCH_NAME="$(git branch --show-current 2>/dev/null || true)"
 if [[ -n "$(git status --porcelain 2>/dev/null || true)" ]]; then
@@ -216,7 +487,8 @@ if [[ -n "$(git status --porcelain 2>/dev/null || true)" ]]; then
 else
   DIRTY_STATE="clean"
 fi
-python - "${OUTDIR}/job_manifest.json" <<PY
+stage_start "write_job_manifest"
+"${PYTHON}" -P - "${OUTDIR}/job_manifest.json" <<PY
 import json
 import os
 import sys
@@ -230,62 +502,37 @@ payload = {
     "branch": "${BRANCH_NAME}",
     "dirty_state": "${DIRTY_STATE}",
     "project_root": "${PROJECT_ROOT}",
+    "package_root": "${PACKAGE_ROOT}",
     "output_dir": "${OUTDIR}",
     "job_scratch_root": "${JOB_SCRATCH_ROOT}",
-    "model_dir": "${MODEL_DIR}",
-    "inference_backend": "${INFERENCE_BACKEND}",
-    "vllm_required_version": "${VLLM_REQUIRED_VERSION}",
-    "vllm_tensor_parallel_size": int("${VLLM_TENSOR_PARALLEL_SIZE}"),
-    "vllm_attention_backend": "${VLLM_ATTENTION_BACKEND}",
-    "vllm_mm_encoder_attention_backend": "${VLLM_MM_ENCODER_ATTN_BACKEND}",
-    "vllm_gdn_prefill_backend": "${VLLM_GDN_PREFILL_BACKEND}",
+    "model_id": "${MODEL_ID}",
+    "model_source": "${MODEL_SOURCE}",
+    "model_cache_root": "${MODEL_CACHE_ROOT}",
     "video_backend": "${FORCE_QWENVL_VIDEO_READER}",
     "min_video_pixels": int("${QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS}"),
-    "max_image_pixels": int("${QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS}"),
+    "max_image_pixels": 65536,
     "pip_check_status": "pending",
     "pip_check_path": "${OUTDIR}/pip_check.txt",
     "accepted_target": int("${ACCEPTED_TARGET}"),
     "evidence_target": int("${EVIDENCE_TARGET}"),
-    "target_generation_groups": int("${TARGET_GENERATION_GROUPS}"),
-    "expected_qa_per_generation_group": int("${EXPECTED_QA_PER_GROUP}"),
-    "one_candidate_per_generation_group": bool(int("${ONE_CANDIDATE_PER_GROUP}")),
     "max_attempts": int("${MAX_ATTEMPTS}"),
     "allow_partial": bool(int("${ALLOW_PARTIAL}")),
-    "evidence_duration_seconds": float("${EVIDENCE_DURATION_SECONDS}"),
-    "pruning_max_cross_gap_seconds": float("${PRUNING_MAX_CROSS_GAP_SECONDS}"),
-    "max_new_tokens": int("${MAX_NEW_TOKENS}"),
-    "formality_max_new_tokens": int("${FORMALITY_MAX_NEW_TOKENS}"),
-    "ten_minute_reasoning_profile": bool(int("${SIX_USER_TEN_MINUTE_REASONING_PROFILE}")),
-    "ten_minute_fast_profile": bool(int("${SIX_USER_TEN_MINUTE_FAST_PROFILE}")),
-    "one_pass_30_slot_mode": bool(int("${ONE_PASS_30_SLOT_MODE}")),
-    "one_pass_profile": bool(int("${SIX_USER_ONE_PASS_PROFILE}")),
-    "precomputed_candidate_assets_root": "${PRECOMPUTED_CANDIDATE_ASSETS_ROOT}",
-    "precomputed_source_job_id": "${PRECOMPUTED_SOURCE_JOB_ID}",
-    "fail_fast_review": bool(int("${FAIL_FAST_REVIEW}")),
-    "runtime_probe_allow_zero_accepted": bool(int("${RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED}")),
     "selected_count": 6,
+    "prepared_evidence_source": "${PREPARED_EVIDENCE_SOURCE}",
+    "prepared_evidence_offset": int("${PREPARED_EVIDENCE_OFFSET}"),
     "generator_decode": {
         "mode": "${GENERATOR_DECODE_MODE}",
         "temperature": float("${GENERATOR_TEMPERATURE}"),
         "top_p": float("${GENERATOR_TOP_P}"),
-    },
-    "cuda_keeper": {
-        "enabled": bool(int("${CUDA_KEEPER_ENABLE}")),
-        "script": "${CUDA_KEEPER_SCRIPT}",
-        "threshold": int("${CUDA_KEEPER_THRESHOLD}"),
-        "gpus": "${CUDA_KEEPER_GPUS}",
-    "reserve_gb": float("${CUDA_KEEPER_RESERVE}"),
-    "max_prealloc_gb": float("${CUDA_KEEPER_MAX_PREALLOC}"),
-    "start_after_seconds": float("${CUDA_KEEPER_START_AFTER_SECONDS}"),
-    "job_start_epoch_seconds": float("${JOB_START_EPOCH_SECONDS}"),
-    "log_path": "${OUTDIR}/cuda_keeper_${SLURM_JOB_ID}.log",
+        "top_k": int("${GENERATOR_TOP_K}"),
     },
 }
 path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
 
+stage_start "dependency_and_cuda_preflight"
 PIP_CHECK_STATUS="passed"
-if python -m pip check > "${OUTDIR}/pip_check.txt" 2>&1; then
+if "${PYTHON}" -P -m pip check > "${OUTDIR}/pip_check.txt" 2>&1; then
   cat "${OUTDIR}/pip_check.txt"
 else
   cat "${OUTDIR}/pip_check.txt"
@@ -301,127 +548,45 @@ else
   PIP_CHECK_STATUS="known_decord_platform_metadata_warning"
   echo "WARNING: pip check 仅报告已通过真实视频解码验证的 decord 平台元数据提示。"
 fi
-python -m egolife_two_user_qa --help >/dev/null
-"${FFMPEG_ENV}/bin/ffmpeg" -version | head -n 1
-"${FFMPEG_ENV}/bin/ffprobe" -version | head -n 1
-python - <<'PY'
+"${PYTHON}" -P -m egolife_two_user_qa --help >/dev/null
+"${FFMPEG_BINARY}" -version | head -n 1
+"${FFPROBE_BINARY}" -version | head -n 1
+"${PYTHON}" -P - <<'PY'
 import decord
 import torch
+from torchcodec.decoders import VideoDecoder
 from qwen_vl_utils.vision_process import get_video_reader_backend
 
 if not torch.cuda.is_available():
     raise SystemExit("CUDA is unavailable")
+cudnn_version = torch.backends.cudnn.version()
+if cudnn_version is None or cudnn_version < 90300:
+    raise SystemExit(f"incompatible cuDNN runtime: {cudnn_version!r}")
 video_backend = get_video_reader_backend()
 if video_backend != "decord":
     raise SystemExit(f"unexpected Qwen video backend: {video_backend}")
 print(f"torch={torch.__version__}")
 print(f"gpu={torch.cuda.get_device_name(0)}")
+print(f"cudnn={cudnn_version}")
 print(f"decord={decord.__version__}")
 print(f"video_backend={video_backend}")
+print(f"torchcodec_decoder={VideoDecoder.__module__}")
 PY
 
-if [[ "${INFERENCE_BACKEND}" == "vllm-local" ]]; then
-  python - <<'PY'
-import os
+stage_start "validate_model_runtime"
+"${PYTHON}" -P - "${MODEL_ID}" <<'PY'
+import sys
 
-import flash_attn
-import flashinfer
-import torch
-import vllm
+from transformers import AutoConfig
 
-from egolife_two_user_qa.qwen3vl_runner import Qwen3VLLocalVLLMRunner
-
-required_version = os.environ["VLLM_REQUIRED_VERSION"]
-if vllm.__version__ != required_version:
-    raise SystemExit(
-        f"vLLM version mismatch: expected={required_version} actual={vllm.__version__}"
-    )
-tensor_parallel_size = int(os.environ["VLLM_TENSOR_PARALLEL_SIZE"])
-if torch.cuda.device_count() < tensor_parallel_size:
-    raise SystemExit(
-        "visible GPU count is smaller than VLLM_TENSOR_PARALLEL_SIZE: "
-        f"visible={torch.cuda.device_count()} tp={tensor_parallel_size}"
-    )
-if os.environ["VLLM_ATTENTION_BACKEND"] != "FLASH_ATTN":
-    raise SystemExit("VLLM_ATTENTION_BACKEND must be FLASH_ATTN")
-if os.environ["VLLM_MM_ENCODER_ATTN_BACKEND"] != "FLASH_ATTN":
-    raise SystemExit("VLLM_MM_ENCODER_ATTN_BACKEND must be FLASH_ATTN")
-if os.environ["VLLM_GDN_PREFILL_BACKEND"] != "flashinfer":
-    raise SystemExit("VLLM_GDN_PREFILL_BACKEND must be flashinfer")
-if Qwen3VLLocalVLLMRunner.caps_video_pixels_per_frame is not True:
-    raise SystemExit("vLLM runner must enforce cap_pixels_per_frame")
-print(
-    "vllm_runtime_ready "
-    f"vllm={vllm.__version__} "
-    f"flash_attn={getattr(flash_attn, '__version__', 'unknown')} "
-    f"flashinfer={getattr(flashinfer, '__version__', 'unknown')} "
-    f"tp={tensor_parallel_size} "
-    "cap_pixels_per_frame=true"
-)
+model_id = sys.argv[1]
+config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+print(f"model_id={model_id}")
+print(f"model_type={getattr(config, 'model_type', 'unknown')}")
 PY
-fi
 
-if [[ "${CUDA_KEEPER_ENABLE}" == "1" ]]; then
-  if [[ -s "${CUDA_KEEPER_SCRIPT}" ]]; then
-    echo "stage=preflight_cuda_keeper_imports"
-    CUDA_KEEPER_IMPORTS_OK="0"
-    if "${PYTHON}" - <<'PY'
-import importlib.util
-
-missing = [name for name in ("torch", "pynvml") if importlib.util.find_spec(name) is None]
-if missing:
-    print("missing_required=" + ",".join(missing))
-    raise SystemExit(1)
-print("cuda_keeper_imports=ok")
-PY
-    then
-      CUDA_KEEPER_IMPORTS_OK="1"
-    elif [[ "${CUDA_KEEPER_AUTO_INSTALL}" == "1" ]]; then
-      echo "stage=install_cuda_keeper_deps"
-      "${PYTHON}" -m pip install nvidia-ml-py3 psutil || true
-      if "${PYTHON}" - <<'PY'
-import importlib.util
-
-missing = [name for name in ("torch", "pynvml") if importlib.util.find_spec(name) is None]
-if missing:
-    print("missing_required_after_install=" + ",".join(missing))
-    raise SystemExit(1)
-print("cuda_keeper_imports=ok")
-PY
-      then
-        CUDA_KEEPER_IMPORTS_OK="1"
-      fi
-    fi
-
-    if [[ "${CUDA_KEEPER_IMPORTS_OK}" == "1" ]]; then
-      echo "stage=start_cuda_keeper"
-      "${PYTHON}" "${CUDA_KEEPER_SCRIPT}" \
-        --threshold "${CUDA_KEEPER_THRESHOLD}" \
-        --gpus "${CUDA_KEEPER_GPUS}" \
-        --reserve "${CUDA_KEEPER_RESERVE}" \
-        --max-prealloc "${CUDA_KEEPER_MAX_PREALLOC}" \
-        --start-after-seconds "${CUDA_KEEPER_START_AFTER_SECONDS}" \
-        --job-start-epoch-seconds "${JOB_START_EPOCH_SECONDS}" \
-        > "${OUTDIR}/cuda_keeper_${SLURM_JOB_ID:-local}.log" 2>&1 &
-      CUDA_KEEPER_PID=$!
-      sleep 2
-      if kill -0 "${CUDA_KEEPER_PID}" 2>/dev/null; then
-        echo "cuda_keeper_pid=${CUDA_KEEPER_PID}"
-      else
-        echo "WARNING: cuda_keeper_exited_early; continuing without keeper"
-        CUDA_KEEPER_PID=""
-      fi
-    else
-      echo "WARNING: cuda_keeper_imports_missing; continuing without keeper"
-    fi
-  else
-    echo "WARNING: cuda_keeper_script_missing path=${CUDA_KEEPER_SCRIPT}; continuing without keeper"
-  fi
-fi
-
-python - "${OUTDIR}/job_manifest.json" <<PY
+"${PYTHON}" -P - "${OUTDIR}/job_manifest.json" <<PY
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -432,85 +597,121 @@ payload["pip_check_status"] = "${PIP_CHECK_STATUS}"
 path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
 
-if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then
-  if [[ -z "${PRECOMPUTED_CANDIDATE_ASSETS_ROOT}" ]]; then
-    echo "STOP: one-pass mode requires PRECOMPUTED_CANDIDATE_ASSETS_ROOT" >&2
-    exit 1
-  fi
-  echo "stage=restore_precomputed_speaker_candidates source_job=${PRECOMPUTED_SOURCE_JOB_ID}"
-  "${PYTHON}" "${PROJECT_ROOT}/tools/build_six_user_one_pass_evidence.py" \
-    --asset "${PRECOMPUTED_CANDIDATE_ASSETS_ROOT}/DAY1_17200000_group_relative_clip.json" \
-    --asset "${PRECOMPUTED_CANDIDATE_ASSETS_ROOT}/DAY3_17000000_group_relative_clip.json" \
-    --asset "${PRECOMPUTED_CANDIDATE_ASSETS_ROOT}/DAY4_21400000_group_relative_clip.json" \
-    --compact-output "${OUTDIR}/six_user_candidates.jsonl" \
-    --expanded-output "${OUTDIR}/one_pass_evidence.jsonl" \
-    --source-job-id "${PRECOMPUTED_SOURCE_JOB_ID}"
+if [[ -n "${PREPARED_EVIDENCE_SOURCE}" ]]; then
+  stage_start "select_prepared_six_user_candidates"
+  "${PYTHON}" -P - \
+    "${PREPARED_EVIDENCE_SOURCE}" \
+    "${OUTDIR}/six_user_candidates.jsonl" \
+    "${OUTDIR}/prepared_evidence_selection.json" \
+    "${OUTPUT_ROOT}" \
+    "${EVIDENCE_TARGET}" \
+    "${PREPARED_EVIDENCE_OFFSET}" <<'PY'
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).resolve()
+destination = Path(sys.argv[2]).resolve()
+selection_path = Path(sys.argv[3]).resolve()
+allowed_root = Path(sys.argv[4]).resolve()
+target_count = int(sys.argv[5])
+offset = int(sys.argv[6])
+
+if target_count < 1 or offset < 0:
+    raise SystemExit(
+        f"invalid prepared evidence selection: target_count={target_count} offset={offset}"
+    )
+try:
+    common = Path(os.path.commonpath([str(source), str(allowed_root)]))
+except ValueError as exc:
+    raise SystemExit(f"prepared evidence source is outside OUTPUT_ROOT: {source}") from exc
+if common != allowed_root:
+    raise SystemExit(
+        f"prepared evidence source must be inside OUTPUT_ROOT: "
+        f"source={source} output_root={allowed_root}"
+    )
+if not source.is_file():
+    raise SystemExit(f"prepared evidence source is missing: {source}")
+source_bytes = source.read_bytes()
+rows = [
+    json.loads(line)
+    for line in source_bytes.decode("utf-8").splitlines()
+    if line.strip()
+]
+end = offset + target_count
+if len(rows) < end:
+    raise SystemExit(
+        f"prepared evidence source has too few rows: source_rows={len(rows)} "
+        f"offset={offset} target_count={target_count}"
+    )
+selected = rows[offset:end]
+evidence_ids = [str(row.get("evidence_id") or "") for row in selected]
+if not all(evidence_ids) or len(set(evidence_ids)) != len(evidence_ids):
+    raise SystemExit("selected prepared evidence IDs must be non-empty and unique")
+
+destination.parent.mkdir(parents=True, exist_ok=True)
+destination.write_text(
+    "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in selected),
+    encoding="utf-8",
+)
+selection = {
+    "source": str(source),
+    "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+    "source_row_count": len(rows),
+    "offset": offset,
+    "selected_count": len(selected),
+    "selected_evidence_ids": evidence_ids,
+    "destination": str(destination),
+    "source_assets_policy": "read_only_reuse",
+}
+selection_path.write_text(
+    json.dumps(selection, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8",
+)
+print(json.dumps(selection, ensure_ascii=False))
+PY
 else
-  echo "stage=build_manifest"
-python -m egolife_two_user_qa build_manifest \
-  --output "${OUTDIR}/manifest.json" \
-  --no-overlays
+  stage_start "build_manifest"
+  "${PYTHON}" -P -m egolife_two_user_qa build_manifest \
+    --output "${OUTDIR}/manifest.json" \
+    --no-overlays
 
-echo "stage=mine_six_user_candidates"
-CANDIDATE_MODE_ARGS=()
-if [[ "${SINGLE_CANDIDATE_GROUP}" == "1" ]]; then
-  CANDIDATE_MODE_ARGS+=(--single-candidate-group)
-fi
-python "${PROJECT_ROOT}/group_relative_clip_sampling.py" \
-  --manifest "${OUTDIR}/manifest.json" \
-  --output "${OUTDIR}/six_user_candidates.jsonl" \
-  --output-dir "${OUTDIR}/candidate_assets" \
-  --review-dir "${OUTDIR}/candidate_review" \
-  --cache-dir "${CACHE_DIR}" \
-  --model-id "${CLIP_MODEL_ID}" \
-  --target-count "${EVIDENCE_TARGET}" \
-  --target-generation-groups "${TARGET_GENERATION_GROUPS}" \
-  --max-groups "${MAX_GROUPS}" \
-  --min-group-size 6 \
-  --selected-count 6 \
-  --duration-seconds "${EVIDENCE_DURATION_SECONDS}" \
-  --pruning-block-seconds "${PRUNING_BLOCK_SECONDS}" \
-  --pruning-cross-gap-mode center \
-  --pruning-max-cross-gap-seconds "${PRUNING_MAX_CROSS_GAP_SECONDS}" \
-  --sample-interval-seconds 1 \
-  --pairs-per-group 1 \
-  --topk 3 \
-  --min-topk-sim 0.75 \
-  --min-mean-sim 0.25 \
-  --max-mean-sim 0.70 \
-  --high-similarity-interval-threshold 0.82 \
-  --preserve-shared-anchor-seconds 4 \
-  --min-pruned-video-seconds 8 \
-  --pruning-protection-mode reject \
-  --random-seed 42 \
-  --download-media \
-  "${CANDIDATE_MODE_ARGS[@]}"
+  stage_start "mine_six_user_candidates"
+  "${PYTHON}" -P "${PACKAGE_ROOT}/group_relative_clip_sampling.py" \
+    --manifest "${OUTDIR}/manifest.json" \
+    --output "${OUTDIR}/six_user_candidates.jsonl" \
+    --output-dir "${OUTDIR}/candidate_assets" \
+    --review-dir "${OUTDIR}/candidate_review" \
+    --cache-dir "${CACHE_DIR}" \
+    --model-id "${CLIP_MODEL_ID}" \
+    --target-count "${EVIDENCE_TARGET}" \
+    --max-groups "${MAX_GROUPS}" \
+    --min-group-size 6 \
+    --selected-count 6 \
+    --duration-seconds 30 \
+    --sample-interval-seconds 1 \
+    --high-similarity-interval-threshold 0.82 \
+    --min-pruned-video-seconds 8 \
+    --random-seed 42 \
+    --ffmpeg-binary "${FFMPEG_BINARY}" \
+    --download-media
 fi
 
-python - "${OUTDIR}/six_user_candidates.jsonl" "${TARGET_GENERATION_GROUPS}" "${ONE_CANDIDATE_PER_GROUP}" <<'PY'
+stage_start "validate_six_user_candidates"
+"${PYTHON}" -P - "${OUTDIR}/six_user_candidates.jsonl" "${EVIDENCE_TARGET}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-target_generation_groups = int(sys.argv[2])
-one_candidate_per_group = bool(int(sys.argv[3]))
+expected_count = int(sys.argv[2])
 rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-if not rows:
-    raise SystemExit("no six-user candidate was materialized")
-all_generation_group_ids = sorted(
-    {str(row.get("generation_group_id")) for row in rows if row.get("generation_group_id")}
-)
-if len(all_generation_group_ids) != target_generation_groups:
+if len(rows) != expected_count:
     raise SystemExit(
-        "generation_group_count must equal target_generation_groups: "
-        f"actual={len(all_generation_group_ids)} target={target_generation_groups} "
-        f"group_ids={all_generation_group_ids}"
+        f"expected exactly {expected_count} six-user packets, materialized {len(rows)}"
     )
-generation_group_ids = sorted(
-    {str(row.get("generation_group_id")) for row in rows if row.get("generation_group_id")}
-)
-generation_group_count = len(generation_group_ids)
 expected_roles = [
     "speaker_all_clustering_frames",
     "provider_retained_cluster_frames",
@@ -519,7 +720,6 @@ expected_roles = [
     "provider_retained_cluster_frames",
     "provider_retained_cluster_frames",
 ]
-seen_group_speakers = set()
 for row in rows:
     users = row.get("input_users")
     clips = row.get("clips")
@@ -533,186 +733,150 @@ for row in rows:
         raise SystemExit("six media roles are not ordered correctly")
     if row.get("provider_users") != users[1:]:
         raise SystemExit("ordered provider contract mismatch")
-    speaker_index = row.get("speaker_index")
-    if not isinstance(speaker_index, int) or speaker_index not in range(6):
-        raise SystemExit(f"speaker_index must be an integer in 0..5: {speaker_index!r}")
-    group_speaker = (str(row.get("generation_group_id") or ""), speaker_index)
-    if group_speaker in seen_group_speakers:
-        raise SystemExit(f"duplicate generation group speaker candidate: {group_speaker}")
-    seen_group_speakers.add(group_speaker)
     attempts = row.get("speaker_attempts") or []
     if [attempt.get("speaker_index") for attempt in attempts] != list(range(6)):
         raise SystemExit("speaker attempts must visit indexes 0 through 5 in order")
-    for clip in clips:
+    pruning = row.get("speaker_consensus_pruning") or {}
+    if pruning.get("method") != "speaker_provider_all_pairs_provider_only":
+        raise SystemExit("six-user pruning method must use provider-only all-pairs comparison")
+    if pruning.get("comparison_scope") != "every_speaker_cluster_x_every_provider_cluster":
+        raise SystemExit("six-user pruning must compare every asker-provider cluster pair")
+    if pruning.get("pruned_side") != "providers_only" or pruning.get("speaker_preserved") is not True:
+        raise SystemExit("six-user pruning must preserve the asker and prune providers only")
+    speaker_index = int(pruning.get("speaker_index", -1))
+    provider_indices = [int(index) for index in (pruning.get("provider_indices") or [])]
+    if provider_indices != [index for index in range(6) if index != speaker_index]:
+        raise SystemExit("six-user pruning must cover all five providers")
+    speaker_cluster_count = int(pruning.get("speaker_cluster_count", -1))
+    provider_cluster_counts = pruning.get("provider_cluster_counts") or {}
+    expected_comparisons = speaker_cluster_count * sum(
+        int(provider_cluster_counts.get(str(index), -1))
+        for index in provider_indices
+    )
+    if expected_comparisons <= 0:
+        raise SystemExit("six-user pruning cluster counts must be positive")
+    if int(pruning.get("expected_pairwise_comparison_count", -1)) != expected_comparisons:
+        raise SystemExit("six-user pruning expected comparison count is inconsistent")
+    if int(pruning.get("pairwise_comparison_count", -1)) != expected_comparisons:
+        raise SystemExit("six-user pruning did not compare every asker-provider cluster pair")
+    pruning_videos = {
+        int(video.get("video_index", -1)): video
+        for video in (pruning.get("videos") or [])
+    }
+    if set(pruning_videos) != set(range(6)):
+        raise SystemExit("six-user pruning diagnostics must cover all six videos")
+    speaker_pruning = pruning_videos[speaker_index]
+    if (
+        speaker_pruning.get("marked_cluster_indices")
+        or speaker_pruning.get("remove_intervals")
+        or float(speaker_pruning.get("removed_duration_seconds") or 0.0) != 0.0
+    ):
+        raise SystemExit("asker clusters or intervals were pruned")
+    threshold = float(pruning.get("high_similarity_threshold"))
+    marked_by_provider = {index: set() for index in provider_indices}
+    above_threshold_pair_count = 0
+    for event in pruning.get("events") or []:
+        provider_index = int(event.get("provider_index", -1))
+        provider_cluster_index = int(event.get("provider_cluster_index", -1))
+        if provider_index not in marked_by_provider or provider_cluster_index < 0:
+            raise SystemExit("pruning event targets a non-provider cluster")
+        speaker_matches = event.get("speaker_matches") or []
+        if not speaker_matches or any(
+            float(match.get("similarity", -1.0)) < threshold
+            for match in speaker_matches
+        ):
+            raise SystemExit("pruning event contains a below-threshold cluster pair")
+        deleted_clusters = event.get("deleted_clusters") or []
+        if deleted_clusters != [{"video_index": provider_index, "cluster_index": provider_cluster_index}]:
+            raise SystemExit("pruning event must delete only its matched provider cluster")
+        marked_by_provider[provider_index].add(provider_cluster_index)
+        above_threshold_pair_count += len(speaker_matches)
+    if int(pruning.get("above_threshold_pair_count", -1)) != above_threshold_pair_count:
+        raise SystemExit("above-threshold comparison count is inconsistent")
+    for provider_index, marked_clusters in marked_by_provider.items():
+        if pruning_videos[provider_index].get("marked_cluster_indices") != sorted(marked_clusters):
+            raise SystemExit("provider pruning diagnostics do not match threshold events")
+    for index, clip in enumerate(clips):
         full_path = Path(str(clip.get("full_local_video") or ""))
         if not full_path.is_file():
-            raise SystemExit(f"missing full candidate media for {clip.get('agent_name')}")
-        mode = str(clip.get("generator_media_mode") or "")
-        if mode in {"all_clustering_frames_only", "retained_cluster_frames_only"}:
-            frame_paths = [
-                str(frame.get("path") or "")
-                for frame in clip.get("frames") or []
-                if isinstance(frame, dict)
-            ]
-            if not frame_paths or not all(Path(path).is_file() for path in frame_paths):
-                raise SystemExit(f"missing sampled generator frames for {clip.get('agent_name')}")
+            raise SystemExit(f"missing candidate media for {clip.get('agent_name')}")
+        if clip.get("local_video") or clip.get("generator_local_video"):
+            raise SystemExit("generator packet must not expose a generator MP4")
+        if clip.get("force_frame_inputs") is not True:
+            raise SystemExit("six-user generator clips must force image inputs")
+        frames = clip.get("frames") or []
+        if not frames or not all(Path(str(frame.get("path") or "")).is_file() for frame in frames):
+            raise SystemExit(f"missing generator frames for {clip.get('agent_name')}")
+        source_video_index = int((clip.get("temporal_pruning") or {}).get("source_video_index", -1))
+        video_pruning = pruning_videos.get(source_video_index)
+        if video_pruning is None:
+            raise SystemExit("clip pruning metadata references an unknown source video")
+        marked_clusters = {
+            int(value) for value in (video_pruning.get("marked_cluster_indices") or [])
+        }
+        expected_frame_count = sum(
+            len(cluster.get("member_indices") or [])
+            for cluster in (video_pruning.get("clusters") or [])
+            if index == 0 or int(cluster.get("cluster_index", -1)) not in marked_clusters
+        )
+        if len(frames) != expected_frame_count:
+            raise SystemExit(
+                f"generator frame count does not match retained cluster membership for "
+                f"{clip.get('agent_name')}: expected={expected_frame_count} actual={len(frames)}"
+            )
+        if [int(frame.get("sampled_frame_index", -1)) for frame in frames] != sorted(
+            int(frame.get("sampled_frame_index", -1)) for frame in frames
+        ):
+            raise SystemExit("generator frames must remain in chronological sampled-frame order")
+        if index == 0:
+            if clip.get("is_pruned") is not False:
+                raise SystemExit("speaker generator frame set must be marked unpruned")
+            if clip.get("generator_media_mode") != "all_clustering_frames_only":
+                raise SystemExit("speaker generator must receive all clustering frames")
+            if marked_clusters:
+                raise SystemExit("speaker generator frame set cannot omit a cluster")
         else:
-            generator_path = Path(str(clip.get("generator_local_video") or ""))
-            if not generator_path.is_file():
-                raise SystemExit(f"missing generator media for {clip.get('agent_name')}")
-group_paths = {}
-for row in rows:
-    group_id = str(row.get("generation_group_id") or "")
-    group_paths.setdefault(
-        group_id,
-        tuple(str(clip.get("full_local_video") or "") for clip in row.get("clips") or []),
-    )
-if len(group_paths) != target_generation_groups:
-    raise SystemExit(
-        f"expected exactly {target_generation_groups} distinct generation groups, "
-        f"got {sorted(group_paths)}"
-    )
-if len(set(group_paths.values())) != len(group_paths):
-    raise SystemExit("generation groups must reference different six-user video sets")
-print(
-    f"candidate_contract_passed rows={len(rows)} "
-    f"generation_groups={generation_group_count} group_ids={generation_group_ids} "
-    f"one_candidate_per_group={one_candidate_per_group}"
-)
+            if clip.get("is_pruned") is not True:
+                raise SystemExit("provider generator frame sets must be marked pruned")
+            if clip.get("generator_media_mode") != "retained_cluster_frames_only":
+                raise SystemExit("provider generator must receive retained cluster frames only")
+            if any(int(frame.get("cluster_index", -1)) in marked_clusters for frame in frames):
+                raise SystemExit("provider generator received a frame from a pruned cluster")
+print(f"candidate_contract_passed rows={len(rows)}")
 PY
 
-python - "${OUTDIR}/six_user_candidates.jsonl" "${QWEN_MEMORY_SAFE_VIDEO_FPS}" \
-  "${QWEN_MEMORY_SAFE_VIDEO_CACHE_DIR}" "${QWEN_MEMORY_SAFE_TRANSCODE_MAX_EDGE}" <<'PY'
+stage_start "decode_generator_images_preflight"
+"${PYTHON}" -P - "${OUTDIR}/six_user_candidates.jsonl" <<'PY'
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 
 from qwen_vl_utils import process_vision_info
 
-
-def cached_memory_safe_video(source: str, cache_dir: Path, *, fps: float, max_edge: int, crf: int = 23) -> str:
-    """Prepare exactly the same low-memory media used by the inference runner."""
-
-    source_path = Path(source).resolve()
-    stat = source_path.stat()
-    cache_label = ".".join(
-        (
-            f"{stat.st_dev:x}",
-            f"{stat.st_ino:x}",
-            str(stat.st_size),
-            str(stat.st_mtime_ns),
-            f"fps-{fps:g}",
-            f"edge-{max_edge}",
-            f"crf-{crf}",
-        )
-    )
-    output = cache_dir / f"{source_path.stem}.{cache_label}.mp4"
-    if output.is_file() and output.stat().st_size > 0:
-        return str(output)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    temporary = cache_dir / f".{source_path.stem}.{cache_label}.{os.getpid()}.tmp.mp4"
-    command = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        str(source_path),
-        "-vf",
-        ",".join(
-            (
-                f"fps={fps:g}",
-                f"scale={max_edge}:{max_edge}:force_original_aspect_ratio=decrease",
-                "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-            )
-        ),
-        "-an",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        str(crf),
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "+faststart",
-        str(temporary),
-    ]
-    print(
-        "qwen_memory_safe_preflight_transcode "
-        f"source={source_path} fps={fps:g} max_edge={max_edge}",
-        flush=True,
-    )
-    try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
-        if not temporary.is_file() or temporary.stat().st_size <= 0:
-            raise RuntimeError(f"ffmpeg did not create a usable preflight file: {temporary}")
-        temporary.replace(output)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-    return str(output)
-
-
 path = Path(sys.argv[1])
-video_fps = float(sys.argv[2])
-cache_dir = Path(sys.argv[3])
-max_edge = int(sys.argv[4])
 first_row = json.loads(next(line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()))
-sampled_modes = {"all_clustering_frames_only", "retained_cluster_frames_only"}
-clips = list(first_row.get("clips") or [])
-if len(clips) != 6:
-    raise SystemExit("six-user preflight requires six ordered clips")
-uses_sampled_frames = all(
-    str(clip.get("generator_media_mode") or "") in sampled_modes
-    for clip in clips
-)
-if uses_sampled_frames:
-    image_paths = [
-        str(frame.get("path") or "")
-        for clip in clips
-        for frame in clip.get("frames") or []
-        if isinstance(frame, dict)
-    ]
-    if not image_paths or not all(Path(item).is_file() for item in image_paths):
-        raise SystemExit("six-user image preflight requires sampled generator frames")
-    content = [
-        {
-            "type": "image",
-            "image": path,
-            "max_pixels": int(os.environ["QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS"]),
-        }
-        for path in image_paths
-    ]
-    content.append({"type": "text", "text": "six-user image runtime preflight"})
-    expected_media_count = len(image_paths)
-    preflight_mode = "sampled_frames"
-else:
-    source_paths = [str(clip["generator_local_video"]) for clip in clips]
-    if not all(Path(item).is_file() for item in source_paths):
-        raise SystemExit("six-user video preflight requires six materialized generator videos")
-    preflight_video_paths = [
-        cached_memory_safe_video(item, cache_dir, fps=video_fps, max_edge=max_edge)
-        for item in source_paths
-    ]
-    content = [
-        {
-            "type": "video",
-            "video": str(output),
-            "min_pixels": int(os.environ["QWEN_MEMORY_SAFE_MIN_VIDEO_PIXELS"]),
-            "max_pixels": int(os.environ["QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS"]),
-            "fps": video_fps,
-        }
-        for output in preflight_video_paths
-    ]
-    content.append({"type": "text", "text": "six-user runtime preflight"})
-    expected_media_count = 6
-    preflight_mode = "videos"
-messages = [{"role": "user", "content": content}]
+image_paths = [
+    str(frame["path"])
+    for clip in first_row["clips"]
+    for frame in (clip.get("frames") or [])
+]
+if not image_paths or not all(Path(item).is_file() for item in image_paths):
+    raise SystemExit("six-user image preflight requires materialized generator frames")
+
+messages = [{
+    "role": "user",
+    "content": [
+        *[
+            {
+                "type": "image",
+                "image": item,
+                "max_pixels": 65536,
+            }
+            for item in image_paths
+        ],
+        {"type": "text", "text": "six-user runtime preflight"},
+    ],
+}]
 try:
     image_inputs, video_inputs, _ = process_vision_info(
         messages,
@@ -724,137 +888,52 @@ except TypeError:
         image_inputs, video_inputs, _ = process_vision_info(messages, return_video_kwargs=True)
     except TypeError:
         image_inputs, video_inputs = process_vision_info(messages)
-if uses_sampled_frames:
-    if image_inputs is None or len(image_inputs) != expected_media_count:
-        raise SystemExit(
-            f"Qwen image preflight decoded {0 if image_inputs is None else len(image_inputs)} images"
-        )
-else:
-    if video_inputs is None or len(video_inputs) != expected_media_count:
-        raise SystemExit(f"Qwen video preflight decoded {0 if video_inputs is None else len(video_inputs)} videos")
-print(
-    f"six_user_media_preflight_passed mode={preflight_mode} "
-    f"media_count={expected_media_count} backend=decord",
-    flush=True,
-)
+if image_inputs is None or len(image_inputs) != len(image_paths):
+    raise SystemExit(
+        f"Qwen image preflight decoded {0 if image_inputs is None else len(image_inputs)} "
+        f"of {len(image_paths)} images"
+    )
+if video_inputs:
+    raise SystemExit("Qwen image preflight unexpectedly decoded generator videos")
+print(f"six_user_image_preflight_passed image_count={len(image_inputs)}")
 PY
 
-echo "stage=generate_six_user_qa"
-QA_TIME_ARGS=()
-EVIDENCE_INPUT_PATH="${OUTDIR}/six_user_candidates.jsonl"
-QA_PROFILE_ARGS=(--disable-thinking)
-if [[ "${SIX_USER_ONE_PASS_PROFILE}" == "1" ]]; then
-  QA_PROFILE_ARGS=(--six-user-one-pass-profile)
-elif [[ "${SIX_USER_TEN_MINUTE_REASONING_PROFILE}" == "1" ]]; then
-  QA_PROFILE_ARGS=(
-    --six-user-ten-minute-reasoning-profile
-    --formality-max-new-tokens "${FORMALITY_MAX_NEW_TOKENS}"
-  )
-fi
-if [[ "${SIX_USER_TEN_MINUTE_FAST_PROFILE}" == "1" ]]; then
-  QA_PROFILE_ARGS=(--six-user-ten-minute-fast-profile)
-fi
-if [[ "${FAIL_FAST_REVIEW}" == "1" ]]; then
-  QA_PROFILE_ARGS+=(--fail-fast-review)
-fi
-if [[ "${QA_TIME_BUDGET_MODE}" == "1" ]]; then
-  QA_TIME_ARGS+=(
-    --deadline-epoch-seconds "${QA_DEADLINE_EPOCH_SECONDS}"
-    --repeat-evidence
-    --attempts-output "${OUTDIR}/qa_mcq.attempts.jsonl"
-  )
-  if [[ -n "${MAX_GENERATION_SLOTS}" ]]; then
-    QA_TIME_ARGS+=(--max-generation-slots "${MAX_GENERATION_SLOTS}")
-  fi
-fi
-if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then
-  EVIDENCE_INPUT_PATH="${OUTDIR}/one_pass_evidence.jsonl"
-  QA_TIME_ARGS+=(--attempts-output "${OUTDIR}/qa_mcq.attempts.jsonl")
-  if [[ -n "${MAX_GENERATION_SLOTS}" ]]; then
-    QA_TIME_ARGS+=(--max-generation-slots "${MAX_GENERATION_SLOTS}")
-  fi
-fi
-set +e
-python -m egolife_two_user_qa generate_video_qa_loop \
-  --evidence "${EVIDENCE_INPUT_PATH}" \
+stage_start "generate_six_user_qa"
+"${PYTHON}" -P -m egolife_two_user_qa generate_video_qa_loop \
+  --evidence "${OUTDIR}/six_user_candidates.jsonl" \
   --output "${OUTDIR}/qa_mcq.jsonl" \
   --prompts-output "${OUTDIR}/video_first_prompts.jsonl" \
   --rejected-output "${OUTDIR}/qa_mcq.rejected.jsonl" \
   --intermediate-output "${OUTDIR}/qa_mcq.intermediate.jsonl" \
   --target-count "${ACCEPTED_TARGET}" \
   --max-attempts "${MAX_ATTEMPTS}" \
-  --backend "${INFERENCE_BACKEND}" \
-  --model-id "${MODEL_DIR}" \
+  --backend transformers-local-memory-safe \
+  --model-id "${MODEL_ID}" \
   --dtype bfloat16 \
-  --max-image-pixels "${QWEN_MEMORY_SAFE_MAX_IMAGE_PIXELS}" \
-  --max-new-tokens "${MAX_NEW_TOKENS}" \
+  --max-image-pixels 65536 \
+  --max-new-tokens 2048 \
+  --disable-thinking \
   --generation-mode baseline \
   --generator-decode-mode "${GENERATOR_DECODE_MODE}" \
   --generator-temperature "${GENERATOR_TEMPERATURE}" \
   --generator-top-p "${GENERATOR_TOP_P}" \
+  --generator-top-k "${GENERATOR_TOP_K}" \
   --judge-video-source full \
   --fixed-question-type-schedule \
-  --question-types neutral \
-  "${QA_PROFILE_ARGS[@]}" \
-  "${QA_TIME_ARGS[@]}"
-GENERATION_EXIT_CODE="$?"
-set -e
+  --question-types neutral
 
-if [[ "${GENERATION_EXIT_CODE}" -ne 0 && "${TERMINATION_REQUESTED}" != "1" && "${ONE_PASS_30_SLOT_MODE}" != "1" ]]; then
-  echo "STOP: QA generation failed exit_code=${GENERATION_EXIT_CODE}"
-  exit "${GENERATION_EXIT_CODE}"
-fi
-
-if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then
-  "${PYTHON}" "${PROJECT_ROOT}/tools/summarize_six_user_one_pass.py" \
-    --evidence "${OUTDIR}/one_pass_evidence.jsonl" \
-    --accepted "${OUTDIR}/qa_mcq.jsonl" \
-    --rejected "${OUTDIR}/qa_mcq.rejected.jsonl" \
-    --prompts "${OUTDIR}/video_first_prompts.jsonl" \
-    --attempts "${OUTDIR}/qa_mcq.attempts.jsonl" \
-    --output "${OUTDIR}/six_user_qa_result.json" \
-    --manifest "${OUTDIR}/job_manifest.json" \
-    --expected-slots 30 \
-    --generation-exit-code "${GENERATION_EXIT_CODE}"
-else
-python - "${OUTDIR}" "${ACCEPTED_TARGET}" "${ALLOW_PARTIAL}" "${MAX_ATTEMPTS}" \
-  "${QA_TIME_BUDGET_MODE}" "${EVIDENCE_DURATION_SECONDS}" "${PRUNING_BLOCK_SECONDS}" \
-  "${QA_DEADLINE_EPOCH_SECONDS}" "${MAX_GENERATION_SLOTS}" \
-  "${TERMINATION_REQUESTED}" "${GENERATION_EXIT_CODE}" \
-  "${RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED}" \
-  "${GENERATOR_DECODE_MODE}" "${GENERATOR_TEMPERATURE}" "${GENERATOR_TOP_P}" \
-  "${EXPECTED_QA_PER_GROUP}" <<'PY'
+stage_start "validate_generated_qa"
+"${PYTHON}" -P - "${OUTDIR}" "${ACCEPTED_TARGET}" "${ALLOW_PARTIAL}" "${MAX_ATTEMPTS}" <<'PY'
 import json
 import sys
-import time
 from pathlib import Path
-
-from egolife_two_user_qa.video_qa_loop import (
-    prompt_rows_by_generation_identity,
-    summarize_review_gate_attempts,
-)
 
 output_dir = Path(sys.argv[1])
 accepted_target = int(sys.argv[2])
 allow_partial = bool(int(sys.argv[3]))
 max_attempts = int(sys.argv[4])
-time_budget_mode = bool(int(sys.argv[5]))
-evidence_duration_seconds = float(sys.argv[6])
-if evidence_duration_seconds <= 0 or evidence_duration_seconds % 30 != 0:
-    raise SystemExit(
-        "evidence_duration_seconds must be a positive multiple of 30: "
-        f"actual={evidence_duration_seconds}"
-    )
-pruning_block_seconds = float(sys.argv[7])
-deadline_epoch_seconds = float(sys.argv[8])
-max_generation_slots = int(sys.argv[9]) if sys.argv[9] else None
-termination_requested = bool(int(sys.argv[10]))
-generation_exit_code = int(sys.argv[11])
-runtime_probe_allow_zero_accepted = bool(int(sys.argv[12]))
-generator_decode_mode = sys.argv[13]
-generator_temperature = float(sys.argv[14])
-generator_top_p = float(sys.argv[15])
-expected_qa_per_group = int(sys.argv[16])
+if max_attempts < 1:
+    raise SystemExit("max_attempts must be at least 1")
 
 def read_rows(name):
     path = output_dir / name
@@ -862,106 +941,217 @@ def read_rows(name):
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
-
-def model_call_count(row):
-    count = 2 if row.get("execution_mode") == "reasoned_then_finalize" else 1
-    repair = row.get("format_repair")
-    if isinstance(repair, dict) and repair.get("attempted") is True:
-        count += 1
-    return count
-
 accepted = read_rows("qa_mcq.jsonl")
 rejected = read_rows("qa_mcq.rejected.jsonl")
 prompts = read_rows("video_first_prompts.jsonl")
 candidates = read_rows("six_user_candidates.jsonl")
-intermediate = read_rows("qa_mcq.intermediate.jsonl")
-attempt_rows = read_rows("qa_mcq.attempts.jsonl")
-time_budget_partials = [
-    row for row in intermediate if row.get("status") == "time_budget_partial"
-]
 generation = [row for row in prompts if row.get("stage") == "generation"]
 formality = [row for row in prompts if row.get("stage") == "qa_formality_judge"]
-groundedness = [row for row in prompts if row.get("stage") == "evidence_groundedness_judge"]
-answerability = [row for row in prompts if row.get("stage") == "answerability"]
+groundedness_maps = [row for row in prompts if row.get("stage") == "evidence_segment_observation"]
+groundedness_reductions = [
+    row for row in prompts if row.get("stage") == "evidence_groundedness_aggregation"
+]
+answerability_plans = [row for row in prompts if row.get("stage") == "answerability_fact_plan"]
+answerability_maps = [row for row in prompts if row.get("stage") == "answerability_user_fact_audit"]
+answerability_reductions = [
+    row for row in prompts if row.get("stage") == "answerability_condition_aggregation"
+]
+
+candidate_evidence_ids = [str(row.get("evidence_id") or "") for row in candidates]
+if not all(candidate_evidence_ids) or len(set(candidate_evidence_ids)) != len(candidates):
+    raise SystemExit("candidate evidence IDs must be non-empty and unique")
+candidate_evidence_id_set = set(candidate_evidence_ids)
+candidate_image_counts = {
+    str(row.get("evidence_id")): sum(
+        len(clip.get("frames") or []) for clip in (row.get("clips") or [])
+    )
+    for row in candidates
+}
+generation_attempts_by_evidence = {evidence_id: [] for evidence_id in candidate_evidence_ids}
+for row in generation:
+    evidence_id = str(row.get("evidence_id") or "")
+    attempt = row.get("attempt")
+    if evidence_id not in candidate_evidence_id_set:
+        raise SystemExit(f"generation trace contains unknown evidence_id: {evidence_id!r}")
+    if isinstance(attempt, bool) or not isinstance(attempt, int):
+        raise SystemExit(f"generation attempt must be an integer: {evidence_id} {attempt!r}")
+    generation_attempts_by_evidence[evidence_id].append(attempt)
+for evidence_id, attempts in generation_attempts_by_evidence.items():
+    if not attempts:
+        raise SystemExit(f"every candidate packet must enter generation: {evidence_id}")
+    expected_attempts = list(range(1, len(attempts) + 1))
+    if attempts != expected_attempts:
+        raise SystemExit(
+            f"generation attempts must be contiguous and ordered for {evidence_id}: "
+            f"expected={expected_attempts} actual={attempts}"
+        )
+    if len(attempts) > max_attempts:
+        raise SystemExit(
+            f"generation attempts exceed MAX_ATTEMPTS for {evidence_id}: "
+            f"count={len(attempts)} max={max_attempts}"
+        )
 
 for row in generation:
-    if not (len(row.get("image_paths") or []) > 0 or len(row.get("video_paths") or []) == 6):
-        raise SystemExit("generator media must contain sampled images or six videos")
-for row in groundedness:
-    if len(row.get("video_paths") or []) != 6 or row.get("media_role") != "full":
-        raise SystemExit("groundedness_video_count must be 6 full videos")
+    evidence_id = str(row.get("evidence_id") or "")
+    if row.get("video_paths"):
+        raise SystemExit("generator_video_count must be 0")
+    if len(row.get("image_paths") or []) != candidate_image_counts[evidence_id]:
+        raise SystemExit("generator_image_count must match the candidate frame contract")
+    expected_decode = {
+        "mode": "sampling",
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "top_k": 40,
+    }
+    if row.get("generator_decode") != expected_decode:
+        raise SystemExit(
+            f"generator decoding contract mismatch: "
+            f"expected={expected_decode} actual={row.get('generator_decode')}"
+        )
+    prompt = str(row.get("prompt") or "")
+    required_prompt_fragments = [
+        "speaker would naturally have and genuinely want to ask",
+        "speaker's sampled frames alone must remain insufficient",
+        "every CLIP-sampled frame from the speaker",
+        "only sampled members of provider clusters that survived pruning",
+        "It receives no MP4",
+        "Concurrent-activity restriction",
+        "Do not generate options that encode pairs of concurrent activities",
+    ]
+    missing_fragments = [fragment for fragment in required_prompt_fragments if fragment not in prompt]
+    if missing_fragments:
+        raise SystemExit(f"generation prompt is missing six-user guidance: {missing_fragments}")
+    forbidden_prompt_fragments = [
+        "The following are structural hints",
+        "Information gap.",
+        "Cross-view comparison or asymmetry.",
+        "Post-handoff recipient follow-up.",
+        "Temporal difference.",
+        "State verification or change.",
+        "Six-user interaction-chain example",
+        "red tape dispenser with a torn white label",
+        "2D gaze",
+        "gaze summary",
+        "gaze information",
+        "Object-detection hints",
+        "CLIP retrieval hints",
+        "packet_image_index",
+        "original_timestamp_seconds",
+        "packet_image_order",
+    ]
+    forbidden_hits = [
+        fragment
+        for fragment in forbidden_prompt_fragments
+        if fragment.lower() in prompt.lower()
+    ]
+    if forbidden_hits:
+        raise SystemExit(
+            f"generation prompt rendered retired content: {forbidden_hits}"
+        )
+for row in formality:
+    prompt = str(row.get("prompt") or "")
+    required_fragments = [
+        "3. other_person_activity_query",
+        "one provider's event used to query another provider's activity",
+        "FAIL pair-matching questions",
+    ]
+    missing_fragments = [fragment for fragment in required_fragments if fragment not in prompt]
+    if missing_fragments:
+        raise SystemExit(
+            "qa_formality prompt is missing the concurrent-activity blocker: "
+            f"{missing_fragments}"
+        )
+for row in groundedness_maps:
+    media_summary = row.get("media_summary") or {}
+    if media_summary.get("video_count") != 1:
+        raise SystemExit("each groundedness map call must receive one 30-second source segment")
+    if media_summary.get("media_role") != "ordered_source_segments_one_user":
+        raise SystemExit("groundedness map call has the wrong media role")
+    prompt = str(row.get("prompt") or "")
+    if "Stage marker: evidence_segment_observation" not in prompt:
+        raise SystemExit("groundedness map prompt is missing its stage contract")
+for row in groundedness_reductions:
+    if (row.get("media_summary") or {}).get("video_count") != 0:
+        raise SystemExit("groundedness reduction must be text only")
+for row in answerability_plans:
+    if "Stage marker: answerability_fact_plan" not in str(row.get("prompt") or ""):
+        raise SystemExit("answerability fact plan prompt is missing")
+for row in answerability_maps:
+    if (row.get("media_summary") or {}).get("video_count") != 1:
+        raise SystemExit("each answerability map call must receive one source segment")
+    prompt = str(row.get("prompt") or "")
+    if "Stage marker: answerability_user_fact_audit" not in prompt:
+        raise SystemExit("answerability map prompt is missing its stage contract")
+    if "You must choose exactly one answer" in prompt or '"choice"' in prompt:
+        raise SystemExit("six-user answerability map prompt requests a forced-choice answer")
+for row in answerability_reductions:
+    if (row.get("media_summary") or {}).get("video_count") != 0:
+        raise SystemExit("answerability condition reduction must be text only")
 
-by_answerability_identity = prompt_rows_by_generation_identity(
-    prompts,
-    stage="answerability",
-)
-by_formality_identity = prompt_rows_by_generation_identity(
-    prompts,
-    stage="qa_formality_judge",
-)
-by_groundedness_identity = prompt_rows_by_generation_identity(
-    prompts,
-    stage="evidence_groundedness_judge",
-)
+by_qa_attempt = {}
+for row in [*answerability_plans, *answerability_maps, *answerability_reductions]:
+    key = (str(row.get("qa_id")), row.get("attempt"))
+    by_qa_attempt.setdefault(key, []).append(row)
+
+formality_by_qa = {
+    str(row.get("qa_id"))
+    for row in formality
+}
 
 accepted_answerability_call_counts = []
 for row in accepted:
-    generation_slot_id = str(row.get("generation_slot_id") or "")
+    evidence_id = str(row.get("evidence_id") or "")
     qa_id = str(row.get("qa_id"))
     attempt = row.get("attempt_count")
-    identity = (str(row.get("generation_slot_id")), qa_id, attempt)
-    if not generation_slot_id:
-        raise SystemExit(f"accepted QA is missing generation_slot_id: qa_id={qa_id}")
-    answerability_prompt_rows = by_answerability_identity.get(identity, [])
-    accepted_answerability_call_counts.append(
-        sum(model_call_count(item) for item in answerability_prompt_rows)
-    )
-    if len(answerability_prompt_rows) < 3:
+    if evidence_id not in generation_attempts_by_evidence:
+        raise SystemExit(f"accepted QA contains unknown evidence_id: {evidence_id!r}")
+    if attempt != generation_attempts_by_evidence[evidence_id][-1]:
         raise SystemExit(
-            f"accepted QA must have at least 3 answerability calls including minimum-set audit: "
-            f"generation_slot_id={generation_slot_id} qa_id={qa_id} "
-            f"attempt={attempt} count={len(answerability_prompt_rows)}"
+            f"accepted QA must stop on its final generation attempt: {evidence_id} "
+            f"accepted_attempt={attempt!r} attempts={generation_attempts_by_evidence[evidence_id]}"
         )
+    rows = by_qa_attempt.get((qa_id, attempt), [])
+    accepted_answerability_call_counts.append(len(rows))
+    if len(rows) != 9:
+        raise SystemExit(
+            f"accepted QA must have exactly 9 answerability calls: qa_id={qa_id} "
+            f"attempt={attempt} count={len(rows)}"
+        )
+    stage_counts = {
+        stage: sum(item.get("stage") == stage for item in rows)
+        for stage in {
+            "answerability_fact_plan",
+            "answerability_user_fact_audit",
+            "answerability_condition_aggregation",
+        }
+    }
+    if stage_counts != {
+        "answerability_fact_plan": 1,
+        "answerability_user_fact_audit": 6,
+        "answerability_condition_aggregation": 2,
+    }:
+        raise SystemExit(f"accepted QA has invalid answerability stages: {stage_counts}")
     answerability_rows = {
-        str(item.get("condition_type") or ""): item
-        for item in answerability_prompt_rows
+        str(item.get("condition_id") or "").split("::", 1)[0]: item
+        for item in rows
+        if item.get("stage") == "answerability_condition_aggregation"
     }
     speaker_answerability = answerability_rows.get("speaker_only")
     all_six_answerability = answerability_rows.get("combined_all_six_users")
-    minimum_set_rows = [
-        item
-        for item in answerability_prompt_rows
-        if str(item.get("condition_type") or "") == "minimum_required_users"
-    ]
-    if (
-        speaker_answerability is None
-        or all_six_answerability is None
-        or not minimum_set_rows
-    ):
+    if speaker_answerability is None or all_six_answerability is None:
         raise SystemExit(f"accepted QA is missing an answerability condition: {qa_id}")
     speaker_user = str(row.get("speaker_user") or "")
     if not speaker_user:
         raise SystemExit(f"accepted row is missing speaker_user: {qa_id}")
     if speaker_answerability.get("condition_id") != f"speaker_only::{speaker_user}":
         raise SystemExit(f"answerability condition does not match speaker: {qa_id}")
-    if speaker_answerability.get("media_role") != "full":
-        raise SystemExit(f"speaker-only answerability must use full media: {qa_id}")
-    speaker_evidence = [
-        item
-        for item in (row.get("video_evidence") or [])
-        if str(item.get("user") or "") == speaker_user
-    ]
-    if len(speaker_evidence) != 1:
-        raise SystemExit(f"accepted row must identify exactly one speaker video: {qa_id}")
-    speaker_full_video = str(speaker_evidence[0].get("full_local_video") or "")
-    if not speaker_full_video:
-        raise SystemExit(f"accepted row speaker full video is missing: {qa_id}")
-    if speaker_answerability.get("video_paths") != [speaker_full_video]:
-        raise SystemExit(f"answerability video does not match speaker full video: {qa_id}")
-    if len(all_six_answerability.get("video_paths") or []) != 6:
-        raise SystemExit(f"all-six answerability must use six full videos: {qa_id}")
+    if (speaker_answerability.get("media_summary") or {}).get("video_count") != 0:
+        raise SystemExit(f"speaker-only reduction must be text only: {qa_id}")
+    if (all_six_answerability.get("media_summary") or {}).get("video_count") != 0:
+        raise SystemExit(f"all-six reduction must be text only: {qa_id}")
     gate = (((row.get("review") or {}).get("answerability") or {}).get("gate") or {})
     required = {
+        "answerability_mode": "shared_fact_visibility_audit",
         "speaker_only_answerable": False,
         "all_six_answerable": True,
         "answerability_evaluated_condition_count": 2,
@@ -969,42 +1159,7 @@ for row in accepted:
     for key, expected in required.items():
         if gate.get(key) != expected:
             raise SystemExit(f"accepted row has invalid {key}: {gate.get(key)!r}")
-    minimum_required_users = row.get("minimum_required_users")
-    required_users = list(row.get("required_users") or [])
-    if (
-        not isinstance(minimum_required_users, list)
-        or not minimum_required_users
-        or len(set(minimum_required_users)) != len(minimum_required_users)
-        or any(user not in required_users for user in minimum_required_users)
-    ):
-        raise SystemExit(
-            "accepted QA minimum_required_users must be a non-empty ordered subset: "
-            f"qa_id={qa_id} minimum={minimum_required_users!r} "
-            f"required_users={required_users!r}"
-        )
-    if gate.get("minimum_required_users") != minimum_required_users:
-        raise SystemExit(
-            "accepted QA top-level minimum_required_users does not match answerability gate: "
-            f"qa_id={qa_id} top_level={minimum_required_users!r} "
-            f"gate={gate.get('minimum_required_users')!r}"
-        )
-    groundedness_rows = by_groundedness_identity.get(identity, [])
-    if len(groundedness_rows) != 1:
-        raise SystemExit(
-            f"accepted QA must have exactly 1 simple evidence groundedness call: "
-            f"generation_slot_id={generation_slot_id} qa_id={qa_id} "
-            f"attempt={attempt} count={len(groundedness_rows)}"
-        )
-    groundedness_row = groundedness_rows[0]
-    if (
-        len(groundedness_row.get("video_paths") or []) != 6
-        or groundedness_row.get("media_role") != "full"
-    ):
-        raise SystemExit(
-            "accepted QA simple evidence groundedness must use six full videos: "
-            f"qa_id={qa_id}"
-        )
-    if len(by_formality_identity.get(identity, [])) != 1:
+    if str(row.get("qa_id")) not in formality_by_qa:
         raise SystemExit(f"accepted row is missing qa_formality judge prompt: {row.get('qa_id')}")
     formality_check = (
         ((((row.get("review") or {}).get("judger") or {}).get("checks") or {}).get(
@@ -1014,182 +1169,66 @@ for row in accepted:
     if formality_check.get("status") != "PASS":
         raise SystemExit(f"accepted row has non-passing qa_formality gate: {row.get('qa_id')}")
 
-generated_count = len(accepted) + len(rejected) + len(time_budget_partials)
-attempted_count = generated_count if time_budget_mode else len(accepted) + len(rejected)
-completed_review_count = 0
-completed_rows = [
-    *accepted,
-    *rejected,
-    *[row.get("qa") or {} for row in time_budget_partials],
-]
+accepted_evidence_ids = [str(row.get("evidence_id") or "") for row in accepted]
+rejected_evidence_ids = [str(row.get("evidence_id") or "") for row in rejected]
+outcome_evidence_ids = accepted_evidence_ids + rejected_evidence_ids
+if not all(outcome_evidence_ids):
+    raise SystemExit("accepted and rejected packet outcomes must have non-empty evidence IDs")
+if len(set(outcome_evidence_ids)) != len(outcome_evidence_ids):
+    raise SystemExit("each candidate packet must have exactly one accepted or rejected outcome")
+if set(outcome_evidence_ids) != candidate_evidence_id_set:
+    raise SystemExit("accepted and rejected outcomes must cover every candidate packet")
+for evidence_id in rejected_evidence_ids:
+    attempts = generation_attempts_by_evidence[evidence_id]
+    if len(attempts) != max_attempts:
+        raise SystemExit(
+            f"rejected packet must exhaust MAX_ATTEMPTS: {evidence_id} "
+            f"count={len(attempts)} max={max_attempts}"
+        )
 
-def has_complete_three_judge_review(row):
-    review = row.get("review") or {}
-    checks = ((review.get("judger") or {}).get("checks") or {})
-    evaluations = ((review.get("answerability") or {}).get("evaluations") or [])
-    condition_types = {
-        str(item.get("condition_type") or "")
-        for item in evaluations
-    }
-    return (
-        (checks.get("qa_formality") or {}).get("status") in {"PASS", "FAIL"}
-        and (checks.get("evidence_groundedness") or {}).get("status") in {"PASS", "FAIL"}
-        and (checks.get("answerability") or {}).get("status") in {"PASS", "FAIL"}
-        and condition_types == {"speaker_only", "combined_all_six_users"}
-    )
-
-for row in completed_rows:
-    if has_complete_three_judge_review(row):
-        completed_review_count += 1
-completed_three_judge_attempt_count = sum(
-    1 for row in attempt_rows if has_complete_three_judge_review(row.get("qa") or {})
-)
+attempted_count = len(outcome_evidence_ids)
 answerability_call_count = (
     accepted_answerability_call_counts[0]
     if accepted_answerability_call_counts
-    else (3 if completed_review_count else 0)
+    else 0
 )
-generator_call_count = model_call_count(generation[0]) if generation else 0
-groundedness_call_count = model_call_count(groundedness[0]) if groundedness else 0
-review_summary = summarize_review_gate_attempts(
-    accepted,
-    rejected,
-    max_attempts=max_attempts,
-)
-deadline_stop = bool(time_budget_partials) or (
-    time_budget_mode and time.time() >= deadline_epoch_seconds
-) or termination_requested
-completed_slots_by_speaker = {}
-for row in [*accepted, *rejected, *time_budget_partials]:
-    speaker = str(row.get("speaker_index"))
-    completed_slots_by_speaker[speaker] = completed_slots_by_speaker.get(speaker, 0) + 1
-attempt_count_distribution = {}
-for row in [*accepted, *rejected, *time_budget_partials]:
-    count = row.get("attempt_count")
-    if count is None:
-        count = len(row.get("attempts") or [])
-    key = str(count)
-    attempt_count_distribution[key] = attempt_count_distribution.get(key, 0) + 1
-generation_group_ids = {
-    str(row.get("generation_group_id"))
-    for row in [*accepted, *rejected, *time_budget_partials]
-    if row.get("generation_group_id")
-}
-completed_slots_by_group = {}
-for row in [*accepted, *rejected, *time_budget_partials]:
-    group_id = str(row.get("generation_group_id") or "missing-group")
-    completed_slots_by_group[group_id] = completed_slots_by_group.get(group_id, 0) + 1
-completed_slots_by_group_and_speaker = {}
-for row in [*accepted, *rejected, *time_budget_partials]:
-    group_id = str(row.get("generation_group_id") or "missing-group")
-    speaker_index = row.get("speaker_index")
-    key = f"{group_id}::speaker_{speaker_index}"
-    completed_slots_by_group_and_speaker[key] = (
-        completed_slots_by_group_and_speaker.get(key, 0) + 1
-    )
-eligible_group_speakers = {
-    f"{str(row.get('generation_group_id') or 'missing-group')}::speaker_{row.get('speaker_index')}"
-    for row in candidates
-}
-minimum_slots_per_eligible_speaker = 2
-speaker_slot_target_reached = (
-    expected_qa_per_group <= 0
-    or (
-        bool(eligible_group_speakers)
-        and all(
-            completed_slots_by_group_and_speaker.get(key, 0)
-            >= minimum_slots_per_eligible_speaker
-            for key in eligible_group_speakers
-        )
-    )
-)
-qa_per_group_target_reached = (
-    expected_qa_per_group <= 0
-    or (
-        len(completed_slots_by_group) == len(generation_group_ids)
-        and all(
-            count >= expected_qa_per_group
-            for count in completed_slots_by_group.values()
-        )
-    )
-)
-if time_budget_mode:
-    if (
-        len(accepted) > 0
-        and generated_count > 0
-        and completed_review_count > 0
-        and qa_per_group_target_reached
-        and speaker_slot_target_reached
-    ):
-        status = "partial" if deadline_stop else "completed"
-    elif runtime_probe_allow_zero_accepted and completed_review_count > 0:
-        status = "runtime_passed_no_accepted"
-    else:
-        status = "failed"
-elif len(accepted) >= accepted_target:
+if len(accepted) >= accepted_target:
     status = "passed"
-elif runtime_probe_allow_zero_accepted and len(accepted) == 0 and completed_review_count > 0:
-    status = "runtime_passed_no_accepted"
-elif allow_partial and len(accepted) > 0 and completed_review_count > 0:
+elif allow_partial and accepted:
     status = "partial"
 else:
     status = "failed"
 result = {
     "status": status,
-    "objective": "time_budgeted_generation" if time_budget_mode else "accepted_target_generation",
     "candidate_count": len(candidates),
+    "generation_packet_count": len(generation_attempts_by_evidence),
+    "generation_attempt_count": len(generation),
+    "retried_packet_count": sum(
+        len(attempts) > 1 for attempts in generation_attempts_by_evidence.values()
+    ),
+    "max_observed_attempts_per_packet": max(
+        (len(attempts) for attempts in generation_attempts_by_evidence.values()),
+        default=0,
+    ),
+    "max_attempts_per_packet": max_attempts,
     "attempted_count": attempted_count,
-    "generated_count": generated_count,
     "accepted_count": len(accepted),
     "rejected_count": len(rejected),
-    "time_budget_partial_count": len(time_budget_partials),
-    "completed_attempt_count": len(attempt_rows),
-    "completed_three_judge_attempt_count": completed_three_judge_attempt_count,
-    "attempt_count_distribution": attempt_count_distribution,
-    "completed_slots_by_speaker": completed_slots_by_speaker,
-    "evidence_duration_seconds": evidence_duration_seconds,
-    "pruning_block_seconds": pruning_block_seconds,
-    "generation_group_ids": sorted(generation_group_ids),
-    "completed_slots_by_group": completed_slots_by_group,
-    "completed_slots_by_group_and_speaker": completed_slots_by_group_and_speaker,
-    "minimum_slots_per_eligible_speaker": minimum_slots_per_eligible_speaker,
-    "speaker_slot_target_reached": speaker_slot_target_reached,
-    "expected_qa_per_generation_group": expected_qa_per_group,
-    "qa_per_group_target_reached": qa_per_group_target_reached,
-    "deadline_stop": deadline_stop,
-    "termination_requested": termination_requested,
-    "generation_exit_code": generation_exit_code,
-    "runtime_probe_allow_zero_accepted": runtime_probe_allow_zero_accepted,
-    "max_generation_slots": max_generation_slots,
-    "generation_slot_target_reached": (
-        max_generation_slots is None or generated_count >= max_generation_slots
-    ),
-    "acceptance_rate": review_summary["acceptance_rate"],
-    "generator_attempt_count": review_summary["generator_attempt_count"],
-    "accepted_by_attempt": review_summary["accepted_by_attempt"],
-    "rejected_after_max_attempts": review_summary["rejected_after_max_attempts"],
-    "gate_review_by_attempt": review_summary["gate_review_by_attempt"],
-    "gate_review_overall": review_summary["gate_review_overall"],
     "accepted_target": accepted_target,
     "target_reached": len(accepted) >= accepted_target,
     "allow_partial": allow_partial,
+    "generator_media_type": "images_only",
     "generator_video_count": 0,
-    "generator_sampled_frame_mode": True,
-    "generator_call_count": generator_call_count,
-    "groundedness_video_count": 6,
-    "groundedness_call_count": groundedness_call_count,
-    "evidence_segment_observation_count": 0,
-    "evidence_groundedness_aggregation_count": 0,
+    "minimum_generator_image_count": min(candidate_image_counts.values(), default=0),
+    "maximum_generator_image_count": max(candidate_image_counts.values(), default=0),
+    "groundedness_visual_call_count": 6,
+    "groundedness_max_videos_per_call": 1,
+    "groundedness_mode": "per_user_source_segment_map_reduce",
     "answerability_call_count": answerability_call_count,
-    "runtime_completed_review_count": completed_review_count,
+    "answerability_mode": "shared_fact_visibility_audit",
     "speaker_only_answerable": False if accepted else None,
     "all_six_answerable": True if accepted else None,
     "answerability_evaluated_condition_count": 2,
-    "generator_decode": {
-        "mode": generator_decode_mode,
-        "temperature": generator_temperature,
-        "top_p": generator_top_p,
-    },
 }
 (output_dir / "six_user_qa_result.json").write_text(
     json.dumps(result, ensure_ascii=False, indent=2) + "\n",
@@ -1208,27 +1247,18 @@ if status == "failed":
     )
 PY
 
-fi
+stage_start "validate_outputs"
+"${PYTHON}" -P -m egolife_two_user_qa validate_outputs \
+  --qa "${OUTDIR}/qa_mcq.jsonl" \
+  --csv-output "${OUTDIR}/qa_mcq.csv" \
+  --human-review-output "${OUTDIR}/human_review_sheet.md" \
+  --report "${OUTDIR}/generation_report.md" \
+  --strict-review
 
-if [[ -s "${OUTDIR}/qa_mcq.jsonl" ]]; then
-  python -m egolife_two_user_qa validate_outputs \
-    --qa "${OUTDIR}/qa_mcq.jsonl" \
-    --csv-output "${OUTDIR}/qa_mcq.csv" \
-    --human-review-output "${OUTDIR}/human_review_sheet.md" \
-    --report "${OUTDIR}/generation_report.md" \
-    --strict-review
+stage_start "materialize_review_videos"
+"${PYTHON}" -P -m egolife_two_user_qa materialize_review_videos \
+  --qa "${OUTDIR}/qa_mcq.jsonl" \
+  --output-dir "${OUTDIR}/review_videos"
 
-  python -m egolife_two_user_qa materialize_review_videos \
-    --qa "${OUTDIR}/qa_mcq.jsonl" \
-    --output-dir "${OUTDIR}/review_videos"
-else
-  echo "No accepted QA rows; semantic rejections remain recorded for pilot analysis."
-fi
-
-if [[ -s "${OUTDIR}/six_user_qa_result.json" ]] && [[ -f "${PROJECT_ROOT}/tools/render_six_user_10min_review.py" ]]; then
-  python "${PROJECT_ROOT}/tools/render_six_user_10min_review.py" \
-    --output-dir "${OUTDIR}" \
-    --output "${OUTDIR}/six_user_qa_review_cn.md"
-fi
-
+stage_finish "six_user_qa_complete"
 echo "SIX_USER_QA_JOB_FINISHED run_mode=${RUN_MODE} result=${OUTDIR}/six_user_qa_result.json"
