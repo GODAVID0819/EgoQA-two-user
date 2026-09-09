@@ -42,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest")
     parser.add_argument("--expected-slots", type=int, default=30)
     parser.add_argument("--generation-exit-code", type=int, default=0)
+    parser.add_argument("--allow-evidence-superset", action="store_true")
     args = parser.parse_args(argv)
     result = summarize_one_pass_rows(
         evidence_rows=_read_jsonl(args.evidence),
@@ -51,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         attempt_rows=_read_jsonl(args.attempts),
         expected_slot_count=args.expected_slots,
         generation_exit_code=args.generation_exit_code,
+        allow_evidence_superset=args.allow_evidence_superset,
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

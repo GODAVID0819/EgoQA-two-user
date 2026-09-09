@@ -819,6 +819,10 @@ if [[ "${GENERATION_EXIT_CODE}" -ne 0 && "${TERMINATION_REQUESTED}" != "1" && "$
 fi
 
 if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then
+  ONE_PASS_SUMMARY_ARGS=()
+  if [[ "${EXPECTED_TOTAL_SLOTS}" -lt 30 ]]; then
+    ONE_PASS_SUMMARY_ARGS+=(--allow-evidence-superset)
+  fi
   "${PYTHON}" "${PROJECT_ROOT}/tools/summarize_six_user_one_pass.py" \
     --evidence "${OUTDIR}/one_pass_evidence.jsonl" \
     --accepted "${OUTDIR}/qa_mcq.jsonl" \
@@ -828,7 +832,8 @@ if [[ "${ONE_PASS_30_SLOT_MODE}" == "1" ]]; then
     --output "${OUTDIR}/six_user_qa_result.json" \
     --manifest "${OUTDIR}/job_manifest.json" \
     --expected-slots "${EXPECTED_TOTAL_SLOTS}" \
-    --generation-exit-code "${GENERATION_EXIT_CODE}"
+    --generation-exit-code "${GENERATION_EXIT_CODE}" \
+    "${ONE_PASS_SUMMARY_ARGS[@]}"
 else
 python - "${OUTDIR}" "${ACCEPTED_TARGET}" "${ALLOW_PARTIAL}" "${MAX_ATTEMPTS}" \
   "${QA_TIME_BUDGET_MODE}" "${EVIDENCE_DURATION_SECONDS}" "${PRUNING_BLOCK_SECONDS}" \

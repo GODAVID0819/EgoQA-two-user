@@ -39,6 +39,7 @@ def test_runtime_selects_explicit_one_pass_nr_or_r_profile() -> None:
     assert '"r") QA_PROFILE_ARGS=(--six-user-one-pass-profile) ;;' in text
     assert '"one_pass_reasoning_mode": "${ONE_PASS_REASONING_MODE}"' in text
     assert '--expected-slots "${EXPECTED_TOTAL_SLOTS}"' in text
+    assert "--allow-evidence-superset" in text
 
 
 def test_formal_nr_and_r_wrappers_share_resources_and_scope() -> None:
@@ -83,6 +84,7 @@ def test_common_body_freezes_three_packet_thirty_slot_contract() -> None:
         'PRECOMPUTED_SOURCE_JOB_ID="16699348"',
         'CUDA_KEEPER_ENABLE="1"',
         'CUDA_KEEPER_START_AFTER_SECONDS="7200"',
+        'QWEN_MEMORY_SAFE_MAX_INPUT_TOKENS="262144"',
     ):
         assert value in text
     assert "DAY1_17200000" in text

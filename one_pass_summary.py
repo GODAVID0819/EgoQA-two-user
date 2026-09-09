@@ -156,13 +156,16 @@ def summarize_one_pass_rows(
     attempt_rows: list[dict[str, Any]],
     expected_slot_count: int = 30,
     generation_exit_code: int = 0,
+    allow_evidence_superset: bool = False,
 ) -> dict[str, Any]:
     """按预展开 evidence 的固定 slot 统计 one-pass 结果。"""
 
     if expected_slot_count <= 0:
         raise ValueError("expected_slot_count must be positive")
     evidence_by_slot = _rows_by_slot(evidence_rows, label="evidence")
-    if len(evidence_by_slot) != expected_slot_count:
+    if allow_evidence_superset and len(evidence_by_slot) >= expected_slot_count:
+        evidence_by_slot = dict(list(evidence_by_slot.items())[:expected_slot_count])
+    elif len(evidence_by_slot) != expected_slot_count:
         raise ValueError(
             f"one-pass evidence must contain {expected_slot_count} unique slots, "
             f"got {len(evidence_by_slot)}"

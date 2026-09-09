@@ -326,6 +326,39 @@ def test_summarize_one_pass_rows_uses_fixed_denominator_and_keeps_parse_failure(
     assert result["attempt_count_distribution"] == {"1": 30}
 
 
+def test_smoke_summary_allows_full_evidence_with_one_executed_slot() -> None:
+    evidence = [
+        {
+            "generation_slot_id": f"slot-{index:03d}",
+            "generation_group_id": "DAY1::17200000",
+            "speaker_index": index % 6,
+            "speaker_user": USERS[index % 6],
+        }
+        for index in range(30)
+    ]
+    rejected = [
+        {
+            **evidence[0],
+            "attempts": [{"attempt": 1, "reason": "qa_formality rejected"}],
+        }
+    ]
+
+    result = summarize_one_pass_rows(
+        evidence_rows=evidence,
+        accepted_rows=[],
+        rejected_rows=rejected,
+        prompt_rows=[],
+        attempt_rows=[],
+        expected_slot_count=1,
+        allow_evidence_superset=True,
+    )
+
+    assert result["status"] == "completed"
+    assert result["slot_count"] == 1
+    assert result["completed_slot_count"] == 1
+    assert list(result["status_by_generation_slot"]) == ["slot-000"]
+
+
 def test_update_one_pass_manifest_records_result_status(tmp_path: Path) -> None:
     manifest = tmp_path / "job_manifest.json"
     result_path = tmp_path / "six_user_qa_result.json"
