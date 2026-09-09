@@ -6,6 +6,7 @@ import argparse
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import nullcontext
+from dataclasses import dataclass
 from inspect import signature
 import itertools
 import json
@@ -20,11 +21,14 @@ from typing import Any, Callable, Sequence
 
 from .io_utils import append_jsonl, iter_jsonl, write_json, write_jsonl
 from .prompts import (
+    ANSWERABILITY_FACT_AUDIT_SCHEMA,
+    ANSWERABILITY_FACT_PLAN_SCHEMA,
     DEFAULT_QUALITY_QUOTA,
     GENERATION_MODES,
     JUDGE_SCHEMA,
     JUDGE_OUTPUT_SCHEMA_MARKER,
     QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
+    VIDEO_GENERATION_SCHEMA,
     build_answerability_condition_aggregation_prompt,
     build_answerability_fact_plan_prompt,
     build_answerability_prompt,
@@ -35,6 +39,7 @@ from .prompts import (
     build_evidence_groundedness_judge_prompt,
     build_judge_json_repair_prompt,
     build_qa_formality_judge_prompt,
+    build_reasoned_finalizer_prompt,
     build_sequential_direct_judge_prompt,
     build_video_generation_prompt,
     formality_participant_names,
@@ -47,6 +52,7 @@ from .qwen3vl_runner import (
     DEFAULT_MODEL_ID,
     DEFAULT_SAMPLING_TEMPERATURE,
     DEFAULT_SAMPLING_TOP_P,
+    GenerationCallProfile,
     GENERATOR_DECODING_MODES,
     OpenRouterRequestError,
     OPENROUTER_REASONING_EFFORTS,
@@ -63,6 +69,235 @@ SIX_USER_JUDGE_MODES = (
     SIX_USER_JUDGE_MODE_LEGACY,
     SIX_USER_JUDGE_MODE_SEQUENTIAL,
 )
+REASONING_MODES = ("nr", "r")
+
+
+@dataclass(frozen=True)
+class StructuredStageProfile:
+    reasoning_mode: str
+    single_call: GenerationCallProfile | None = None
+    reasoning: GenerationCallProfile | None = None
+    finalizer: GenerationCallProfile | None = None
+
+    def __post_init__(self) -> None:
+        if self.reasoning_mode not in REASONING_MODES:
+            raise ValueError(f"unknown reasoning mode: {self.reasoning_mode}")
+        has_single = self.single_call is not None
+        has_pair = self.reasoning is not None and self.finalizer is not None
+        if has_single == has_pair:
+            raise ValueError("stage profile must define exactly one call shape")
+
+
+def reasoning_ab_stage_profiles(mode: str) -> dict[str, StructuredStageProfile]:
+    """固定 A/B 中唯一变化的分阶段 thinking 与输出预算。"""
+
+    if mode not in REASONING_MODES:
+        raise ValueError(f"unknown reasoning mode: {mode}")
+    if mode == "nr":
+        single = StructuredStageProfile(
+            reasoning_mode="nr",
+            single_call=GenerationCallProfile(2048, disable_thinking=True),
+        )
+        return {
+            name: single
+            for name in (
+                "generator",
+                "qa_formality",
+                "evidence_groundedness",
+                "answerability_fact_plan",
+                "answerability_user_fact_audit",
+                "speaker_only_answerability",
+                "all_six_answerability",
+                "minimum_set_answerability",
+                "json_repair",
+            )
+        }
+
+    def pair(reasoning_tokens: int, finalizer_tokens: int) -> StructuredStageProfile:
+        return StructuredStageProfile(
+            reasoning_mode="r",
+            reasoning=GenerationCallProfile(reasoning_tokens, disable_thinking=False),
+            finalizer=GenerationCallProfile(finalizer_tokens, disable_thinking=True),
+        )
+
+    return {
+        "generator": pair(6144, 2048),
+        "qa_formality": StructuredStageProfile(
+            reasoning_mode="r",
+            single_call=GenerationCallProfile(1024, disable_thinking=True),
+        ),
+        "evidence_groundedness": pair(5120, 1024),
+        "answerability_fact_plan": pair(4096, 1536),
+        "answerability_user_fact_audit": pair(4096, 1536),
+        "speaker_only_answerability": pair(4096, 1536),
+        "all_six_answerability": pair(6144, 2048),
+        "minimum_set_answerability": pair(3072, 1536),
+        "json_repair": StructuredStageProfile(
+            reasoning_mode="r",
+            single_call=GenerationCallProfile(1024, disable_thinking=True),
+        ),
+    }
+
+
+def _generate_with_metadata(
+    runner: Any,
+    prompt: str,
+    *,
+    image_paths: list[str],
+    video_paths: list[str],
+    call_profile: GenerationCallProfile,
+    generation_kwargs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    kwargs = {
+        "image_paths": image_paths,
+        "video_paths": video_paths,
+        "call_profile": call_profile,
+        **dict(generation_kwargs or {}),
+    }
+    started = time.perf_counter()
+    detailed = getattr(runner, "generate_with_metadata", None)
+    if callable(detailed):
+        parameters = signature(detailed).parameters.values()
+        if not any(
+            parameter.name == "call_profile"
+            or parameter.kind == parameter.VAR_KEYWORD
+            for parameter in parameters
+        ):
+            kwargs.pop("call_profile", None)
+        result = dict(detailed(prompt, **kwargs))
+    else:
+        generate = runner.generate
+        parameters = signature(generate).parameters.values()
+        if not any(
+            parameter.name == "call_profile"
+            or parameter.kind == parameter.VAR_KEYWORD
+            for parameter in parameters
+        ):
+            kwargs.pop("call_profile", None)
+        result = {"text": generate(prompt, **kwargs)}
+    result.setdefault("prompt_tokens", None)
+    result.setdefault("completion_tokens", None)
+    result.setdefault("elapsed_seconds", round(time.perf_counter() - started, 3))
+    return result
+
+
+def run_profiled_structured_stage(
+    *,
+    runner: Any,
+    task_prompt: str,
+    output_schema: dict[str, Any],
+    stage_name: str,
+    image_paths: list[str],
+    video_paths: list[str],
+    profile: StructuredStageProfile,
+    generation_kwargs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """执行单次 NR，或完整媒体 reasoning 加纯文本 finalizer。"""
+
+    base = {
+        "reasoning_mode": profile.reasoning_mode,
+        "reasoning_prompt_tokens": None,
+        "reasoning_completion_tokens": None,
+        "reasoning_elapsed_seconds": None,
+        "finalizer_prompt_tokens": None,
+        "finalizer_completion_tokens": None,
+        "finalizer_elapsed_seconds": None,
+    }
+    if profile.single_call is not None:
+        call = _generate_with_metadata(
+            runner,
+            task_prompt,
+            image_paths=image_paths,
+            video_paths=video_paths,
+            call_profile=profile.single_call,
+            generation_kwargs=generation_kwargs,
+        )
+        return {
+            **base,
+            "execution_mode": "single_call",
+            "raw_output": str(call["text"]),
+            "final_output": str(call["text"]),
+            "single_call_prompt_tokens": call["prompt_tokens"],
+            "single_call_completion_tokens": call["completion_tokens"],
+            "single_call_elapsed_seconds": call["elapsed_seconds"],
+            "elapsed_seconds": call["elapsed_seconds"],
+        }
+
+    assert profile.reasoning is not None and profile.finalizer is not None
+    reasoning = _generate_with_metadata(
+        runner,
+        task_prompt,
+        image_paths=image_paths,
+        video_paths=video_paths,
+        call_profile=profile.reasoning,
+        generation_kwargs=generation_kwargs,
+    )
+    finalizer_prompt = build_reasoned_finalizer_prompt(
+        task_prompt=task_prompt,
+        reasoning_output=str(reasoning["text"]),
+        output_schema=output_schema,
+        stage_name=stage_name,
+    )
+    finalizer = _generate_with_metadata(
+        runner,
+        finalizer_prompt,
+        image_paths=[],
+        video_paths=[],
+        call_profile=profile.finalizer,
+    )
+    return {
+        **base,
+        "execution_mode": "reasoned_then_finalize",
+        "raw_output": str(finalizer["text"]),
+        "reasoning_output": str(reasoning["text"]),
+        "final_output": str(finalizer["text"]),
+        "finalizer_prompt": finalizer_prompt,
+        "reasoning_prompt_tokens": reasoning["prompt_tokens"],
+        "reasoning_completion_tokens": reasoning["completion_tokens"],
+        "reasoning_elapsed_seconds": reasoning["elapsed_seconds"],
+        "finalizer_prompt_tokens": finalizer["prompt_tokens"],
+        "finalizer_completion_tokens": finalizer["completion_tokens"],
+        "finalizer_elapsed_seconds": finalizer["elapsed_seconds"],
+        "single_call_prompt_tokens": None,
+        "single_call_completion_tokens": None,
+        "single_call_elapsed_seconds": None,
+        "elapsed_seconds": round(
+            float(reasoning["elapsed_seconds"]) + float(finalizer["elapsed_seconds"]),
+            3,
+        ),
+    }
+
+
+PROFILED_PROMPT_FIELDS = (
+    "reasoning_mode",
+    "execution_mode",
+    "reasoning_prompt_tokens",
+    "reasoning_completion_tokens",
+    "reasoning_elapsed_seconds",
+    "finalizer_prompt_tokens",
+    "finalizer_completion_tokens",
+    "finalizer_elapsed_seconds",
+    "single_call_prompt_tokens",
+    "single_call_completion_tokens",
+    "single_call_elapsed_seconds",
+    "elapsed_seconds",
+)
+
+
+def profiled_prompt_fields(result: dict[str, Any]) -> dict[str, Any]:
+    return {key: result.get(key) for key in PROFILED_PROMPT_FIELDS}
+
+
+def update_latest_prompt_row(
+    prompt_rows: list[dict[str, Any]],
+    *,
+    stage: str,
+    result: dict[str, Any],
+) -> None:
+    for row in reversed(prompt_rows):
+        if row.get("stage") == stage:
+            row.update(profiled_prompt_fields(result))
+            return
 
 
 class JudgeInfrastructureError(RuntimeError):
@@ -2715,6 +2950,7 @@ def run_model_judge_branch(
     attempt: int,
     collect_choice_logits: bool = False,
     minimal_verdict_probe_prompt: str | None = None,
+    stage_profile: StructuredStageProfile | None = None,
 ) -> dict[str, Any]:
     """Run one model judge.
 
@@ -2732,7 +2968,20 @@ def run_model_judge_branch(
         f"images={len(image_paths)} videos={len(video_paths)}",
         flush=True,
     )
-    raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
+    stage_result = run_profiled_structured_stage(
+        runner=runner,
+        task_prompt=prompt,
+        output_schema=judge_schema_for_check(check_name, pass_fail_only=True),
+        stage_name=check_name,
+        image_paths=image_paths,
+        video_paths=video_paths,
+        profile=stage_profile
+        or StructuredStageProfile(
+            reasoning_mode="nr",
+            single_call=GenerationCallProfile(2048, disable_thinking=True),
+        ),
+    )
+    raw = str(stage_result["raw_output"])
     print(
         "qa_stage_done "
         f"stage={stage} evidence_id={evidence_id} "
@@ -2793,6 +3042,7 @@ def run_model_judge_branch(
             flush=True,
         )
     judge["raw_output"] = final_raw
+    judge.update(profiled_prompt_fields(stage_result))
     if format_repair["attempted"]:
         judge["initial_raw_output"] = initial_raw
         judge["format_repair"] = format_repair
@@ -3655,10 +3905,12 @@ def run_sequential_fact_answerability_eval(
     runner: Any,
     prompt_rows: list[dict[str, Any]],
     attempt: int | None,
+    stage_profiles: dict[str, StructuredStageProfile] | None = None,
 ) -> dict[str, Any]:
     """Run speaker first, then batch the independent remainder when supported."""
 
     required_users = [str(user) for user in qa_item.get("required_users") or []]
+    active_stage_profiles = stage_profiles or reasoning_ab_stage_profiles("nr")
     if len(required_users) != 6:
         raise ValueError("sequential factual answerability requires exactly six users")
     qa_for_prompt = answerability_qa_for_prompt(qa_item)
@@ -3669,8 +3921,17 @@ def run_sequential_fact_answerability_eval(
         f"stage=answerability_fact_plan qa_id={qa_item.get('qa_id')} videos=0",
         flush=True,
     )
-    plan_raw = runner.generate(plan_prompt, image_paths=[], video_paths=[])
-    plan_elapsed = round(time.time() - plan_start, 3)
+    plan_result = run_profiled_structured_stage(
+        runner=runner,
+        task_prompt=plan_prompt,
+        output_schema=ANSWERABILITY_FACT_PLAN_SCHEMA,
+        stage_name="answerability",
+        image_paths=[],
+        video_paths=[],
+        profile=active_stage_profiles["answerability_fact_plan"],
+    )
+    plan_raw = str(plan_result["raw_output"])
+    plan_elapsed = float(plan_result["elapsed_seconds"])
     prompt_rows.append(
         compact_prompt_record(
             {
@@ -3682,7 +3943,7 @@ def run_sequential_fact_answerability_eval(
                 "image_paths": [],
                 "video_paths": [],
                 "media_role": "text_only",
-                "elapsed_seconds": plan_elapsed,
+                **profiled_prompt_fields(plan_result),
             }
         )
     )
@@ -3733,12 +3994,17 @@ def run_sequential_fact_answerability_eval(
             f"user={user} videos={len(video_paths)}",
             flush=True,
         )
-        audit_raw = runner.generate(
-            audit_prompt,
+        audit_result = run_profiled_structured_stage(
+            runner=runner,
+            task_prompt=audit_prompt,
+            output_schema=ANSWERABILITY_FACT_AUDIT_SCHEMA,
+            stage_name="answerability",
             image_paths=[],
             video_paths=video_paths,
+            profile=active_stage_profiles["answerability_user_fact_audit"],
         )
-        audit_elapsed = round(time.time() - audit_start, 3)
+        audit_raw = str(audit_result["raw_output"])
+        audit_elapsed = float(audit_result["elapsed_seconds"])
         prompt_rows.append(
             compact_prompt_record(
                 {
@@ -3752,7 +4018,7 @@ def run_sequential_fact_answerability_eval(
                     "image_paths": [],
                     "video_paths": video_paths,
                     "media_role": "ordered_source_segments_one_user",
-                    "elapsed_seconds": audit_elapsed,
+                    **profiled_prompt_fields(audit_result),
                 }
             )
         )
@@ -3812,12 +4078,22 @@ def run_sequential_fact_answerability_eval(
             f"condition_id={condition['condition_id']} videos=0",
             flush=True,
         )
-        aggregation_raw = runner.generate(
-            aggregation_prompt,
+        profile_key = {
+            "speaker_only": "speaker_only_answerability",
+            "combined_all_six_users": "all_six_answerability",
+            "minimum_required_users": "minimum_set_answerability",
+        }[str(condition["condition_type"])]
+        aggregation_result = run_profiled_structured_stage(
+            runner=runner,
+            task_prompt=aggregation_prompt,
+            output_schema=ANSWERABILITY_FACT_AUDIT_SCHEMA,
+            stage_name="answerability",
             image_paths=[],
             video_paths=[],
+            profile=active_stage_profiles[profile_key],
         )
-        aggregation_elapsed = round(time.time() - aggregation_start, 3)
+        aggregation_raw = str(aggregation_result["raw_output"])
+        aggregation_elapsed = float(aggregation_result["elapsed_seconds"])
         prompt_rows.append(
             compact_prompt_record(
                 {
@@ -3830,7 +4106,7 @@ def run_sequential_fact_answerability_eval(
                     "image_paths": [],
                     "video_paths": [],
                     "media_role": "text_only_user_audit_reduction",
-                    "elapsed_seconds": aggregation_elapsed,
+                    **profiled_prompt_fields(aggregation_result),
                 }
             )
         )
@@ -3994,6 +4270,7 @@ def run_answerability_eval(
     judge_media_role: str = "full",
     attempt: int | None = None,
     six_user_judge_mode: str = SIX_USER_JUDGE_MODE_TIME_AWARE,
+    stage_profiles: dict[str, StructuredStageProfile] | None = None,
 ) -> dict[str, Any]:
     required_users = [str(user) for user in qa_item.get("required_users") or []]
     if (
@@ -4006,6 +4283,7 @@ def run_answerability_eval(
             runner=runner,
             prompt_rows=prompt_rows,
             attempt=attempt,
+            stage_profiles=stage_profiles or reasoning_ab_stage_profiles("nr"),
         )
     if (
         len(required_users) == 6
@@ -4542,8 +4820,11 @@ def run_sequential_separated_review_judges(
     generator_video_paths: list[str],
     attempt: int,
     judge_media_role: str,
+    stage_profiles: dict[str, StructuredStageProfile] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Run formality, grounding, and factual answerability as strict serial gates."""
+
+    active_stage_profiles = stage_profiles or reasoning_ab_stage_profiles("nr")
 
     def skipped_judge(check_name: str, reason: str) -> dict[str, Any]:
         judge = failed_single_judge(check_name, reason)
@@ -4674,7 +4955,9 @@ def run_sequential_separated_review_judges(
             evidence_id=packet.get("evidence_id"),
             qa_id=qa_item.get("qa_id"),
             attempt=attempt,
+            stage_profile=active_stage_profiles["qa_formality"],
         )
+        prompt_rows[-1].update(profiled_prompt_fields(qa_formality_judge))
     except OpenRouterRequestError:
         raise
     except Exception as exc:
@@ -4768,7 +5051,9 @@ def run_sequential_separated_review_judges(
             evidence_id=packet.get("evidence_id"),
             qa_id=qa_item.get("qa_id"),
             attempt=attempt,
+            stage_profile=active_stage_profiles["evidence_groundedness"],
         )
+        prompt_rows[-1].update(profiled_prompt_fields(evidence_groundedness_judge))
     except OpenRouterRequestError:
         raise
     except Exception as exc:
@@ -4849,6 +5134,7 @@ def run_sequential_separated_review_judges(
             judge_media_role=judge_media_role,
             attempt=attempt,
             six_user_judge_mode=SIX_USER_JUDGE_MODE_SEQUENTIAL,
+            stage_profiles=active_stage_profiles,
         )
     except OpenRouterRequestError:
         raise
@@ -4928,6 +5214,7 @@ def run_parallel_review_judges(
     six_user_judge_mode: str = SIX_USER_JUDGE_MODE_TIME_AWARE,
     generator_image_paths: list[str] | None = None,
     generator_video_paths: list[str] | None = None,
+    stage_profiles: dict[str, StructuredStageProfile] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Run qa_formality, evidence_groundedness, and answerability in parallel."""
 
@@ -4935,6 +5222,7 @@ def run_parallel_review_judges(
         len(qa_item.get("required_users") or []) == 6
         and six_user_judge_mode == SIX_USER_JUDGE_MODE_SEQUENTIAL
     )
+    active_stage_profiles = stage_profiles or reasoning_ab_stage_profiles("nr")
     if is_six_user_sequential:
         if record_decision_entropy:
             raise ValueError(
@@ -4961,6 +5249,7 @@ def run_parallel_review_judges(
                 ),
                 attempt=attempt,
                 judge_media_role=judge_media_role,
+                stage_profiles=active_stage_profiles,
             )
 
     active_qa_formality_runner = qa_formality_runner or runner
@@ -5033,8 +5322,7 @@ def run_parallel_review_judges(
                     "evidence_groundedness",
                 )
             )
-    prompt_rows.append(
-        compact_prompt_record({
+    qa_formality_prompt_row = compact_prompt_record({
             "stage": "qa_formality_judge",
             "evidence_id": packet.get("evidence_id"),
             "qa_id": qa_item.get("qa_id"),
@@ -5055,10 +5343,12 @@ def run_parallel_review_judges(
             "entropy_probe_affects_acceptance": False,
             "point_scoring": point_scoring_mode,
         })
-    )
+    qa_formality_prompt_row["reasoning_mode"] = active_stage_profiles[
+        "qa_formality"
+    ].reasoning_mode
+    evidence_groundedness_prompt_row: dict[str, Any] | None = None
     if evidence_groundedness_prompt is not None:
-        prompt_rows.append(
-            compact_prompt_record({
+        evidence_groundedness_prompt_row = compact_prompt_record({
                 "stage": "evidence_groundedness_judge",
                 "evidence_id": packet.get("evidence_id"),
                 "qa_id": qa_item.get("qa_id"),
@@ -5078,7 +5368,9 @@ def run_parallel_review_judges(
                 "entropy_probe_affects_acceptance": False,
                 "point_scoring": point_scoring_mode,
             })
-        )
+        evidence_groundedness_prompt_row["reasoning_mode"] = active_stage_profiles[
+            "evidence_groundedness"
+        ].reasoning_mode
     if record_decision_entropy:
         entropy_prompt_rows = [
                 {
@@ -5147,6 +5439,7 @@ def run_parallel_review_judges(
             attempt=attempt,
             collect_choice_logits=record_decision_entropy,
             minimal_verdict_probe_prompt=qa_formality_entropy_probe_prompt,
+            stage_profile=active_stage_profiles["qa_formality"],
         )
         if six_user_map_reduce:
             evidence_groundedness_future = executor.submit(
@@ -5171,6 +5464,7 @@ def run_parallel_review_judges(
                 attempt=attempt,
                 collect_choice_logits=record_decision_entropy,
                 minimal_verdict_probe_prompt=evidence_groundedness_entropy_probe_prompt,
+                stage_profile=active_stage_profiles["evidence_groundedness"],
             )
         answerability_future = executor.submit(
             run_answerability_eval,
@@ -5183,6 +5477,7 @@ def run_parallel_review_judges(
             judge_media_role=judge_media_role,
             attempt=attempt,
             six_user_judge_mode=six_user_judge_mode,
+            stage_profiles=active_stage_profiles,
         )
         if batch_held and callable(release_batch):
             queued = release_batch()
@@ -5195,6 +5490,10 @@ def run_parallel_review_judges(
 
         try:
             qa_formality_judge = qa_formality_future.result()
+            qa_formality_prompt_row.update(
+                profiled_prompt_fields(qa_formality_judge)
+            )
+            prompt_rows.append(qa_formality_prompt_row)
         except OpenRouterRequestError:
             raise
         except Exception as exc:
@@ -5211,6 +5510,11 @@ def run_parallel_review_judges(
                 evidence_groundedness_judge, groundedness_map_trace = groundedness_result
             else:
                 evidence_groundedness_judge = groundedness_result
+                if evidence_groundedness_prompt_row is not None:
+                    evidence_groundedness_prompt_row.update(
+                        profiled_prompt_fields(evidence_groundedness_judge)
+                    )
+                    prompt_rows.append(evidence_groundedness_prompt_row)
         except OpenRouterRequestError:
             raise
         except Exception as exc:
@@ -5575,6 +5879,7 @@ def generate_video_qa_loop(
     record_judge_decision_entropy: bool = False,
     dry_run: bool = False,
     generation_mode: str = "baseline",
+    reasoning_mode: str = "nr",
     fixed_question_type_schedule: bool = False,
     question_types: tuple[str, ...] | None = None,
     resume: bool = False,
@@ -5598,6 +5903,11 @@ def generate_video_qa_loop(
     judge_pass_fail_only = True
     if generation_mode not in GENERATION_MODES:
         raise ValueError(f"unknown generation_mode: {generation_mode}")
+    if reasoning_mode not in REASONING_MODES:
+        raise ValueError(
+            f"unknown reasoning_mode {reasoning_mode!r}; expected one of {REASONING_MODES}"
+        )
+    stage_profiles = reasoning_ab_stage_profiles(reasoning_mode)
     if generator_decode_mode not in GENERATOR_DECODING_MODES:
         raise ValueError(f"unknown generator_decode_mode: {generator_decode_mode}")
     if judge_video_source not in JUDGE_VIDEO_SOURCES:
@@ -5975,6 +6285,7 @@ def generate_video_qa_loop(
                 "qa_id": qa.get("qa_id"),
                 "question_type": question_type,
                 "generation_mode": generation_mode,
+                "reasoning_mode": reasoning_mode,
                 "six_user_judge_mode": (
                     six_user_judge_mode if is_six_user_dry_run else None
                 ),
@@ -6027,19 +6338,18 @@ def generate_video_qa_loop(
                 "result": {"accepted": False, "dry_run": True},
             }
             # Archived discovery prompt-row emission removed from the production trace.
-            prompts.append(
-                compact_prompt_record({
+            generation_prompt_row = compact_prompt_record({
                     "stage": "generation",
                     "evidence_id": packet.get("evidence_id"),
                     "question_type": question_type,
                     "generation_mode": generation_mode,
+                    "reasoning_mode": reasoning_mode,
                     "attempt": 1,
                     "prompt": gen_prompt,
                     "image_paths": image_paths,
                     "video_paths": video_paths,
                     "generator_decode": decode_config,
                 })
-            )
             if sequential_dry_run:
                 prompts.append(
                     compact_prompt_record(
@@ -6391,23 +6701,30 @@ def generate_video_qa_loop(
                     f"queue_seconds={generation_queue_seconds:.1f}",
                     flush=True,
                 )
-                if generator_decode_mode == "sampling":
-                    raw_generation = runner.generate(
-                        gen_prompt,
-                        image_paths=image_paths,
-                        video_paths=video_paths,
-                        decoding_mode=generator_decode_mode,
-                        temperature=generator_temperature,
-                        top_p=generator_top_p,
-                        top_k=generator_top_k,
-                    )
-                else:
-                    raw_generation = runner.generate(
-                        gen_prompt,
-                        image_paths=image_paths,
-                        video_paths=video_paths,
-                    )
-            generation_elapsed_seconds = round(time.time() - stage_start, 3)
+                generation_kwargs = (
+                    {
+                        "decoding_mode": generator_decode_mode,
+                        "temperature": generator_temperature,
+                        "top_p": generator_top_p,
+                        "top_k": generator_top_k,
+                    }
+                    if generator_decode_mode == "sampling"
+                    else {}
+                )
+                generation_result = run_profiled_structured_stage(
+                    runner=runner,
+                    task_prompt=gen_prompt,
+                    output_schema=VIDEO_GENERATION_SCHEMA,
+                    stage_name="generator",
+                    image_paths=image_paths,
+                    video_paths=video_paths,
+                    profile=stage_profiles["generator"],
+                    generation_kwargs=generation_kwargs,
+                )
+            raw_generation = str(generation_result["raw_output"])
+            generation_elapsed_seconds = float(generation_result["elapsed_seconds"])
+            generation_prompt_row.update(profiled_prompt_fields(generation_result))
+            prompts.append(generation_prompt_row)
             print(
                 "qa_stage_done "
                 f"stage=generation evidence_id={packet.get('evidence_id')} "
@@ -6415,8 +6732,12 @@ def generate_video_qa_loop(
                 f"seconds={generation_elapsed_seconds:.1f}",
                 flush=True,
             )
-            attempt_trace["generation"]["raw_output"] = raw_generation
-            attempt_trace["generation"]["elapsed_seconds"] = generation_elapsed_seconds
+            attempt_trace["generation"].update(
+                {
+                    "raw_output": raw_generation,
+                    **profiled_prompt_fields(generation_result),
+                }
+            )
             if _generation_gate is not None:
                 attempt_trace["generation"]["queue_seconds"] = generation_queue_seconds
             previous_generation = str(raw_generation)
@@ -6454,6 +6775,7 @@ def generate_video_qa_loop(
             qa["evidence_id"] = packet.get("evidence_id")
             qa["question_type"] = question_type
             qa["generation_mode"] = generation_mode
+            qa["reasoning_mode"] = reasoning_mode
             qa["generator_decode"] = decode_config
             qa["required_users"] = packet.get("required_users", qa.get("required_users", []))
             qa["model_id"] = runner.model_id
@@ -6523,6 +6845,7 @@ def generate_video_qa_loop(
                         six_user_judge_mode=six_user_judge_mode,
                         generator_image_paths=image_paths,
                         generator_video_paths=video_paths,
+                        stage_profiles=stage_profiles,
                     )
             except JudgeInfrastructureError as exc:
                 reason = str(exc)
@@ -6796,6 +7119,12 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--backend", default="transformers-local", choices=["transformers-local", "transformers-local-memory-safe", "vllm-local", "openai-compatible-local", "openrouter", "gemini"])
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     parser.add_argument("--generation-mode", default="baseline", choices=GENERATION_MODES)
+    parser.add_argument(
+        "--reasoning-mode",
+        default="nr",
+        choices=REASONING_MODES,
+        help="A/B treatment: nr is one non-reasoning call; r is reasoning plus text-only finalization.",
+    )
     parser.add_argument("--generator-decode-mode", default="greedy", choices=GENERATOR_DECODING_MODES)
     parser.add_argument("--generator-temperature", type=float, default=DEFAULT_SAMPLING_TEMPERATURE)
     parser.add_argument("--generator-top-p", type=float, default=DEFAULT_SAMPLING_TOP_P)
@@ -6966,6 +7295,7 @@ def main(argv: list[str] | None = None) -> int:
         # judge_quality_quota=args.judge_quality_quota,
         dry_run=args.dry_run,
         generation_mode=args.generation_mode,
+        reasoning_mode=args.reasoning_mode,
         fixed_question_type_schedule=args.fixed_question_type_schedule,
         question_types=parse_question_types(args.question_types),
         resume=args.resume,

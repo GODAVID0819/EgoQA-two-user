@@ -68,6 +68,24 @@ DEFAULT_CHOICE_FIELD = "verdict"
 DEFAULT_DECISION_CHOICES = ("pass", "fail")
 
 
+@dataclass(frozen=True)
+class GenerationCallProfile:
+    """单次生成调用的输出预算与 thinking 配置。"""
+
+    max_new_tokens: int
+    disable_thinking: bool
+    video_fps: float | None = None
+    max_image_pixels: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_new_tokens <= 0:
+            raise ValueError("max_new_tokens must be positive")
+        if self.video_fps is not None and self.video_fps <= 0:
+            raise ValueError("video_fps must be positive when set")
+        if self.max_image_pixels is not None and self.max_image_pixels <= 0:
+            raise ValueError("max_image_pixels must be positive when set")
+
+
 @dataclass
 class _PendingVLLMChat:
     messages: list[dict[str, Any]]
@@ -2210,7 +2228,33 @@ class OpenAICompatibleLocalRunner:
         temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
         top_p: float = DEFAULT_SAMPLING_TOP_P,
         top_k: int | None = None,
+        call_profile: GenerationCallProfile | None = None,
     ) -> str:
+        return str(
+            self.generate_with_metadata(
+                prompt,
+                image_paths=image_paths,
+                video_paths=video_paths,
+                decoding_mode=decoding_mode,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                call_profile=call_profile,
+            )["text"]
+        )
+
+    def generate_with_metadata(
+        self,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        decoding_mode: str = "greedy",
+        temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+        top_p: float = DEFAULT_SAMPLING_TOP_P,
+        top_k: int | None = None,
+        call_profile: GenerationCallProfile | None = None,
+    ) -> dict[str, Any]:
+        started = time.perf_counter()
         data = self._generate_response(
             prompt,
             image_paths=image_paths,
@@ -2219,8 +2263,15 @@ class OpenAICompatibleLocalRunner:
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
+            call_profile=call_profile,
         )
-        return data["choices"][0]["message"]["content"].strip()
+        usage = data.get("usage") or {}
+        return {
+            "text": str(data["choices"][0]["message"]["content"]).strip(),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
+        }
 
     def generate_with_choice_logits(
         self,
@@ -2268,6 +2319,7 @@ class OpenAICompatibleLocalRunner:
         top_k: int | None = None,
         *,
         include_logprobs: bool = False,
+        call_profile: GenerationCallProfile | None = None,
     ) -> dict[str, Any]:
         # Preserve the embedded vLLM runner's media-before-text ordering for
         # this production path.  Remote OpenAI-compatible providers retain
@@ -2295,11 +2347,33 @@ class OpenAICompatibleLocalRunner:
             content.append({"type": "text", "text": prompt})
         if decoding_mode not in GENERATOR_DECODING_MODES:
             raise ValueError(f"unknown decoding_mode: {decoding_mode}")
+        effective_max_new_tokens = (
+            call_profile.max_new_tokens
+            if call_profile is not None
+            else self.max_new_tokens
+        )
+        effective_disable_thinking = (
+            call_profile.disable_thinking
+            if call_profile is not None
+            else self.disable_thinking
+        )
+        effective_video_fps = (
+            call_profile.video_fps
+            if call_profile is not None and call_profile.video_fps is not None
+            else self.video_fps
+        )
+        configured_max_pixels = (
+            call_profile.max_image_pixels
+            if call_profile is not None and call_profile.max_image_pixels is not None
+            else self.max_image_pixels
+        )
+        if configured_max_pixels < self.min_image_pixels:
+            raise ValueError("call profile max_image_pixels is below VLLM_MIN_IMAGE_PIXELS")
         payload = {
             "model": self.model_id,
             "messages": [{"role": "user", "content": content}],
             "temperature": temperature if decoding_mode == "sampling" else 0,
-            "max_tokens": self.max_new_tokens,
+            "max_tokens": effective_max_new_tokens,
         }
         if decoding_mode == "sampling":
             payload["top_p"] = top_p
@@ -2308,18 +2382,30 @@ class OpenAICompatibleLocalRunner:
         if include_logprobs:
             payload["logprobs"] = True
             payload["top_logprobs"] = 20
-        effective_max_pixels = self.max_image_pixels
+        effective_max_pixels = configured_max_pixels
         if self.uses_async_multimodal_frontend:
-            effective_max_pixels = self._effective_image_max_pixels(
-                len(image_paths or [])
-            )
+            image_count = len(image_paths or [])
+            if image_count:
+                effective_max_pixels = memory_safe_image_max_pixels(
+                    image_count=image_count,
+                    configured_max_image_pixels=configured_max_pixels,
+                    max_input_tokens=self.max_model_len,
+                    target_fraction=self.image_context_target_fraction,
+                    text_token_reserve=self.image_text_token_reserve,
+                    item_token_overhead=self.image_item_token_overhead,
+                    min_image_pixels=self.min_image_pixels,
+                )
             payload["mm_processor_kwargs"] = {
                 "min_pixels": self.min_image_pixels,
                 "max_pixels": effective_max_pixels,
-                "fps": self.video_fps,
+                "fps": effective_video_fps,
                 "cap_pixels_per_frame": True,
             }
-        if self.disable_thinking:
+        if call_profile is not None:
+            payload["chat_template_kwargs"] = {
+                "enable_thinking": not effective_disable_thinking
+            }
+        elif effective_disable_thinking:
             payload["chat_template_kwargs"] = {"enable_thinking": False}
         payload.update(self._extra_request_payload())
         req = urllib.request.Request(

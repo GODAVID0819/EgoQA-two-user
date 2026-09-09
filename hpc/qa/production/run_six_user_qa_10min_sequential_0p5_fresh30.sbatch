@@ -19,6 +19,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
 fi
 
 RUN_MODE="${RUN_MODE:-six_user_qa_10min_sequential_0p5_fresh30}"
+REASONING_MODE="${REASONING_MODE:-nr}"
 PROJECT_ROOT="${QWEN3VL_PROJECT_ROOT:-/scratch/${USER}/Long-video-understanding-clip}"
 HPC_ROOT="${PROJECT_ROOT}/hpc"
 PACKAGE_ROOT="${PACKAGE_ROOT:-${PROJECT_ROOT}/egolife_two_user_qa/multi-user}"
@@ -71,13 +72,15 @@ QA_RESUME_ARGS=()
 QA_SELECTION_ARGS=()
 EVIDENCE_FRESHNESS_ARGS=()
 
-ENABLE_CUDA_KEEPER="${ENABLE_CUDA_KEEPER:-1}"
+CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-${ENABLE_CUDA_KEEPER:-1}}"
+ENABLE_CUDA_KEEPER="${CUDA_KEEPER_ENABLE}"
 CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${HPC_ROOT}/shared/cuda.py}"
 CUDA_KEEPER_THRESHOLD="${CUDA_KEEPER_THRESHOLD:-60}"
 CUDA_KEEPER_GPUS="${CUDA_KEEPER_GPUS:-all}"
 CUDA_KEEPER_RESERVE="${CUDA_KEEPER_RESERVE:-12.0}"
 CUDA_KEEPER_MAX_PREALLOC_GB="${CUDA_KEEPER_MAX_PREALLOC_GB:-2.5}"
-CUDA_KEEPER_START_USED_MIB="${CUDA_KEEPER_START_USED_MIB:-8192}"
+CUDA_KEEPER_START_AFTER_SECONDS="${CUDA_KEEPER_START_AFTER_SECONDS:-7200}"
+JOB_START_EPOCH_SECONDS="${JOB_START_EPOCH_SECONDS:-$(date +%s)}"
 CUDA_KEEPER_PID=""
 CUDA_KEEPER_LOG="${OUTDIR}/cuda_keeper_${SLURM_JOB_ID}.log"
 VLLM_SERVER_PID=""
@@ -196,11 +199,15 @@ if [[ "${ENABLE_CUDA_KEEPER}" != "0" && "${ENABLE_CUDA_KEEPER}" != "1" ]]; then
   echo "error=invalid_enable_cuda_keeper value=${ENABLE_CUDA_KEEPER}" >&2
   exit 2
 fi
+if [[ "${REASONING_MODE}" != "nr" && "${REASONING_MODE}" != "r" ]]; then
+  echo "error=invalid_reasoning_mode value=${REASONING_MODE}" >&2
+  exit 2
+fi
 if [[ ! "${CUDA_KEEPER_THRESHOLD}" =~ ^[1-9][0-9]?$ || \
       ! "${CUDA_KEEPER_RESERVE}" =~ ^[0-9]+([.][0-9]+)?$ || \
       ! "${CUDA_KEEPER_MAX_PREALLOC_GB}" =~ ^[0-9]+([.][0-9]+)?$ || \
-      ! "${CUDA_KEEPER_START_USED_MIB}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "error=invalid_cuda_keeper_config threshold=${CUDA_KEEPER_THRESHOLD} reserve=${CUDA_KEEPER_RESERVE} max_prealloc=${CUDA_KEEPER_MAX_PREALLOC_GB} start_used_mib=${CUDA_KEEPER_START_USED_MIB}" >&2
+      ! "${CUDA_KEEPER_START_AFTER_SECONDS}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "error=invalid_cuda_keeper_config threshold=${CUDA_KEEPER_THRESHOLD} reserve=${CUDA_KEEPER_RESERVE} max_prealloc=${CUDA_KEEPER_MAX_PREALLOC_GB} start_after_seconds=${CUDA_KEEPER_START_AFTER_SECONDS}" >&2
   exit 2
 fi
 if [[ "${REQUIRE_FRESH_EVIDENCE}" != "0" && "${REQUIRE_FRESH_EVIDENCE}" != "1" ]]; then
@@ -797,7 +804,8 @@ PYTHONUNBUFFERED=1 "${PYTHON}" -P "${CUDA_KEEPER_SCRIPT}" \
   --gpus "${CUDA_KEEPER_GPUS}" \
   --reserve "${CUDA_KEEPER_RESERVE}" \
   --max-prealloc "${CUDA_KEEPER_MAX_PREALLOC_GB}" \
-  --start-used-mib "${CUDA_KEEPER_START_USED_MIB}" \
+  --start-after-seconds "${CUDA_KEEPER_START_AFTER_SECONDS}" \
+  --job-start-epoch-seconds "${JOB_START_EPOCH_SECONDS}" \
   > "${CUDA_KEEPER_LOG}" 2>&1 &
 CUDA_KEEPER_PID=$!
 sleep 3
@@ -861,7 +869,8 @@ export RUN_CUDA_KEEPER_GPUS="${CUDA_KEEPER_GPUS}"
 export RUN_CUDA_KEEPER_THRESHOLD="${CUDA_KEEPER_THRESHOLD}"
 export RUN_CUDA_KEEPER_RESERVE="${CUDA_KEEPER_RESERVE}"
 export RUN_CUDA_KEEPER_MAX_PREALLOC_GB="${CUDA_KEEPER_MAX_PREALLOC_GB}"
-export RUN_CUDA_KEEPER_START_USED_MIB="${CUDA_KEEPER_START_USED_MIB}"
+export RUN_CUDA_KEEPER_START_AFTER_SECONDS="${CUDA_KEEPER_START_AFTER_SECONDS}"
+export RUN_REASONING_MODE="${REASONING_MODE}"
 export RUN_QWEN_DEVICE_MAP="${QWEN_MEMORY_SAFE_DEVICE_MAP}"
 export RUN_QWEN_REQUIRED_MODEL_GPU_COUNT="${QWEN_MEMORY_SAFE_REQUIRED_MODEL_GPU_COUNT}"
 export RUN_REUSE_PREPROCESSED_FROM="${REUSE_PREPROCESSED_FROM}"
@@ -895,6 +904,7 @@ payload = {
         "RUN_PERSISTENT_KERNEL_CACHE_ROOT"
     ],
     "model_id": os.environ["RUN_MODEL_ID"],
+    "reasoning_mode": os.environ["RUN_REASONING_MODE"],
     "inference_backend": os.environ["RUN_INFERENCE_BACKEND"],
     "managed_vllm_server": os.environ["RUN_START_VLLM_SERVER"] == "1",
     "pruning_sample_fps": 1.0,
@@ -947,8 +957,8 @@ payload = {
     "cuda_keeper_max_prealloc_gib": float(
         os.environ["RUN_CUDA_KEEPER_MAX_PREALLOC_GB"]
     ),
-    "cuda_keeper_start_used_mib": int(
-        os.environ["RUN_CUDA_KEEPER_START_USED_MIB"]
+    "cuda_keeper_start_after_seconds": float(
+        os.environ["RUN_CUDA_KEEPER_START_AFTER_SECONDS"]
     ),
     "qwen_device_map": os.environ["RUN_QWEN_DEVICE_MAP"],
     "qwen_required_model_gpu_count": int(
@@ -1329,6 +1339,7 @@ stage "generate_six_user_qa"
   --max-new-tokens 2048 \
   --disable-thinking \
   --generation-mode baseline \
+  --reasoning-mode "${REASONING_MODE}" \
   --generator-decode-mode sampling \
   --generator-temperature 0.7 \
   --generator-top-p 0.9 \

@@ -36,13 +36,13 @@ class TenMinuteSixUserSequentialSbatchTests(unittest.TestCase):
         )
         self.assertIn('OUTDIR="${OUTPUT_BASE}/${RUN_MODE}_${SLURM_JOB_ID}"', self.text)
         self.assertIn(
-            'JOB_SCRATCH_ROOT="/scratch/${USER}/job_scratch/${RUN_MODE}_${SLURM_JOB_ID}"',
+            'JOB_SCRATCH_ROOT="${JOB_SCRATCH_ROOT:-/scratch/${USER}/job_scratch/${RUN_MODE}_${SLURM_JOB_ID}}"',
             self.text,
         )
 
     def test_vllm_ipc_socket_path_stays_below_linux_limit(self) -> None:
         self.assertIn(
-            'VLLM_IPC_RUNTIME_ROOT="${VLLM_IPC_RUNTIME_ROOT:-/scratch/${USER}/v/${SLURM_JOB_ID}}"',
+            'VLLM_IPC_RUNTIME_ROOT="${VLLM_IPC_RUNTIME_ROOT:-${JOB_SCRATCH_ROOT}/v}"',
             self.text,
         )
         self.assertIn('export TMPDIR="${VLLM_IPC_RUNTIME_ROOT}"', self.text)
@@ -152,7 +152,10 @@ class TenMinuteSixUserSequentialSbatchTests(unittest.TestCase):
         )
 
     def test_cuda_keeper_defaults_on_and_tracks_requested_gpus(self) -> None:
-        self.assertIn('ENABLE_CUDA_KEEPER="${ENABLE_CUDA_KEEPER:-1}"', self.text)
+        self.assertIn(
+            'CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-${ENABLE_CUDA_KEEPER:-1}}"',
+            self.text,
+        )
         self.assertIn('CUDA_KEEPER_GPUS="${CUDA_KEEPER_GPUS:-all}"', self.text)
         self.assertNotIn("error=vllm_forbids_cuda_keeper", self.text)
         self.assertIn(
@@ -179,7 +182,8 @@ class TenMinuteSixUserSequentialSbatchTests(unittest.TestCase):
         self.assertIn('"${PYTHON}" -P -m pip check', self.text)
         self.assertIn("import decord", self.text)
         self.assertIn("import pynvml", self.text)
-        self.assertIn("from torchcodec.decoders import VideoDecoder", self.text)
+        self.assertNotIn("from torchcodec.decoders import VideoDecoder", self.text)
+        self.assertIn('if video_backend != "decord"', self.text)
         self.assertIn("from transformers import CLIPModel, CLIPProcessor", self.text)
         self.assertIn("from vllm.vllm_flash_attn import (", self.text)
         self.assertIn("is_fa_version_supported", self.text)
@@ -209,7 +213,8 @@ class TenMinuteSixUserSequentialSbatchTests(unittest.TestCase):
             'export LD_LIBRARY_PATH="${FFMPEG_RUNTIME_ROOT}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"',
             self.text,
         )
-        self.assertIn("from torchcodec.decoders import VideoDecoder", self.text)
+        self.assertNotIn("from torchcodec.decoders import VideoDecoder", self.text)
+        self.assertIn('FORCE_QWENVL_VIDEO_READER="${FORCE_QWENVL_VIDEO_READER:-decord}"', self.text)
 
     def test_storage_and_video_preflights_precede_model_work(self) -> None:
         storage = self.text.index('stage "storage_preflight"')
@@ -225,7 +230,10 @@ class TenMinuteSixUserSequentialSbatchTests(unittest.TestCase):
         self.assertIn('--source-window-count "${SOURCE_WINDOW_COUNT}"', self.text)
         self.assertIn('--judge-video-fps "${JUDGE_VIDEO_FPS}"', self.text)
         self.assertIn('--ffmpeg-binary "${FFMPEG_BINARY}"', self.text)
-        self.assertIn('float(plan.get("judge_video_fps", -1)) != 0.5', self.text)
+        self.assertIn(
+            "prepared_judge_video_fps != expected_judge_video_fps",
+            self.text,
+        )
 
     def test_individual_inference_infrastructure_failures_are_logged_for_skipping(self) -> None:
         self.assertIn(

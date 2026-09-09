@@ -258,6 +258,64 @@ EVIDENCE_SEGMENT_OBSERVATION_SCHEMA = {
 }
 
 
+STRICT_JSON_OUTPUT_CONTRACT = """Output contract:
+- Return exactly one valid JSON object and nothing else.
+- Do not include markdown, code fences, comments, explanations, or extra text outside the JSON object.
+- Include every field shown in the requested JSON shape, even when a value is brief.
+"""
+
+
+REASONED_FINALIZER_FIELD_LIMITS = {
+    "generator": """Field limits:
+- question: at most 45 English words.
+- each option: at most 20 English words.
+- each evidence.needed_fact: at most 30 English words.
+- each evidence.timeframe: at most 15 English words.
+- each single_user_answerability value: at most 25 English words.
+- combined_answerability: at most 50 English words.
+- generator_rationale: at most 80 English words.
+- each per_user_evidence_claims.claim: at most 30 English words.
+- review.generator_self_check: at most 100 English words.""",
+    "evidence_groundedness": """Field limits:
+- Each reason and fix must be one sentence and at most 40 English words.
+- Do not repeat the reasoning draft or enumerate irrelevant observations.""",
+    "answerability": """Field limits:
+- reason: at most 50 English words.
+- each fact, why_needed, and visual_description: at most 35 English words.
+- Preserve every canonical fact identity exactly when canonical facts are supplied.""",
+}
+
+
+def build_reasoned_finalizer_prompt(
+    *,
+    task_prompt: str,
+    reasoning_output: str,
+    output_schema: dict[str, Any],
+    stage_name: str,
+) -> str:
+    limits = REASONED_FINALIZER_FIELD_LIMITS.get(
+        stage_name,
+        "Keep every string concise and do not repeat the reasoning draft.",
+    )
+    return f"""You are the structured finalizer for stage {stage_name}.
+
+The reasoning draft below is supporting analysis. It may be incomplete or contain tentative statements. Use it together with the original task. Do not copy the reasoning, continue the chain of thought, mention the draft, or emit a <think> block.
+
+{STRICT_JSON_OUTPUT_CONTRACT}
+
+{limits}
+
+Original task:
+{task_prompt}
+
+Reasoning draft:
+{reasoning_output}
+
+Return exactly one JSON object matching this schema or example shape:
+{json.dumps(output_schema, ensure_ascii=False, indent=2)}
+"""
+
+
 # Production exposes baseline only.
 GENERATION_MODES = ("baseline",)
 # Archived generation modes:

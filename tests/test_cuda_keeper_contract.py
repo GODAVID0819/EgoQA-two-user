@@ -24,16 +24,25 @@ def test_cuda_keeper_uses_time_activation_and_memory_safety_controls():
 
 
 def test_six_user_long_run_starts_and_cleans_up_keeper():
-    pilot = (
-        REPO_ROOT / "hpc" / "qa" / "experiments" / "run_six_user_qa_pilot_40.sbatch"
+    common = (
+        REPO_ROOT
+        / "hpc"
+        / "qa"
+        / "experiments"
+        / "run_six_user_qa_reasoning_ab_h200_common.sh"
     ).read_text(encoding="utf-8")
     runtime = (
-        REPO_ROOT / "hpc" / "qa" / "smoke" / "run_six_user_qa_runtime_probe.sbatch"
+        REPO_ROOT
+        / "hpc"
+        / "qa"
+        / "production"
+        / "run_six_user_qa_10min_sequential_0p5_fresh30.sbatch"
     ).read_text(encoding="utf-8")
 
-    assert 'CUDA_KEEPER_ENABLE="${CUDA_KEEPER_ENABLE:-1}"' in pilot
-    assert "stage=start_cuda_keeper" in runtime
-    assert "stage=stop_cuda_keeper" in runtime
+    assert 'CUDA_KEEPER_ENABLE="1"' in common
+    assert 'stage "start_cuda_keeper"' in runtime
+    assert "CUDA_KEEPER_PID" in runtime
+    assert "trap cleanup EXIT INT TERM" in runtime
     assert "--max-prealloc" in runtime
     assert "--start-after-seconds" in runtime
     assert "--start-used-mib" not in runtime
@@ -61,18 +70,24 @@ def test_formal_two_hour_wrapper_enables_keeper_after_two_hours():
 
 def test_runtime_storage_preflight_package_is_present_for_remote_sync():
     runtime = (
-        REPO_ROOT / "hpc" / "qa" / "smoke" / "run_six_user_qa_runtime_probe.sbatch"
+        REPO_ROOT
+        / "hpc"
+        / "qa"
+        / "production"
+        / "run_six_user_qa_10min_sequential_0p5_fresh30.sbatch"
     ).read_text(encoding="utf-8")
 
     assert (REPO_ROOT / "training" / "__init__.py").is_file()
     assert (REPO_ROOT / "training" / "torch_storage_preflight.py").is_file()
-    assert "python -m training.torch_storage_preflight" in runtime
+    assert "-m training.torch_storage_preflight" in runtime
 
 
 def test_fast_profile_disables_thinking_for_every_model_stage():
-    from egolife_two_user_qa.video_qa_loop import six_user_ten_minute_fast_profiles
+    from egolife_two_user_qa.video_qa_loop import reasoning_ab_stage_profiles
 
-    profiles = six_user_ten_minute_fast_profiles()
+    profiles = reasoning_ab_stage_profiles("nr")
 
     assert profiles
-    assert all(profile.disable_thinking for profile in profiles.values())
+    assert all(profile.single_call is not None for profile in profiles.values())
+    assert all(profile.single_call.disable_thinking for profile in profiles.values())
+    assert all(profile.single_call.max_new_tokens == 2048 for profile in profiles.values())
