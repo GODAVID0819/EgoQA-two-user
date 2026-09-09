@@ -53,7 +53,11 @@ def test_formal_nr_and_r_wrappers_share_resources_and_scope() -> None:
         assert "#SBATCH --time=14:00:00" in text
         assert "--partition" not in text
         assert "--nodelist" not in text
-        assert 'source "${SCRIPT_DIR}/run_six_user_qa_one_pass_ab_h200_common.sh"' in text
+        assert (
+            'source "${PROJECT_ROOT}/hpc/qa/experiments/'
+            'run_six_user_qa_one_pass_ab_h200_common.sh"' in text
+        )
+        assert 'SCRIPT_DIR="$(cd --' not in text
     normalized_nr = nr.replace("one_pass_nr_3x10_h200", "RUN_LABEL").replace(
         'ONE_PASS_REASONING_MODE="nr"', 'ONE_PASS_REASONING_MODE="MODE"'
     )

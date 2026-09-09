@@ -20,8 +20,8 @@ MAX_GENERATION_SLOTS="1"
 EXPECTED_TOTAL_SLOTS="1"
 RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED="1"
 CUDA_KEEPER_ENABLE="0"
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-export RUN_MODE ONE_PASS_REASONING_MODE ONE_PASS_SMOKE
+PROJECT_ROOT="/scratch/xl6775/projects/EgoQA-two-user-onepass-nr-r-h200-20260909"
+export RUN_MODE ONE_PASS_REASONING_MODE ONE_PASS_SMOKE PROJECT_ROOT
 export MAX_GENERATION_SLOTS EXPECTED_TOTAL_SLOTS
 export RUNTIME_PROBE_ALLOW_ZERO_ACCEPTED CUDA_KEEPER_ENABLE
-source "${SCRIPT_DIR}/run_six_user_qa_one_pass_ab_h200_common.sh"
+source "${PROJECT_ROOT}/hpc/qa/experiments/run_six_user_qa_one_pass_ab_h200_common.sh"

@@ -15,6 +15,6 @@ set -euo pipefail
 
 RUN_MODE="one_pass_nr_3x10_h200"
 ONE_PASS_REASONING_MODE="nr"
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-export RUN_MODE ONE_PASS_REASONING_MODE
-source "${SCRIPT_DIR}/run_six_user_qa_one_pass_ab_h200_common.sh"
+PROJECT_ROOT="/scratch/xl6775/projects/EgoQA-two-user-onepass-nr-r-h200-20260909"
+export RUN_MODE ONE_PASS_REASONING_MODE PROJECT_ROOT
+source "${PROJECT_ROOT}/hpc/qa/experiments/run_six_user_qa_one_pass_ab_h200_common.sh"
