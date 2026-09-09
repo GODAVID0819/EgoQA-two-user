@@ -23,6 +23,9 @@ from egolife_two_user_qa.one_pass_summary import (  # noqa: E402
     summarize_one_pass_rows,
     update_one_pass_manifest,
 )
+from egolife_two_user_qa.video_qa_loop import (  # noqa: E402
+    recoverable_generator_input_error,
+)
 
 
 USERS = ["Jake", "Alice", "Tasha", "Lucia", "Katrina", "Shure"]
@@ -31,6 +34,20 @@ START_BY_GROUP = {
     "DAY3::17000000": 4,
     "DAY4::21400000": 2,
 }
+
+
+def test_recoverable_generator_input_error_accepts_only_token_ceiling_failure() -> None:
+    recoverable = RuntimeError(
+        "Qwen input exceeds the memory-safe token ceiling: "
+        "input_tokens=270481 max_input_tokens=262144."
+    )
+
+    assert recoverable_generator_input_error(recoverable) == (
+        "Generator parse failed because the sampled-frame input exceeded the "
+        "memory-safe token ceiling: input_tokens=270481 max_input_tokens=262144."
+    )
+    assert recoverable_generator_input_error(RuntimeError("CUDA out of memory")) is None
+    assert recoverable_generator_input_error(ValueError("bad schema")) is None
 
 
 def _clip(tmp_path: Path, user: str, speaker_index: int) -> dict[str, object]:

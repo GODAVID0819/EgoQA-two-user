@@ -425,6 +425,23 @@ def run_generator_stage(
     }
 
 
+def recoverable_generator_input_error(exc: Exception) -> str | None:
+    """把明确的输入 token 上限拒绝转换为可落盘的单槽失败。"""
+
+    if not isinstance(exc, RuntimeError):
+        return None
+    match = re.search(
+        r"input_tokens=\d+\s+max_input_tokens=\d+",
+        str(exc),
+    )
+    if "Qwen input exceeds the memory-safe token ceiling" not in str(exc) or match is None:
+        return None
+    return (
+        "Generator parse failed because the sampled-frame input exceeded the "
+        f"memory-safe token ceiling: {match.group(0)}."
+    )
+
+
 def parse_generator_output_with_repair(
     *,
     raw_output: str,
@@ -5518,17 +5535,52 @@ def generate_video_qa_loop(
                 f"images={len(image_paths)} videos={len(video_paths)}",
                 flush=True,
             )
-            generation_result = run_generator_stage(
-                runner=runner,
-                prompt=gen_prompt,
-                image_paths=image_paths,
-                video_paths=video_paths,
-                stage_profiles=stage_profiles,
-                decode_mode=generator_decode_mode,
-                temperature=generator_temperature,
-                top_p=generator_top_p,
-                top_k=generator_top_k,
-            )
+            try:
+                generation_result = run_generator_stage(
+                    runner=runner,
+                    prompt=gen_prompt,
+                    image_paths=image_paths,
+                    video_paths=video_paths,
+                    stage_profiles=stage_profiles,
+                    decode_mode=generator_decode_mode,
+                    temperature=generator_temperature,
+                    top_p=generator_top_p,
+                    top_k=generator_top_k,
+                )
+            except Exception as exc:
+                recoverable_reason = recoverable_generator_input_error(exc)
+                if recoverable_reason is None:
+                    raise
+                generation_elapsed_seconds = round(time.time() - stage_start, 3)
+                attempt_trace["generation"].update(
+                    {
+                        "error": str(exc),
+                        "elapsed_seconds": generation_elapsed_seconds,
+                    }
+                )
+                prompts[-1]["elapsed_seconds"] = generation_elapsed_seconds
+                attempt_trace["result"] = {
+                    "accepted": False,
+                    "failure_label": "generator_input_too_long",
+                    "reason": recoverable_reason,
+                }
+                packet_rejections.append(
+                    {
+                        "attempt": attempt,
+                        "failure_label": "generator_input_too_long",
+                        "reason": recoverable_reason,
+                    }
+                )
+                persist_attempt("parse_failed", qa=None)
+                print(
+                    "qa_stage_skipped "
+                    f"stage=generation evidence_id={packet.get('evidence_id')} "
+                    f"question_type={question_type} attempt={attempt} "
+                    f"reason=generator_input_too_long "
+                    f"seconds={generation_elapsed_seconds:.1f}",
+                    flush=True,
+                )
+                continue
             raw_generation = str(generation_result["raw_output"])
             generation_elapsed_seconds = float(generation_result["elapsed_seconds"])
             print(
