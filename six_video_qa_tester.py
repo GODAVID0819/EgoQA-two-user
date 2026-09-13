@@ -46,7 +46,7 @@ TEST_BACKENDS = (
     "gemini",
     "dry-run",
 )
-VIDEO_INPUT_SCOPES = ("six", "pair")
+VIDEO_INPUT_SCOPES = ("six", "pair", "minimal")
 PAIR_VIDEO_SOURCES = ("generator", "full")
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -145,6 +145,51 @@ def _asker_name(qa: dict[str, Any]) -> str:
     if not asker:
         raise ValueError(f"{qa.get('qa_id')}: asker name is empty")
     return asker
+
+
+def _clip_agent_name(clip: dict[str, Any]) -> str:
+    """Read the participant name from packet or accepted-QA media rows."""
+
+    return str(clip.get("agent_name") or clip.get("user") or "").strip()
+
+
+def load_evidence_rows(evidence_path: str | Path) -> list[dict[str, Any]]:
+    """Load evidence packets, accepting embedded accepted-QA video evidence.
+
+    Generation packet JSONL stores its selected media under ``clips``.  Accepted
+    QA JSONL preserves the same two media records under ``video_evidence``.  The
+    latter is useful for frozen evaluation sets because it keeps each question
+    and its exact answerability media together.
+    """
+
+    rows = []
+    for row_number, row in enumerate(iter_jsonl(evidence_path), 1):
+        clips = row.get("clips")
+        if not isinstance(clips, list):
+            clips = row.get("video_evidence")
+        if not isinstance(clips, list):
+            raise ValueError(
+                f"{evidence_path}:{row_number}: evidence row must contain clips "
+                "or video_evidence"
+            )
+        normalized_clips = []
+        for clip_index, clip in enumerate(clips, 1):
+            if not isinstance(clip, dict):
+                raise ValueError(
+                    f"{evidence_path}:{row_number}: clip {clip_index} is not an object"
+                )
+            normalized = dict(clip)
+            agent_name = _clip_agent_name(normalized)
+            if agent_name:
+                normalized["agent_name"] = agent_name
+            temporal_pruning = normalized.get("temporal_pruning")
+            if isinstance(temporal_pruning, dict):
+                for key in ("pruned_local_video", "original_local_video"):
+                    if not normalized.get(key) and temporal_pruning.get(key):
+                        normalized[key] = temporal_pruning[key]
+            normalized_clips.append(normalized)
+        rows.append({**row, "clips": normalized_clips})
+    return rows
 
 
 def _full_pair_video(packet_id: str, clip: dict[str, Any]) -> Path:
@@ -258,7 +303,7 @@ def _ordered_six_media(
     asker_matches = [
         clip
         for clip in media
-        if str(clip.get("agent_name") or "").strip().casefold() == asker.casefold()
+        if _clip_agent_name(clip).casefold() == asker.casefold()
     ]
     if len(asker_matches) != 1:
         raise ValueError(
@@ -268,11 +313,28 @@ def _ordered_six_media(
     if asker_clip["source_role"] != "selected_pair_full_original":
         raise ValueError(f"{qa_id}: asker is not part of the original selected pair")
 
-    others = sorted(
-        (clip for clip in media if clip is not asker_clip),
+    selected_partner = [
+        clip
+        for clip in media
+        if clip is not asker_clip
+        and clip.get("source_role") == "selected_pair_full_original"
+    ]
+    if len(selected_partner) != 1:
+        raise ValueError(
+            f"{qa_id}: expected one non-asker selected-pair video, "
+            f"found {len(selected_partner)}"
+        )
+    context_clips = sorted(
+        (clip for clip in media if clip.get("source_role") == "remaining_context"),
         key=lambda clip: str(clip.get("agent_dir") or ""),
     )
-    ordered = [asker_clip, *others]
+    if len(context_clips) != 4:
+        raise ValueError(
+            f"{qa_id}: expected four remaining context videos, found {len(context_clips)}"
+        )
+    # Keep the minimal answerable pair as the first-two prefix. Appending the
+    # four contexts then changes only the amount of context, not pair position.
+    ordered = [asker_clip, selected_partner[0], *context_clips]
     for index, clip in enumerate(ordered, 1):
         clip["input_video_index"] = index
         clip["is_asker_video"] = index == 1
@@ -327,7 +389,7 @@ def _ordered_pair_media(
     asker_matches = [
         clip
         for clip in media
-        if str(clip.get("agent_name") or "").strip().casefold() == asker.casefold()
+        if _clip_agent_name(clip).casefold() == asker.casefold()
     ]
     if len(asker_matches) != 1:
         raise ValueError(
@@ -340,6 +402,117 @@ def _ordered_pair_media(
         clip["input_video_index"] = index
         clip["is_asker_video"] = index == 1
     return asker, ordered
+
+
+def _minimal_answerable_users(qa: dict[str, Any]) -> list[str]:
+    """Resolve the speaker plus the provider views cited by the accepted QA."""
+
+    qa_id = str(qa.get("qa_id") or "<missing qa_id>")
+    required_users = qa.get("required_users")
+    if (
+        not isinstance(required_users, list)
+        or len(required_users) != 6
+        or len({str(user).strip().casefold() for user in required_users}) != 6
+        or any(not str(user).strip() for user in required_users)
+    ):
+        raise ValueError(f"{qa_id}: expected six distinct required_users")
+
+    claims = qa.get("supporting_user_claims")
+    if not isinstance(claims, list) or not claims:
+        raise ValueError(
+            f"{qa_id}: supporting_user_claims must identify at least one provider"
+        )
+    required_by_key = {
+        str(user).strip().casefold(): str(user).strip() for user in required_users
+    }
+    provider_keys = set(required_by_key) - {str(required_users[0]).strip().casefold()}
+    claimed_provider_keys = set()
+    for claim_number, claim in enumerate(claims, 1):
+        if not isinstance(claim, dict):
+            raise ValueError(
+                f"{qa_id}: supporting_user_claims[{claim_number}] is not an object"
+            )
+        user_key = str(claim.get("user") or "").strip().casefold()
+        if user_key not in provider_keys:
+            raise ValueError(
+                f"{qa_id}: supporting_user_claims[{claim_number}] does not name "
+                "one of the five providers"
+            )
+        claimed_provider_keys.add(user_key)
+
+    return [
+        str(user).strip()
+        for index, user in enumerate(required_users)
+        if index == 0 or str(user).strip().casefold() in claimed_provider_keys
+    ]
+
+
+def _ordered_six_user_packet_media(
+    *,
+    qa: dict[str, Any],
+    evidence_packet: dict[str, Any],
+    minimal: bool,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Select full originals from a native six-user evidence packet."""
+
+    qa_id = str(qa.get("qa_id") or "<missing qa_id>")
+    evidence_id = str(qa.get("evidence_id") or "")
+    required_users = [str(user).strip() for user in (qa.get("required_users") or [])]
+    if len(required_users) != 6 or len({user.casefold() for user in required_users}) != 6:
+        raise ValueError(f"{qa_id}: expected six distinct required_users")
+    selected_users = _minimal_answerable_users(qa) if minimal else required_users
+    selected_keys = {user.casefold() for user in selected_users}
+
+    clips = evidence_packet.get("clips")
+    if not isinstance(clips, list) or len(clips) != 6:
+        raise ValueError(f"{evidence_id}: native six-user packet must contain six clips")
+    clips_by_user: dict[str, dict[str, Any]] = {}
+    for clip_number, clip in enumerate(clips, 1):
+        if not isinstance(clip, dict):
+            raise ValueError(f"{evidence_id}: clip {clip_number} is not an object")
+        user = _clip_agent_name(clip)
+        user_key = user.casefold()
+        if not user or user_key in clips_by_user:
+            raise ValueError(
+                f"{evidence_id}: six-user clips have a missing or duplicate user {user!r}"
+            )
+        clips_by_user[user_key] = clip
+
+    required_keys = {user.casefold() for user in required_users}
+    if set(clips_by_user) != required_keys:
+        raise ValueError(
+            f"{evidence_id}: clip users do not match required_users: "
+            f"clips={sorted(clips_by_user)} required={sorted(required_keys)}"
+        )
+
+    media = []
+    for user in required_users:
+        user_key = user.casefold()
+        if user_key not in selected_keys:
+            continue
+        clip = clips_by_user[user_key]
+        media.append(
+            {
+                "agent_dir": clip.get("agent_dir"),
+                "agent_name": _clip_agent_name(clip),
+                "source_role": (
+                    "minimal_supporting_full_original"
+                    if minimal
+                    else "six_user_full_original"
+                ),
+                "alignment": "native_synchronized_packet",
+                "synchronized_with_selected_pair": True,
+                "source_video": str(_full_pair_video(evidence_id, clip)),
+                "source_day": clip.get("day"),
+                "source_time_token": clip.get("time_token"),
+            }
+        )
+    for index, row in enumerate(media, 1):
+        row["input_video_index"] = index
+        row["is_asker_video"] = index == 1
+    if len(media) != len(selected_users):
+        raise ValueError(f"{qa_id}: failed to resolve every selected six-user video")
+    return required_users[0], media
 
 
 def build_blind_video_prompt(
@@ -365,6 +538,19 @@ def build_blind_video_prompt(
             "Answer one multiple-choice question using the two video inputs.\n\n"
             f"The person asking the question is {asker}. Video 1 is that person's "
             "own recording. Video 2 is an additional unlabeled recording.\n"
+        )
+    elif video_input_scope == "minimal":
+        minimal_count = len(_minimal_answerable_users(qa))
+        additional = minimal_count - 1
+        media_description = (
+            f"Answer one multiple-choice question using the {minimal_count} video inputs.\n\n"
+            f"The person asking the question is {asker}. Video 1 is that person's "
+            "own recording. "
+            + (
+                "Video 2 is an additional unlabeled recording.\n"
+                if additional == 1
+                else f"Videos 2 through {minimal_count} are additional unlabeled recordings.\n"
+            )
         )
     else:
         raise ValueError(f"unsupported video_input_scope: {video_input_scope}")
@@ -477,9 +663,7 @@ def _prepare_cases(
         evidence_packet = evidence_index.get(evidence_id)
         if evidence_packet is None:
             raise ValueError(f"{qa_id}: evidence_id not found in evidence JSONL: {evidence_id}")
-        if video_input_scope == "six":
-            if six_view_index is None:
-                raise ValueError("six-view index is required in six-video mode")
+        if video_input_scope == "six" and six_view_index is not None:
             six_view_packet = six_view_index.get(evidence_id)
             if six_view_packet is None:
                 raise ValueError(
@@ -489,6 +673,18 @@ def _prepare_cases(
                 qa=qa,
                 evidence_packet=evidence_packet,
                 six_view_packet=six_view_packet,
+            )
+        elif video_input_scope == "six":
+            asker, media = _ordered_six_user_packet_media(
+                qa=qa,
+                evidence_packet=evidence_packet,
+                minimal=False,
+            )
+        elif video_input_scope == "minimal":
+            asker, media = _ordered_six_user_packet_media(
+                qa=qa,
+                evidence_packet=evidence_packet,
+                minimal=True,
             )
         elif video_input_scope == "pair":
             asker, media = _ordered_pair_media(
@@ -572,17 +768,25 @@ def _result_summary(
             + (
                 "Videos 2-6 are unlabeled"
                 if video_input_scope == "six"
-                else "Video 2 is unlabeled"
+                else (
+                    "only provider videos named by supporting_user_claims are included"
+                    if video_input_scope == "minimal"
+                    else "Video 2 is unlabeled"
+                )
             )
         ),
         "media_contract": (
-            "two full unpruned originals from evidence JSONL plus four exact-or-sampled "
-            "context videos from the six-view manifest"
+            "six full unpruned originals from the native six-user evidence packet"
             if video_input_scope == "six"
             else (
-                "only the two exact pruned selected-pair videos used by the generator"
-                if pair_video_source == "generator"
-                else "only the two full unpruned selected-pair originals"
+                "speaker full original plus every provider full original named by "
+                "the accepted QA's supporting_user_claims"
+                if video_input_scope == "minimal"
+                else (
+                    "only the two exact pruned selected-pair videos used by the generator"
+                    if pair_video_source == "generator"
+                    else "only the two full unpruned selected-pair originals"
+                )
             )
         ),
     }
@@ -607,6 +811,7 @@ def run_six_video_qa_test(
     allow_cpu: bool = False,
     disable_thinking: bool = True,
     reasoning_effort: str | None = None,
+    openrouter_turbo: bool = False,
     video_fps: float = DEFAULT_VIDEO_FPS,
     max_frames_per_video: int = 16,
     max_input_tokens: int | None = None,
@@ -637,8 +842,8 @@ def run_six_video_qa_test(
         raise ValueError(f"unsupported video_input_scope: {video_input_scope}")
     if pair_video_source not in PAIR_VIDEO_SOURCES:
         raise ValueError(f"unsupported pair_video_source: {pair_video_source}")
-    if video_input_scope == "six" and not six_view_manifest_path:
-        raise ValueError("six_view_manifest_path is required in six-video mode")
+    if openrouter_turbo and backend != "openrouter":
+        raise ValueError("openrouter_turbo requires backend=openrouter")
     if start_index < 0:
         raise ValueError("start_index must be non-negative")
     if max_items is not None and max_items <= 0:
@@ -653,14 +858,14 @@ def run_six_video_qa_test(
     if not selected_qa_rows:
         raise ValueError("the requested QA slice is empty")
 
-    evidence_rows = list(iter_jsonl(evidence_path))
+    evidence_rows = load_evidence_rows(evidence_path)
     evidence_index = _unique_index(
         evidence_rows,
         key="evidence_id",
         source=evidence_path,
     )
     six_view_index = None
-    if video_input_scope == "six":
+    if video_input_scope == "six" and six_view_manifest_path:
         six_view_rows = list(iter_jsonl(six_view_manifest_path))
         six_view_index = _unique_index(
             six_view_rows,
@@ -720,6 +925,7 @@ def run_six_video_qa_test(
             disable_thinking=disable_thinking,
             api_key=api_key,
             reasoning_effort=reasoning_effort,
+            openrouter_turbo=openrouter_turbo,
             video_fps=video_fps,
             max_input_tokens=max_input_tokens,
             min_free_gib=min_free_gib,
@@ -874,6 +1080,7 @@ def run_six_video_qa_test(
             "video_count": len(anonymous_paths),
             "video_input_scope": video_input_scope,
             "pair_video_source": pair_video_source,
+            "openrouter_turbo": openrouter_turbo,
             "disclosed_identity_count": 1,
             "gold_fields_in_prompt": False,
         }
@@ -905,6 +1112,7 @@ def run_six_video_qa_test(
                 "model_id": effective_model_id,
                 "video_input_scope": video_input_scope,
                 "pair_video_source": pair_video_source,
+                "openrouter_turbo": openrouter_turbo,
                 "status": "completed",
                 "question": case["question"],
                 "options": case["options"],
@@ -942,6 +1150,7 @@ def run_six_video_qa_test(
                 "model_id": effective_model_id,
                 "video_input_scope": video_input_scope,
                 "pair_video_source": pair_video_source,
+                "openrouter_turbo": openrouter_turbo,
                 "status": "error",
                 "error": f"{type(exc).__name__}: {exc}",
                 "model_call_seconds": round(time.time() - started, 3),
@@ -981,6 +1190,7 @@ def run_six_video_qa_test(
             "max_items": max_items,
             "max_frames_per_video": max_frames_per_video,
             "resume": resume,
+            "openrouter_turbo": openrouter_turbo,
         }
     )
     write_json(summary_path, summary)
@@ -1053,6 +1263,12 @@ def add_six_video_tester_args(parser: argparse.ArgumentParser) -> None:
         choices=OPENROUTER_REASONING_EFFORTS,
     )
     parser.add_argument(
+        "--turbo",
+        dest="openrouter_turbo",
+        action="store_true",
+        help="Prioritize OpenRouter providers by throughput (Nitro routing)",
+    )
+    parser.add_argument(
         "--decoding-mode",
         choices=GENERATOR_DECODING_MODES,
         default="greedy",
@@ -1095,6 +1311,7 @@ def run_six_video_test_from_args(args: argparse.Namespace) -> dict[str, Any]:
         allow_cpu=args.allow_cpu,
         disable_thinking=args.disable_thinking,
         reasoning_effort=args.reasoning_effort,
+        openrouter_turbo=args.openrouter_turbo,
         video_fps=args.video_fps,
         max_frames_per_video=args.max_frames_per_video,
         max_input_tokens=args.max_input_tokens,

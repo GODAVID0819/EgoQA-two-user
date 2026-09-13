@@ -16,7 +16,14 @@ from .clip_gap_demo import (
     run_random_clip_gap_trials,
 )
 from .clip_exclusive_mining import mine_clip_exclusive_candidates
-from .group_relative_clip_sampling import mine_group_relative_clip_candidates
+from .group_relative_clip_sampling import (
+    DEFAULT_CLUSTER_SUMMARY_MODEL_ID,
+    DEFAULT_MAX_PAIR_TIME_DIFFERENCE_SECONDS,
+    DEFAULT_SPLIT_NONCONTIGUOUS_CLUSTERS,
+    RANDOM_SAMPLING_POLICY,
+    SAMPLING_POLICIES,
+    mine_group_relative_clip_candidates,
+)
 from .generation_ablation import (
     GENERATION_SWEEPS,
     parse_generation_sweeps,
@@ -376,13 +383,76 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument(
         "--max-pair-time-difference-seconds",
         type=float,
+        default=DEFAULT_MAX_PAIR_TIME_DIFFERENCE_SECONDS,
         help=(
             "Only prune high-similarity centroid pairs whose timestamps differ by at most "
-            "this many seconds; omit for timestamp-agnostic pruning"
+            "this many seconds and use only those pairs for pair scoring"
         ),
     )
+    benchmark.add_argument(
+        "--timestamp-agnostic-pruning",
+        action="store_const",
+        const=None,
+        dest="max_pair_time_difference_seconds",
+    )
+    benchmark.add_argument(
+        "--split-noncontiguous-clusters",
+        action="store_true",
+        dest="split_noncontiguous_clusters",
+    )
+    benchmark.add_argument(
+        "--no-split-noncontiguous-clusters",
+        action="store_false",
+        dest="split_noncontiguous_clusters",
+    )
+    benchmark.set_defaults(
+        split_noncontiguous_clusters=DEFAULT_SPLIT_NONCONTIGUOUS_CLUSTERS
+    )
+    benchmark.add_argument("--max-cluster-member-gap-seconds", type=float)
+    benchmark.add_argument("--summarize-clusters", action="store_true")
+    benchmark.add_argument(
+        "--cluster-summary-backend",
+        default="transformers-local",
+        choices=[
+            "transformers-local",
+            "transformers-local-memory-safe",
+            "openai-compatible-local",
+            "openrouter",
+            "gemini",
+            "dry-run",
+        ],
+    )
+    benchmark.add_argument(
+        "--cluster-summary-model-id",
+        default=DEFAULT_CLUSTER_SUMMARY_MODEL_ID,
+    )
+    benchmark.add_argument(
+        "--cluster-summary-base-url",
+        default="http://127.0.0.1:8000/v1",
+    )
+    benchmark.add_argument("--cluster-summary-api-key")
+    benchmark.add_argument("--cluster-summary-dtype", default="bfloat16")
+    benchmark.add_argument(
+        "--cluster-summary-max-new-tokens",
+        type=int,
+        default=4096,
+        help="Maximum new tokens for the batched all-cluster summary and relation calls",
+    )
+    benchmark.add_argument("--cluster-summary-max-images", type=int, default=12)
+    benchmark.add_argument("--cluster-summary-max-attempts", type=int, default=2)
+    benchmark.add_argument("--cluster-summary-allow-cpu", action="store_true")
+    benchmark.add_argument("--cluster-summary-enable-thinking", action="store_true")
     benchmark.add_argument("--compare-all-pairs", action="store_true")
     benchmark.add_argument("--random-seed", type=int, default=42)
+    benchmark.add_argument(
+        "--sampling-policy",
+        choices=SAMPLING_POLICIES,
+        default=RANDOM_SAMPLING_POLICY,
+    )
+    benchmark.add_argument("--time-bin-count", type=int, default=10)
+    benchmark.add_argument("--strict-balance", action="store_true")
+    benchmark.add_argument("--group-partition-count", type=int, default=1)
+    benchmark.add_argument("--group-partition-index", type=int, default=0)
     benchmark.add_argument("--ffmpeg-binary", default="ffmpeg")
     benchmark.add_argument("--download-media", action="store_true")
     benchmark.add_argument("--review-dir")
@@ -794,11 +864,29 @@ def main(argv: list[str] | None = None) -> int:
             pruning_protection_mode=args.pruning_protection_mode,
             min_pruned_video_percent=args.min_pruned_video_percent,
             max_pair_time_difference_seconds=args.max_pair_time_difference_seconds,
+            split_noncontiguous_clusters=args.split_noncontiguous_clusters,
+            max_cluster_member_gap_seconds=args.max_cluster_member_gap_seconds,
             random_pair_first=not args.compare_all_pairs,
             random_seed=args.random_seed,
+            sampling_policy=args.sampling_policy,
+            time_bin_count=args.time_bin_count,
+            strict_balance=args.strict_balance,
+            group_partition_count=args.group_partition_count,
+            group_partition_index=args.group_partition_index,
             ffmpeg_binary=args.ffmpeg_binary,
             download_media=args.download_media,
             review_dir=args.review_dir,
+            summarize_clusters=args.summarize_clusters,
+            cluster_summary_backend=args.cluster_summary_backend,
+            cluster_summary_model_id=args.cluster_summary_model_id,
+            cluster_summary_base_url=args.cluster_summary_base_url,
+            cluster_summary_api_key=args.cluster_summary_api_key,
+            cluster_summary_dtype=args.cluster_summary_dtype,
+            cluster_summary_max_new_tokens=args.cluster_summary_max_new_tokens,
+            cluster_summary_max_images=args.cluster_summary_max_images,
+            cluster_summary_max_attempts=args.cluster_summary_max_attempts,
+            cluster_summary_allow_cpu=args.cluster_summary_allow_cpu,
+            cluster_summary_disable_thinking=not args.cluster_summary_enable_thinking,
         )
         print(f"wrote {len(rows)} CLIP-pruned benchmark evidence packets to {args.output}")
         return 0
@@ -940,6 +1028,7 @@ def main(argv: list[str] | None = None) -> int:
             judge_entropy_report_path=args.judge_entropy_report_output,
             backend=args.backend,
             model_id=args.model_id,
+            generator_device=args.generator_device,
             base_url=args.base_url,
             target_count=args.target_count,
             max_attempts=args.max_attempts,
@@ -952,6 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
             api_key=args.api_key,
             judge_backend=args.judge_backend,
             judge_model_id=args.judge_model_id,
+            judge_device=args.judge_device,
             judge_base_url=args.judge_base_url,
             judge_api_key=args.judge_api_key,
             judge_max_new_tokens=args.judge_max_new_tokens,
@@ -972,6 +1062,7 @@ def main(argv: list[str] | None = None) -> int:
             generator_temperature=args.generator_temperature,
             generator_top_p=args.generator_top_p,
             generator_top_k=args.generator_top_k,
+            generator_seed=args.generator_seed,
         )
         print(f"accepted {len(rows)} video-first question-answer rows")
         return 0

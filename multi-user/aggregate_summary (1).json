@@ -1,0 +1,263 @@
+{
+  "schema_version": "accepted_10min_dual_condition_results_v1",
+  "status": "completed_with_skips",
+  "input_question_count": 39,
+  "input_unique_evidence_count": 21,
+  "condition_order": [
+    "all_six",
+    "minimal_required"
+  ],
+  "model_count": 3,
+  "expected_model_calls": 228,
+  "conditions": {
+    "all_six": {
+      "status": "completed_with_skips",
+      "input_question_count": 39,
+      "evaluation_question_count": 38,
+      "skipped_question_count": 1,
+      "input_unique_evidence_count": 21,
+      "input_media_packet_count": 21,
+      "available_evidence_count": 20,
+      "skipped_evidence_count": 1,
+      "expected_model_calls": 114,
+      "evaluation_qa": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/media/all_six/accepted_evaluable_questions.jsonl",
+      "skipped_questions": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/media/all_six/skipped_questions.jsonl",
+      "skipped_evidence": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/media/all_six/skipped_evidence.jsonl",
+      "condition": "all_six_full_ten_minute_videos",
+      "models": {
+        "qwen3vl_8b": {
+          "model_id": "Qwen/Qwen3-VL-8B-Instruct",
+          "correct_count": 27,
+          "accuracy": 0.7105263157894737,
+          "parsed_choice_count": 38,
+          "parse_failure_count": 0,
+          "by_acceptance_source": {
+            "automatic_jsonl": {
+              "question_count": 4,
+              "correct_count": 4,
+              "accuracy": 1.0
+            },
+            "automatic_snapshot": {
+              "question_count": 8,
+              "correct_count": 6,
+              "accuracy": 0.75
+            },
+            "manual_curated": {
+              "question_count": 16,
+              "correct_count": 9,
+              "accuracy": 0.5625
+            },
+            "user_additional": {
+              "question_count": 10,
+              "correct_count": 8,
+              "accuracy": 0.8
+            }
+          },
+          "results": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen3vl_8b/all_six/results.jsonl",
+          "summary": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen3vl_8b/all_six/summary.json"
+        },
+        "qwen36_27b": {
+          "model_id": "Qwen/Qwen3.6-27B",
+          "correct_count": 31,
+          "accuracy": 0.8157894736842105,
+          "parsed_choice_count": 37,
+          "parse_failure_count": 1,
+          "by_acceptance_source": {
+            "automatic_jsonl": {
+              "question_count": 4,
+              "correct_count": 4,
+              "accuracy": 1.0
+            },
+            "automatic_snapshot": {
+              "question_count": 8,
+              "correct_count": 8,
+              "accuracy": 1.0
+            },
+            "manual_curated": {
+              "question_count": 16,
+              "correct_count": 11,
+              "accuracy": 0.6875
+            },
+            "user_additional": {
+              "question_count": 10,
+              "correct_count": 8,
+              "accuracy": 0.8
+            }
+          },
+          "results": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen36_27b/all_six/results.jsonl",
+          "summary": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen36_27b/all_six/summary.json"
+        },
+        "qwen38_27b": {
+          "model_id": "Qwen/Qwen3.8-27B",
+          "correct_count": 30,
+          "accuracy": 0.7894736842105263,
+          "parsed_choice_count": 38,
+          "parse_failure_count": 0,
+          "by_acceptance_source": {
+            "automatic_jsonl": {
+              "question_count": 4,
+              "correct_count": 4,
+              "accuracy": 1.0
+            },
+            "automatic_snapshot": {
+              "question_count": 8,
+              "correct_count": 6,
+              "accuracy": 0.75
+            },
+            "manual_curated": {
+              "question_count": 16,
+              "correct_count": 10,
+              "accuracy": 0.625
+            },
+            "user_additional": {
+              "question_count": 10,
+              "correct_count": 10,
+              "accuracy": 1.0
+            }
+          },
+          "results": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen38_27b/all_six/results.jsonl",
+          "summary": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen38_27b/all_six/summary.json"
+        }
+      }
+    },
+    "minimal_required": {
+      "status": "completed_with_skips",
+      "input_question_count": 39,
+      "evaluation_question_count": 38,
+      "skipped_question_count": 1,
+      "input_unique_evidence_count": 21,
+      "input_media_packet_count": 39,
+      "available_evidence_count": 38,
+      "skipped_evidence_count": 1,
+      "expected_model_calls": 114,
+      "evaluation_qa": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/media/minimal_required/accepted_evaluable_questions.jsonl",
+      "skipped_questions": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/media/minimal_required/skipped_questions.jsonl",
+      "skipped_evidence": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/media/minimal_required/skipped_evidence.jsonl",
+      "condition": "minimal_required_full_ten_minute_videos",
+      "models": {
+        "qwen3vl_8b": {
+          "model_id": "Qwen/Qwen3-VL-8B-Instruct",
+          "correct_count": 27,
+          "accuracy": 0.7105263157894737,
+          "parsed_choice_count": 38,
+          "parse_failure_count": 0,
+          "by_acceptance_source": {
+            "automatic_jsonl": {
+              "question_count": 4,
+              "correct_count": 4,
+              "accuracy": 1.0
+            },
+            "automatic_snapshot": {
+              "question_count": 8,
+              "correct_count": 6,
+              "accuracy": 0.75
+            },
+            "manual_curated": {
+              "question_count": 16,
+              "correct_count": 8,
+              "accuracy": 0.5
+            },
+            "user_additional": {
+              "question_count": 10,
+              "correct_count": 9,
+              "accuracy": 0.9
+            }
+          },
+          "results": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen3vl_8b/minimal_required/results.jsonl",
+          "summary": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen3vl_8b/minimal_required/summary.json"
+        },
+        "qwen36_27b": {
+          "model_id": "Qwen/Qwen3.6-27B",
+          "correct_count": 23,
+          "accuracy": 0.6052631578947368,
+          "parsed_choice_count": 30,
+          "parse_failure_count": 8,
+          "by_acceptance_source": {
+            "automatic_jsonl": {
+              "question_count": 4,
+              "correct_count": 3,
+              "accuracy": 0.75
+            },
+            "automatic_snapshot": {
+              "question_count": 8,
+              "correct_count": 7,
+              "accuracy": 0.875
+            },
+            "manual_curated": {
+              "question_count": 16,
+              "correct_count": 8,
+              "accuracy": 0.5
+            },
+            "user_additional": {
+              "question_count": 10,
+              "correct_count": 5,
+              "accuracy": 0.5
+            }
+          },
+          "results": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen36_27b/minimal_required/results.jsonl",
+          "summary": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen36_27b/minimal_required/summary.json"
+        },
+        "qwen38_27b": {
+          "model_id": "Qwen/Qwen3.8-27B",
+          "correct_count": 28,
+          "accuracy": 0.7368421052631579,
+          "parsed_choice_count": 38,
+          "parse_failure_count": 0,
+          "by_acceptance_source": {
+            "automatic_jsonl": {
+              "question_count": 4,
+              "correct_count": 4,
+              "accuracy": 1.0
+            },
+            "automatic_snapshot": {
+              "question_count": 8,
+              "correct_count": 6,
+              "accuracy": 0.75
+            },
+            "manual_curated": {
+              "question_count": 16,
+              "correct_count": 10,
+              "accuracy": 0.625
+            },
+            "user_additional": {
+              "question_count": 10,
+              "correct_count": 8,
+              "accuracy": 0.8
+            }
+          },
+          "results": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen38_27b/minimal_required/results.jsonl",
+          "summary": "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/accepted_10min_model_tests/accepted39_qwen3_dual_16765855/qwen38_27b/minimal_required/summary.json"
+        }
+      }
+    }
+  },
+  "paired_condition_comparisons": {
+    "qwen3vl_8b": {
+      "common_question_count": 38,
+      "all_six_correct_count": 27,
+      "all_six_accuracy": 0.7105263157894737,
+      "minimal_required_correct_count": 27,
+      "minimal_required_accuracy": 0.7105263157894737,
+      "minimal_minus_all_six_accuracy": 0.0,
+      "prediction_disagreement_count": 7
+    },
+    "qwen36_27b": {
+      "common_question_count": 38,
+      "all_six_correct_count": 31,
+      "all_six_accuracy": 0.8157894736842105,
+      "minimal_required_correct_count": 23,
+      "minimal_required_accuracy": 0.6052631578947368,
+      "minimal_minus_all_six_accuracy": -0.21052631578947367,
+      "prediction_disagreement_count": 9
+    },
+    "qwen38_27b": {
+      "common_question_count": 38,
+      "all_six_correct_count": 30,
+      "all_six_accuracy": 0.7894736842105263,
+      "minimal_required_correct_count": 28,
+      "minimal_required_accuracy": 0.7368421052631579,
+      "minimal_minus_all_six_accuracy": -0.05263157894736842,
+      "prediction_disagreement_count": 4
+    }
+  }
+}

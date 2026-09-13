@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Blinded F/E/A scoring and tie-aware ranking for EgoLife RLHF data.">
+  <title>EgoLife Six-Question Ranking Lab</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071018;
+      --panel: #101b25;
+      --panel-2: #162532;
+      --panel-3: #0b151d;
+      --line: #2b4050;
+      --line-strong: #4e7187;
+      --text: #f3f7f8;
+      --muted: #9eb0bb;
+      --mint: #8ff0c2;
+      --mint-ink: #062217;
+      --sky: #80ccff;
+      --amber: #ffd27c;
+      --red: #ff9991;
+      --violet: #c2adff;
+      --radius: 16px;
+      --shadow: 0 18px 54px rgba(0, 0, 0, .28);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      min-width: 340px;
+      min-height: 100vh;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% -8%, rgba(128, 204, 255, .15), transparent 34rem),
+        radial-gradient(circle at 88% 0%, rgba(143, 240, 194, .10), transparent 32rem),
+        var(--bg);
+    }
+    button, input, select, textarea { font: inherit; }
+    button, .file-button {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 12px;
+      color: var(--text);
+      background: #192935;
+      cursor: pointer;
+      transition: .16s ease;
+    }
+    button:hover, .file-button:hover { border-color: var(--line-strong); background: #203544; }
+    button:active { transform: translateY(1px); }
+    button:disabled { cursor: not-allowed; opacity: .4; }
+    button.primary { border-color: var(--mint); color: var(--mint-ink); background: var(--mint); font-weight: 850; }
+    button.primary:hover { background: #b3f8d5; }
+    button.danger { color: #ffd0cd; border-color: #6f413e; background: #301e20; }
+    button.ghost { background: transparent; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 9px 10px;
+      color: var(--text);
+      background: #09131a;
+    }
+    input, select { min-height: 42px; }
+    textarea { min-height: 86px; resize: vertical; line-height: 1.45; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .file-button:focus-within {
+      outline: 3px solid rgba(128, 204, 255, .36); outline-offset: 2px;
+    }
+    .shell { width: min(1560px, calc(100% - 30px)); margin: 0 auto; padding: 28px 0 70px; }
+    header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px; align-items: end; margin-bottom: 20px; }
+    .eyebrow { margin: 0 0 7px; color: var(--mint); font: 800 .74rem ui-monospace, monospace; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(2.2rem, 5vw, 4.5rem); line-height: .96; letter-spacing: -.05em; }
+    .lede { max-width: 850px; margin: 14px 0 0; color: var(--muted); line-height: 1.55; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(105px, 1fr)); gap: 8px; }
+    .metric { min-width: 110px; padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: rgba(16, 27, 37, .88); }
+    .metric strong { display: block; font-size: 1.45rem; }
+    .metric span { color: var(--muted); font-size: .76rem; text-transform: uppercase; letter-spacing: .08em; }
+    .protocol { margin-bottom: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(16, 27, 37, .92); box-shadow: var(--shadow); }
+    .protocol summary { padding: 15px 18px; cursor: pointer; font-weight: 800; }
+    .protocol-body { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 0 18px 18px; }
+    .protocol-step { padding: 13px; border-radius: 12px; background: var(--panel-2); color: var(--muted); line-height: 1.48; }
+    .protocol-step strong { display: block; margin-bottom: 5px; color: var(--text); }
+    .source-notice { display: none; margin: 0 0 16px; padding: 13px 16px; border: 1px solid rgba(255, 210, 124, .48); border-radius: 13px; color: #ffe7b8; background: rgba(91, 62, 19, .34); line-height: 1.45; }
+    .source-notice.show { display: block; }
+    .toolbar {
+      position: sticky; top: 0; z-index: 20;
+      display: grid; grid-template-columns: minmax(180px, 1.2fr) minmax(170px, .8fr) minmax(135px, .6fr) auto;
+      gap: 12px; align-items: end; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius);
+      background: rgba(9, 19, 26, .96); box-shadow: var(--shadow); backdrop-filter: blur(15px);
+    }
+    .field { display: grid; gap: 5px; color: var(--muted); font-size: .78rem; font-weight: 750; }
+    .task-tools { display: grid; grid-template-columns: 42px minmax(66px, 85px) 46px 42px auto; gap: 5px; align-items: center; margin-top: 5px; }
+    .task-tools button { padding: 6px; }
+    .position { color: var(--muted); font-size: .76rem; white-space: nowrap; }
+    .toolbar-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+    .file-button { display: inline-flex; align-items: center; }
+    .file-button input { display: none; }
+    .progress-strip { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; margin: 12px 2px 18px; }
+    .track { height: 8px; overflow: hidden; border-radius: 999px; background: #13222c; }
+    .fill { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--sky), var(--mint)); transition: width .2s ease; }
+    .progress-copy { color: var(--muted); font-size: .8rem; }
+    .task-shell { display: grid; gap: 16px; }
+    .task-head, .video-panel, .questions-panel, .label-panel {
+      border: 1px solid var(--line); border-radius: var(--radius); background: rgba(16, 27, 37, .94); box-shadow: var(--shadow);
+    }
+    .task-head { display: flex; justify-content: space-between; gap: 18px; align-items: center; padding: 17px 19px; }
+    h2, h3 { margin: 0; }
+    h2 { font-size: clamp(1.25rem, 2.8vw, 2rem); }
+    h3 { font-size: 1.05rem; }
+    .meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+    .pill { display: inline-flex; align-items: center; min-height: 27px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: #0c1820; font-size: .75rem; }
+    .pill.done { color: var(--mint); border-color: rgba(143, 240, 194, .45); }
+    .nav { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+    .panel-head { display: flex; justify-content: space-between; gap: 15px; align-items: center; padding: 15px 17px; border-bottom: 1px solid var(--line); }
+    .panel-head p { margin: 5px 0 0; color: var(--muted); font-size: .82rem; }
+    .video-actions { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+    .video-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 13px; }
+    .video-card { overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: #050b0f; }
+    .video-card video { display: none; width: 100%; max-height: 400px; background: #000; }
+    .video-card.loaded video { display: block; }
+    .video-placeholder { display: grid; place-items: center; aspect-ratio: 16/9; color: var(--muted); background: linear-gradient(145deg, #0e1e28, #080f14); }
+    .video-card.loaded .video-placeholder { display: none; }
+    .video-copy { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 10px 12px; }
+    .video-copy span, .video-copy a { color: var(--muted); font-size: .78rem; }
+    .video-copy a { color: var(--sky); }
+    .questions-panel { padding: 15px; }
+    .questions-heading { display: flex; justify-content: space-between; gap: 15px; align-items: center; margin-bottom: 12px; }
+    .blind-note { color: var(--muted); font-size: .78rem; }
+    .candidate-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+    .candidate { display: grid; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-3); }
+    .candidate-head { display: flex; justify-content: space-between; align-items: center; padding: 11px 13px; border-bottom: 1px solid var(--line); background: var(--panel-2); }
+    .candidate-letter { display: inline-grid; place-items: center; width: 31px; height: 31px; border-radius: 9px; color: var(--mint-ink); background: var(--mint); font-weight: 900; }
+    .candidate-head span:last-child { color: var(--muted); font-size: .76rem; }
+    .question { margin: 0; padding: 16px 16px 10px; font-size: 1.08rem; line-height: 1.45; font-weight: 750; }
+    .options { display: grid; gap: 7px; margin: 0; padding: 4px 14px 14px; list-style: none; }
+    .option { display: grid; grid-template-columns: 28px 1fr; gap: 8px; align-items: start; padding: 9px; border: 1px solid #223746; border-radius: 10px; line-height: 1.4; }
+    .option.claimed { border-color: rgba(143, 240, 194, .6); background: rgba(143, 240, 194, .08); }
+    .option-letter { color: var(--sky); font-family: ui-monospace, monospace; font-weight: 900; }
+    .answer { margin: 0; padding: 11px 15px; border-top: 1px solid var(--line); color: var(--muted); font-size: .83rem; }
+    .answer strong { color: var(--mint); }
+    .score-panel { display: grid; gap: 10px; padding: 13px 15px 15px; border-top: 1px solid var(--line); background: #09141b; }
+    .score-row { display: grid; grid-template-columns: minmax(120px, .8fr) repeat(3, minmax(68px, 1fr)); gap: 6px; align-items: stretch; }
+    .score-name { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: .78rem; }
+    .score-name strong { display: inline-grid; place-items: center; width: 27px; height: 27px; border-radius: 7px; color: var(--mint-ink); background: var(--mint); }
+    .score-choice { display: grid; place-items: center; min-height: 42px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: .73rem; text-align: center; cursor: pointer; }
+    .score-choice:has(input:checked) { color: var(--text); border-color: var(--sky); background: rgba(128, 204, 255, .12); }
+    .score-choice input { position: absolute; opacity: 0; pointer-events: none; }
+    .score-total { display: flex; justify-content: space-between; gap: 12px; align-items: center; min-height: 48px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: linear-gradient(90deg, rgba(128, 204, 255, .08), rgba(143, 240, 194, .07)); }
+    .score-total span { font-size: .79rem; font-weight: 800; letter-spacing: .02em; }
+    .score-total strong { color: var(--text); font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+    .score-total[data-complete="true"] { border-color: rgba(143, 240, 194, .56); }
+    .score-total[data-complete="true"] strong { color: var(--mint); }
+    .rank-row { display: grid; grid-template-columns: minmax(120px, .8fr) 1fr; gap: 6px; align-items: center; }
+    .rank-row select { min-height: 42px; }
+    .candidate-note { min-height: 62px; }
+    .rubric { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0 0 13px; }
+    .rubric div { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: var(--panel-3); font-size: .78rem; line-height: 1.42; }
+    .rubric strong { color: var(--text); }
+    .label-panel { overflow: hidden; }
+    .completion-copy { padding: 15px 17px; color: var(--muted); font-size: .82rem; line-height: 1.5; }
+    .skip-reason { margin: 0 17px 15px; }
+    .action-row { display: flex; justify-content: space-between; gap: 9px; align-items: center; padding: 0 17px 17px; }
+    .action-row p { margin: 0; color: var(--muted); font-size: .78rem; }
+    .action-buttons { display: flex; gap: 7px; }
+    .empty { padding: 55px 20px; border: 1px solid var(--line); border-radius: var(--radius); text-align: center; color: var(--muted); background: var(--panel); }
+    .footer { margin-top: 18px; color: var(--muted); font-size: .78rem; line-height: 1.5; }
+    code { padding: 2px 5px; border-radius: 5px; color: var(--sky); background: #0d1b24; }
+    .toast { position: fixed; right: 18px; bottom: 18px; z-index: 50; max-width: 390px; padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: 11px; background: #17303d; box-shadow: var(--shadow); opacity: 0; transform: translateY(10px); pointer-events: none; transition: .18s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    @media (max-width: 1100px) {
+      header { grid-template-columns: 1fr; }
+      .metrics { max-width: 520px; }
+      .toolbar { grid-template-columns: 1fr 1fr; position: static; }
+      .toolbar-actions { justify-content: flex-start; }
+      .rubric { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 760px) {
+      .shell { width: min(100% - 18px, 1560px); padding-top: 18px; }
+      .protocol-body, .video-grid, .candidate-grid, .annotation-grid { grid-template-columns: 1fr; }
+      .toolbar { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .metric { min-width: 0; padding: 10px; }
+      .task-head, .panel-head { align-items: flex-start; flex-direction: column; }
+      .nav, .video-actions { justify-content: flex-start; }
+      .score-row { grid-template-columns: 1fr repeat(3, 1fr); }
+      .action-row { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">EgoLife / reward-model data</p>
+        <h1>Six-question Ranking Lab</h1>
+        <p class="lede">Inspect both full videos once, score all six blinded questions on formality, evidence grounding, and answerability, then assign an overall rank. Equal ranks are valid ties. Your work saves locally as you go.</p>
+      </div>
+      <div class="metrics" aria-label="Assignment summary">
+        <div class="metric"><strong id="packetMetric">0</strong><span>packets</span></div>
+        <div class="metric"><strong id="questionMetric">0</strong><span>questions</span></div>
+        <div class="metric"><strong id="doneMetric">0</strong><span>completed</span></div>
+        <div class="metric"><strong id="excludedMetric">0</strong><span>excluded</span></div>
+      </div>
+    </header>
+
+    <details class="protocol" open>
+      <summary>Labeling protocol: evidence, scores, then rank</summary>
+      <div class="protocol-body">
+        <div class="protocol-step"><strong>1. Inspect both full videos</strong>Check every material claim against the original synchronized evidence. Do not infer unseen transitions or events.</div>
+        <div class="protocol-step"><strong>2. Score every question</strong>Give each question an F, E, and A score from 1 to 3 using the rubric shown above the questions.</div>
+        <div class="protocol-step"><strong>3. Rank all six together</strong>Rank 1 is best and rank 6 is worst. Reuse a rank whenever questions are equivalent; ties are intentionally supported.</div>
+      </div>
+    </details>
+    <div id="sourceNotice" class="source-notice" role="status"></div>
+
+    <section class="toolbar" aria-label="Labeling controls">
+      <div class="field">
+        <span>Packet</span>
+        <select id="taskSelect" aria-label="Packet"></select>
+        <div class="task-tools">
+          <button id="previousTask" type="button" aria-label="Previous packet">&#8592;</button>
+          <input id="taskNumber" type="number" min="1" step="1" inputmode="numeric" aria-label="Visible packet number">
+          <button id="goTask" type="button">Go</button>
+          <button id="nextTask" type="button" aria-label="Next packet">&#8594;</button>
+          <span id="taskPosition" class="position">0 / 0</span>
+        </div>
+      </div>
+      <label class="field"><span>Annotator ID</span><input id="reviewerId" autocomplete="off" placeholder="e.g. annotator_07"></label>
+      <label class="field"><span>Status</span><select id="statusFilter"><option value="all">All packets</option><option value="pending">Pending</option><option value="completed">Completed</option><option value="skipped">Skipped</option></select></label>
+      <div class="toolbar-actions">
+        <button id="nextPending" class="primary" type="button">Next pending</button>
+        <button id="exportJsonl" type="button">Export JSONL</button>
+        <button id="exportCsv" type="button">Export CSV</button>
+        <button id="backupJson" type="button">Backup</button>
+        <label class="file-button">Restore<input id="restoreJson" type="file" accept=".json,application/json"></label>
+      </div>
+    </section>
+    <div class="progress-strip"><div class="track"><div id="progressFill" class="fill"></div></div><div id="progressCopy" class="progress-copy">0 of 0 completed</div></div>
+    <main id="content"></main>
+    <p class="footer">Assignment <code id="assignmentId"></code> / dataset <code id="fingerprint"></code>. Question order is deterministically randomized. Automatic judge outcomes and generation lineage are hidden. Shortcut: N opens the next pending packet.</p>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const DATA = __LABELING_DATA__;
+    const ASSIGNMENT_ID = DATA.assignment.assignment_id;
+    const STORAGE_KEY = `egolife.rlhfPacketRank.${DATA.dataset_fingerprint}.${ASSIGNMENT_ID}`;
+    const DIMENSIONS = [
+      {key:"formality_score",short:"F",name:"Formality",labels:["1 / fail","2 / acceptable","3 / strong"]},
+      {key:"evidence_grounding_score",short:"E",name:"Evidence",labels:["1 / unsupported","2 / mostly grounded","3 / fully grounded"]},
+      {key:"answerability_score",short:"A",name:"Answerability",labels:["1 / invalid or asker","2 / provider alone","3 / both required"]},
+    ];
+    const CSV_COLUMNS = [
+      "schema_version","dataset_fingerprint","assignment_id","reviewer_id","annotation_status","packet_order","evidence_id",
+      "display_order","candidate_id","formality_score","evidence_grounding_score","answerability_score","fea_total_score","aggregate_rank",
+      "packet_skipped","skip_reason","notes","started_at","completed_at","active_seconds",
+      "question","options","correct","answer","video_1_user","video_1_source","video_2_user","video_2_source"
+    ];
+    const byPacket = new Map(DATA.packets.map(row => [row.evidence_id, row]));
+    const els = Object.fromEntries([
+      "packetMetric","questionMetric","doneMetric","excludedMetric","sourceNotice","taskSelect","taskNumber","goTask","previousTask","nextTask",
+      "taskPosition","reviewerId","statusFilter","nextPending","exportJsonl","exportCsv","backupJson","restoreJson",
+      "progressFill","progressCopy","content","assignmentId","fingerprint","toast"
+    ].map(id => [id, document.getElementById(id)]));
+    let state = loadState();
+    let visibleTasks = [];
+    let currentId = DATA.packets[0]?.evidence_id || "";
+    let loadedMedia = [];
+    let toastTimer;
+    let activeTaskId = "";
+    let activeTaskStartedAt = 0;
+
+    function blankCandidateAnnotation() { return {formality_score:"",evidence_grounding_score:"",answerability_score:"",aggregate_rank:"",notes:""}; }
+    function defaultAnnotation(packet) { return {skipped:false,skip_reason:"",candidates:Object.fromEntries((packet?.candidates||[]).map(row=>[row.candidate_id,blankCandidateAnnotation()])),started_at:"",completed_at:"",active_seconds:0}; }
+    function loadState() {
+      try {
+        const parsed=JSON.parse(localStorage.getItem(STORAGE_KEY)||"null");
+        if(parsed?.dataset_fingerprint===DATA.dataset_fingerprint&&parsed?.assignment_id===ASSIGNMENT_ID&&parsed.annotations)return parsed;
+      } catch (_) {}
+      return {version:2,dataset_fingerprint:DATA.dataset_fingerprint,assignment_id:ASSIGNMENT_ID,reviewer_id:"",annotations:{}};
+    }
+    function saveState() { localStorage.setItem(STORAGE_KEY,JSON.stringify(state)); }
+    function annotation(id) {
+      const packet=byPacket.get(id),base=defaultAnnotation(packet),stored=state.annotations[id]||{};
+      const candidates={...base.candidates};
+      for(const candidate of packet?.candidates||[]) candidates[candidate.candidate_id]={...blankCandidateAnnotation(),...(stored.candidates?.[candidate.candidate_id]||{})};
+      return {...base,...stored,candidates};
+    }
+    function scoreValid(value) { return [1,2,3].includes(Number(value)); }
+    function rankValid(value) { return Number.isInteger(Number(value))&&Number(value)>=1&&Number(value)<=6; }
+    function dimensionScoreSummary(value) { const scores=[value.formality_score,value.evidence_grounding_score,value.answerability_score].filter(scoreValid).map(Number);return {total:scores.reduce((sum,score)=>sum+score,0),complete:scores.length===3}; }
+    function candidateComplete(value) { return scoreValid(value.formality_score)&&scoreValid(value.evidence_grounding_score)&&scoreValid(value.answerability_score)&&rankValid(value.aggregate_rank); }
+    function isComplete(value,packet=byPacket.get(currentId)) { if(value.skipped)return Boolean(value.skip_reason.trim());return Boolean(packet)&&packet.candidates.every(row=>candidateComplete(value.candidates[row.candidate_id]||{})); }
+    function escapeHtml(value) { return String(value??"").replace(/[&<>'"]/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char])); }
+    function toast(message) { clearTimeout(toastTimer);els.toast.textContent=message;els.toast.classList.add("show");toastTimer=setTimeout(()=>els.toast.classList.remove("show"),2600); }
+    function taskStatus(packet) { const value=annotation(packet.evidence_id);if(!isComplete(value,packet))return "pending";return value.skipped?"skipped":"completed"; }
+    function filteredTasks() { const filter=els.statusFilter.value;return DATA.packets.filter(packet=>filter==="all"||taskStatus(packet)===filter); }
+    function startTask(id) { const value=annotation(id);if(!value.started_at){value.started_at=new Date().toISOString();state.annotations[id]=value;saveState();} }
+    function flushActiveTime() { if(!activeTaskId||!activeTaskStartedAt)return;const value=annotation(activeTaskId);value.active_seconds=(value.active_seconds||0)+Math.max(0,Math.round((Date.now()-activeTaskStartedAt)/1000));state.annotations[activeTaskId]=value;activeTaskStartedAt=Date.now();saveState(); }
+    function activateTask(id) { flushActiveTime();activeTaskId=id;activeTaskStartedAt=Date.now(); }
+    function setAnnotation(id,patch) {
+      const packet=byPacket.get(id),previous=annotation(id),next={...previous,...patch};
+      if(isComplete(next,packet)){if(!next.completed_at)next.completed_at=new Date().toISOString();}else next.completed_at="";
+      next.active_seconds=previous.active_seconds||0;state.annotations[id]=next;saveState();updateProgress();updateTaskSelect();return next;
+    }
+    function setCandidate(candidateId,patch) { const value=annotation(currentId);value.candidates={...value.candidates,[candidateId]:{...value.candidates[candidateId],...patch}};setAnnotation(currentId,{candidates:value.candidates}); }
+    function updateScoreTotal(candidateId) { const item=annotation(currentId).candidates[candidateId]||blankCandidateAnnotation(),summary=dimensionScoreSummary(item),counter=document.querySelector(`[data-score-total="${CSS.escape(candidateId)}"]`);if(!counter)return;counter.dataset.complete=String(summary.complete);counter.querySelector("strong").textContent=`${summary.total} / 9`; }
+    function unloadVideos() { loadedMedia.forEach(video=>{video.pause();video.removeAttribute("src");video.load();});loadedMedia=[]; }
+    function videoMarkup(video,index) { const meta=[video.day,video.clip_clock].filter(Boolean).join(" / "),link=video.source_url?`<a href="${escapeHtml(video.source_url)}" target="_blank" rel="noopener">Open source</a>`:"";return `<article class="video-card" data-video-index="${index}"><div class="video-placeholder">Full video not loaded</div><video controls playsinline preload="none" data-src="${escapeHtml(video.media_src)}"></video><div class="video-copy"><div><strong>${escapeHtml(video.user)}</strong><br><span>${escapeHtml(meta)}</span></div>${link}</div></article>`; }
+    function candidateMarkup(candidate,value,enabled) {
+      const letters=["A","B","C","D","E"],item=value.candidates[candidate.candidate_id]||blankCandidateAnnotation();
+      const options=candidate.options.map((text,index)=>`<li class="option${letters[index]===candidate.correct?" claimed":""}"><span class="option-letter">${letters[index]}</span><span>${escapeHtml(text)}</span></li>`).join("");
+      const scores=DIMENSIONS.map(dimension=>`<div class="score-row"><div class="score-name"><strong>${dimension.short}</strong><span>${dimension.name}</span></div>${dimension.labels.map((label,index)=>{const score=index+1;return `<label class="score-choice"><input type="radio" name="${escapeHtml(candidate.candidate_id)}-${dimension.key}" data-score data-candidate="${escapeHtml(candidate.candidate_id)}" data-field="${dimension.key}" value="${score}"${Number(item[dimension.key])===score?" checked":""}${enabled?"":" disabled"}>${escapeHtml(label)}</label>`;}).join("")}</div>`).join("");
+      const scoreSummary=dimensionScoreSummary(item);
+      const ranks=[1,2,3,4,5,6].map(rank=>`<option value="${rank}"${Number(item.aggregate_rank)===rank?" selected":""}>${rank}${rank===1?" / best":rank===6?" / worst":""}</option>`).join("");
+      return `<article class="candidate"><div class="candidate-head"><span class="candidate-letter">${candidate.display_order}</span><span>${candidateComplete(item)?"Scored":"Blinded question"}</span></div><p class="question">${escapeHtml(candidate.question)}</p><ol class="options">${options}</ol><p class="answer"><strong>Proposed answer:</strong> ${escapeHtml(candidate.correct)} / ${escapeHtml(candidate.answer)}</p><div class="score-panel">${scores}<div class="score-total" data-score-total="${escapeHtml(candidate.candidate_id)}" data-complete="${scoreSummary.complete}"><span>F + E + A total</span><strong>${scoreSummary.total} / 9</strong></div><label class="rank-row"><span class="score-name"><strong>R</strong><span>Aggregate rank</span></span><select data-rank data-candidate="${escapeHtml(candidate.candidate_id)}"${enabled?"":" disabled"}><option value="">Choose rank; ties allowed</option>${ranks}</select></label><label><span class="score-name"><span>Optional question note</span></span><textarea class="candidate-note" data-note data-candidate="${escapeHtml(candidate.candidate_id)}"${enabled?"":" disabled"} placeholder="Grounding issue, ambiguity, or decisive evidence.">${escapeHtml(item.notes)}</textarea></label></div></article>`;
+    }
+    function renderCurrent() {
+      unloadVideos();const packet=byPacket.get(currentId);
+      if(!packet){els.content.innerHTML='<div class="empty">No packets match this filter.</div>';updateControls();return;}
+      activateTask(currentId);startTask(currentId);const value=annotation(currentId),visibleIndex=visibleTasks.findIndex(row=>row.evidence_id===currentId),enabled=!value.skipped;
+      els.content.innerHTML=`<div class="task-shell"><section class="task-head"><div><p class="eyebrow">Packet ${packet.packet_order}</p><h2>Score and rank all six questions</h2><div class="meta"><span class="pill">${escapeHtml(packet.day||"Evidence packet")}</span><span class="pill">${escapeHtml(packet.clip_clock||packet.time_token)}</span><span class="pill${isComplete(value,packet)?" done":""}">${taskStatus(packet)}</span></div></div><div class="nav"><button id="prevInside" type="button"${visibleIndex<=0?" disabled":""}>&#8592; Previous</button><button id="nextInside" type="button"${visibleIndex<0||visibleIndex>=visibleTasks.length-1?" disabled":""}>Next &#8594;</button></div></section>
+        <section class="video-panel"><div class="panel-head"><div><h3>Full original evidence videos</h3><p>Inspect both synchronized views before scoring any question.</p></div><div class="video-actions"><button id="loadVideos" class="primary" type="button">Load videos</button><button id="playBoth" type="button">Play both</button><button id="pauseBoth" type="button">Pause both</button><button id="syncBoth" type="button">Sync times</button><select id="playbackRate" aria-label="Playback speed"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="1.5">1.5x</option><option value="2">2x</option></select></div></div><div class="video-grid">${packet.videos.map(videoMarkup).join("")}</div></section>
+        <section class="questions-panel"><div class="questions-heading"><h3>Six blinded questions</h3><span class="blind-note">Same evidence / hidden judge results / hidden lineage / ties allowed</span></div><div class="rubric"><div><strong>F / Formality</strong><br>1: invalid or unnatural. 2: acceptable. 3: especially clear and well formed.</div><div><strong>E / Evidence grounding</strong><br>1: unsupported. 2: mostly supported with minor uncertainty. 3: fully and directly grounded.</div><div><strong>A / Answerability</strong><br>1: asker-answerable, unsupported, or invalid. 2: provider alone can answer. 3: both videos are genuinely required.</div></div><div class="candidate-grid">${packet.candidates.map(candidate=>candidateMarkup(candidate,value,enabled)).join("")}</div></section>
+        <section class="label-panel"><p class="completion-copy">Complete all four fields for every question: F, E, A, and aggregate rank. Rank 1 is best. Repeated ranks represent ties; ranks do not need to be unique.</p>${value.skipped?`<label class="field skip-reason"><span>Required skip reason</span><textarea id="skipReason" placeholder="Explain why this packet cannot be labeled.">${escapeHtml(value.skip_reason)}</textarea></label>`:""}<div class="action-row"><p>Skip only when the full-video evidence is unavailable or genuinely unjudgeable.</p><div class="action-buttons"><button id="skipTask" class="ghost" type="button"${!state.reviewer_id.trim()?" disabled":""}>${value.skipped?"Resume labeling":"Skip packet"}</button><button id="saveNext" class="primary" type="button">Save and next pending</button></div></div></section></div>`;
+      bindTaskEvents();updateControls();window.scrollTo({top:0,behavior:"instant"});
+    }
+    function loadVideos() { const cards=[...document.querySelectorAll(".video-card")];loadedMedia=cards.map(card=>{const video=card.querySelector("video");if(!video.dataset.src){card.querySelector(".video-placeholder").textContent="Video URL unavailable";return null;}video.src=video.dataset.src;video.load();card.classList.add("loaded");return video;}).filter(Boolean);toast(loadedMedia.length?`Loaded ${loadedMedia.length} full videos.`:"No playable video URLs were supplied."); }
+    function move(delta) { const index=visibleTasks.findIndex(row=>row.evidence_id===currentId),next=visibleTasks[index+delta];if(next){currentId=next.evidence_id;renderCurrent();updateTaskSelect();} }
+    function bindTaskEvents() {
+      document.getElementById("prevInside")?.addEventListener("click",()=>move(-1));document.getElementById("nextInside")?.addEventListener("click",()=>move(1));
+      document.getElementById("loadVideos")?.addEventListener("click",loadVideos);document.getElementById("playBoth")?.addEventListener("click",()=>loadedMedia.forEach(video=>video.play().catch(()=>{})));document.getElementById("pauseBoth")?.addEventListener("click",()=>loadedMedia.forEach(video=>video.pause()));
+      document.getElementById("syncBoth")?.addEventListener("click",()=>{if(loadedMedia.length<2)return toast("Load both videos first.");const target=Math.min(...loadedMedia.map(video=>Number.isFinite(video.currentTime)?video.currentTime:0));loadedMedia.forEach(video=>video.currentTime=target);toast(`Synchronized at ${target.toFixed(1)}s.`);});document.getElementById("playbackRate")?.addEventListener("change",event=>loadedMedia.forEach(video=>video.playbackRate=Number(event.target.value)));
+      document.querySelectorAll("[data-score]").forEach(input=>input.addEventListener("change",()=>{setCandidate(input.dataset.candidate,{[input.dataset.field]:Number(input.value)});updateScoreTotal(input.dataset.candidate);}));
+      document.querySelectorAll("[data-rank]").forEach(select=>select.addEventListener("change",()=>setCandidate(select.dataset.candidate,{aggregate_rank:select.value?Number(select.value):""})));
+      document.querySelectorAll("[data-note]").forEach(area=>area.addEventListener("input",()=>setCandidate(area.dataset.candidate,{notes:area.value})));
+      document.getElementById("skipTask")?.addEventListener("click",()=>{if(!state.reviewer_id.trim())return toast("Enter an annotator ID first.");const value=annotation(currentId);setAnnotation(currentId,{skipped:!value.skipped});renderCurrent();});
+      document.getElementById("skipReason")?.addEventListener("input",event=>setAnnotation(currentId,{skip_reason:event.target.value}));
+      document.getElementById("saveNext")?.addEventListener("click",()=>{const value=annotation(currentId),packet=byPacket.get(currentId);if(!state.reviewer_id.trim())return toast("Enter an annotator ID first.");if(!isComplete(value,packet))return toast(value.skipped?"Enter a skip reason first.":"Score F, E, A, and rank for all six questions first.");nextPending();});
+    }
+    function updateTaskSelect() { visibleTasks=filteredTasks();if(currentId&&!visibleTasks.some(row=>row.evidence_id===currentId))currentId=visibleTasks[0]?.evidence_id||"";els.taskSelect.innerHTML=visibleTasks.map((packet,index)=>`<option value="${escapeHtml(packet.evidence_id)}"${packet.evidence_id===currentId?" selected":""}>${index+1}. Packet ${packet.packet_order} / ${taskStatus(packet)}</option>`).join("");updateControls(); }
+    function updateControls() { const index=visibleTasks.findIndex(row=>row.evidence_id===currentId);els.taskPosition.textContent=visibleTasks.length?`${index+1} / ${visibleTasks.length}`:"0 / 0";els.taskNumber.value=index>=0?index+1:"";els.taskNumber.max=Math.max(1,visibleTasks.length);els.previousTask.disabled=index<=0;els.nextTask.disabled=index<0||index>=visibleTasks.length-1; }
+    function navigateSelected() { currentId=els.taskSelect.value;renderCurrent(); }
+    function goNumber() { const index=Number(els.taskNumber.value)-1;if(!Number.isInteger(index)||index<0||index>=visibleTasks.length)return toast(`Enter a number from 1 to ${visibleTasks.length}.`);currentId=visibleTasks[index].evidence_id;renderCurrent();updateTaskSelect(); }
+    function nextPending() { const packet=DATA.packets.find(row=>taskStatus(row)==="pending");if(!packet)return toast("This assignment is complete.");els.statusFilter.value="all";currentId=packet.evidence_id;updateTaskSelect();renderCurrent(); }
+    function derivedPreferences(packet,value) { const rows=[];for(let i=0;i<packet.candidates.length;i++){for(let j=i+1;j<packet.candidates.length;j++){const left=packet.candidates[i],right=packet.candidates[j],leftRank=Number(value.candidates[left.candidate_id].aggregate_rank),rightRank=Number(value.candidates[right.candidate_id].aggregate_rank),tie=leftRank===rightRank;rows.push({candidate_a_id:left.candidate_id,candidate_b_id:right.candidate_id,candidate_a_rank:leftRank,candidate_b_rank:rightRank,relation:tie?"tie":"strict_preference",preferred_candidate_id:tie?null:leftRank<rightRank?left.candidate_id:right.candidate_id,rejected_candidate_id:tie?null:leftRank<rightRank?right.candidate_id:left.candidate_id,rank_gap:Math.abs(leftRank-rightRank),usable_for_strict_pairwise_training:!tie,requires_tie_aware_objective:tie});}}return rows; }
+    function candidateRows() { flushActiveTime();const rows=[];for(const packet of DATA.packets){const value=annotation(packet.evidence_id),status=taskStatus(packet);for(const candidate of packet.candidates){const item=value.candidates[candidate.candidate_id]||blankCandidateAnnotation(),scoreSummary=dimensionScoreSummary(item);rows.push({schema_version:DATA.schema_version,dataset_fingerprint:DATA.dataset_fingerprint,assignment_id:ASSIGNMENT_ID,reviewer_id:state.reviewer_id,annotation_status:status,packet_order:packet.packet_order,evidence_id:packet.evidence_id,display_order:candidate.display_order,candidate_id:candidate.candidate_id,formality_score:item.formality_score,evidence_grounding_score:item.evidence_grounding_score,answerability_score:item.answerability_score,fea_total_score:scoreSummary.complete?scoreSummary.total:"",aggregate_rank:item.aggregate_rank,packet_skipped:value.skipped,skip_reason:value.skip_reason,notes:item.notes,started_at:value.started_at,completed_at:value.completed_at,active_seconds:value.active_seconds,question:candidate.question,options:JSON.stringify(candidate.options),correct:candidate.correct,answer:candidate.answer,video_1_user:packet.videos[0]?.user||"",video_1_source:packet.videos[0]?.source_url||packet.videos[0]?.local_path||"",video_2_user:packet.videos[1]?.user||"",video_2_source:packet.videos[1]?.source_url||packet.videos[1]?.local_path||""});}}return rows; }
+    function packetRecords() { flushActiveTime();return DATA.packets.filter(packet=>taskStatus(packet)!=="pending").map(packet=>{const value=annotation(packet.evidence_id),labels=packet.candidates.map(candidate=>{const item=value.candidates[candidate.candidate_id]||blankCandidateAnnotation(),scoreSummary=dimensionScoreSummary(item);return {candidate_id:candidate.candidate_id,display_order:candidate.display_order,formality_score:item.formality_score,evidence_grounding_score:item.evidence_grounding_score,answerability_score:item.answerability_score,fea_total_score:scoreSummary.complete?scoreSummary.total:null,aggregate_rank:item.aggregate_rank,notes:item.notes,question_type:candidate.question_type,question:candidate.question,options:candidate.options,correct:candidate.correct,answer:candidate.answer};});return {schema_version:DATA.schema_version,dataset_fingerprint:DATA.dataset_fingerprint,assignment_id:ASSIGNMENT_ID,reviewer_id:state.reviewer_id,annotation_status:taskStatus(packet),packet_order:packet.packet_order,evidence_id:packet.evidence_id,packet_skipped:value.skipped,skip_reason:value.skip_reason,started_at:value.started_at,completed_at:value.completed_at,active_seconds:value.active_seconds,ranking_convention:"1 is best; equal ranks are ties",candidate_labels:labels,derived_preferences:value.skipped?[]:derivedPreferences(packet,value),reward_model_media:packet.videos};}); }
+    function download(name,content,type) { const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),anchor=document.createElement("a");anchor.href=url;anchor.download=name;document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),1000); }
+    function csvCell(value) { return `"${String(value??"").replaceAll('"','""')}"`; }
+    function requireReviewer() { if(!state.reviewer_id.trim()){toast("Enter an annotator ID before exporting.");return false;}return true; }
+    function exportJsonl() { if(!requireReviewer())return;const rows=packetRecords();download(`rlhf_rankings_${ASSIGNMENT_ID}_${state.reviewer_id}.jsonl`,rows.map(row=>JSON.stringify(row)).join("\n")+(rows.length?"\n":""),"application/x-ndjson");toast(`Exported ${rows.length} completed packet rankings.`); }
+    function exportCsv() { if(!requireReviewer())return;const rows=candidateRows(),csv=[CSV_COLUMNS.map(csvCell).join(","),...rows.map(row=>CSV_COLUMNS.map(key=>csvCell(row[key])).join(","))].join("\r\n");download(`rlhf_candidate_scores_${ASSIGNMENT_ID}_${state.reviewer_id}.csv`,`\ufeff${csv}`,"text/csv;charset=utf-8");toast(`Exported ${rows.length} candidate rows.`); }
+    function backup() { flushActiveTime();download(`rlhf_backup_${ASSIGNMENT_ID}_${state.reviewer_id||"unassigned"}.json`,JSON.stringify({...state,exported_at:new Date().toISOString()},null,2),"application/json");toast("Backup exported."); }
+    async function restore(file) { const parsed=JSON.parse(await file.text());if(parsed.dataset_fingerprint!==DATA.dataset_fingerprint||parsed.assignment_id!==ASSIGNMENT_ID||!parsed.annotations)throw new Error("Backup does not match this assignment.");state=parsed;saveState();els.reviewerId.value=state.reviewer_id||"";updateTaskSelect();renderCurrent();updateProgress();toast("Backup restored."); }
+    function updateProgress() { const values=DATA.packets.map(packet=>({packet,value:annotation(packet.evidence_id)})),done=values.filter(row=>isComplete(row.value,row.packet)).length,skipped=values.filter(row=>row.value.skipped&&isComplete(row.value,row.packet)).length,pct=values.length?done/values.length*100:0;els.packetMetric.textContent=DATA.summary.packet_count;els.questionMetric.textContent=DATA.summary.candidate_count;els.doneMetric.textContent=done;els.excludedMetric.textContent=DATA.summary.excluded_packet_count;els.progressFill.style.width=`${pct}%`;els.progressCopy.textContent=`${done} of ${values.length} packets completed / ${skipped} skipped / ${DATA.summary.excluded_packet_count} source rejects excluded`; }
+    function initialize() { els.assignmentId.textContent=ASSIGNMENT_ID;els.fingerprint.textContent=DATA.dataset_fingerprint;const excluded=DATA.excluded_packets||[];if(excluded.length){const ids=excluded.map(row=>row.evidence_id).join(", ");els.sourceNotice.classList.add("show");els.sourceNotice.innerHTML=`<strong>${excluded.length} source packet${excluded.length===1?" was":"s were"} excluded before assignment creation.</strong> Each lacked a complete six-question set after generation failure. The remaining ${DATA.summary.packet_count} packets are safe to label; omission details are preserved in <code>assignment_manifest.json</code>.<br><span title="${escapeHtml(ids)}">Excluded evidence IDs: ${escapeHtml(ids)}</span>`;}els.reviewerId.value=state.reviewer_id||"";els.reviewerId.addEventListener("change",event=>{state.reviewer_id=event.target.value.trim();saveState();renderCurrent();});els.taskSelect.addEventListener("change",navigateSelected);els.previousTask.addEventListener("click",()=>move(-1));els.nextTask.addEventListener("click",()=>move(1));els.goTask.addEventListener("click",goNumber);els.taskNumber.addEventListener("keydown",event=>{if(event.key==="Enter")goNumber();});els.statusFilter.addEventListener("change",()=>{updateTaskSelect();renderCurrent();});els.nextPending.addEventListener("click",nextPending);els.exportJsonl.addEventListener("click",exportJsonl);els.exportCsv.addEventListener("click",exportCsv);els.backupJson.addEventListener("click",backup);els.restoreJson.addEventListener("change",async event=>{try{if(event.target.files[0])await restore(event.target.files[0]);}catch(error){toast(error.message);}event.target.value="";});document.addEventListener("keydown",event=>{if(["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName))return;if(event.key.toLowerCase()==="n")nextPending();});window.addEventListener("beforeunload",flushActiveTime);updateTaskSelect();renderCurrent();updateProgress(); }
+    initialize();
+  </script>
+</body>
+</html>

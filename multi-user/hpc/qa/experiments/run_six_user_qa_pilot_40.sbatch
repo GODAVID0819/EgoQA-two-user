@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=egoqa_6u_pilot40
+#SBATCH --account=torch_pr_674_tandon_advanced
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:1
+#SBATCH --constraint=h100
+#SBATCH --mem=64G
+#SBATCH --time=24:00:00
+#SBATCH --output=hpc/logs/%x_%j.out
+#SBATCH --error=hpc/logs/%x_%j.err
+
+set -euo pipefail
+
+RUN_MODE="six_user_qa_pilot_40"
+ACCEPTED_TARGET="40"
+EVIDENCE_TARGET="40"
+MAX_GROUPS="320"
+MAX_ATTEMPTS="1"
+ALLOW_PARTIAL="1"
+export RUN_MODE ACCEPTED_TARGET EVIDENCE_TARGET MAX_GROUPS MAX_ATTEMPTS ALLOW_PARTIAL
+
+PROJECT_ROOT="${PROJECT_ROOT:-/scratch/hm2991/Long-video-understanding-clip}"
+PACKAGE_ROOT="${PACKAGE_ROOT:-${PROJECT_ROOT}/egolife_two_user_qa/multi-user}"
+export PROJECT_ROOT PACKAGE_ROOT
+bash "${PROJECT_ROOT}/hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch"

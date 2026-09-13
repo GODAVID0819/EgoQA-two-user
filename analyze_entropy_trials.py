@@ -439,6 +439,14 @@ def analyze_run(label: str, path: Path) -> dict[str, Any]:
             for evaluation in evaluations:
                 if not isinstance(evaluation, dict):
                     continue
+                answerable = evaluation.get("answerable")
+                if answerable is True:
+                    answerability_status = "ANSWERABLE"
+                elif answerable is False:
+                    answerability_status = "UNANSWERABLE"
+                else:
+                    # Compatibility for archived forced-choice traces.
+                    answerability_status = str(evaluation.get("choice") or "MISSING").upper()
                 entropy_rows.append(
                     {
                         "run": label,
@@ -446,7 +454,7 @@ def analyze_run(label: str, path: Path) -> dict[str, Any]:
                         "final_attempt": final_trace.get("attempt", attempt_count or None),
                         "final_item_accepted": accepted,
                         "judge": "answerability",
-                        "judge_status": str(evaluation.get("choice") or "MISSING").upper(),
+                        "judge_status": answerability_status,
                         "condition_id": evaluation.get("condition_id"),
                         "condition_type": evaluation.get("condition_type"),
                         "condition_users": "|".join(
@@ -676,8 +684,9 @@ def entropy_markdown(runs: Sequence[dict[str, Any]]) -> str:
         "not valid decision uncertainty. Current production rows capture the only "
         "field of a second independent minimal-verdict probe; that probe cannot "
         "affect the detailed production gate. The offline compatibility sidecar "
-        "instead captures a detailed first-verdict contract. Answerability uses "
-        "per-condition forced-choice entropy over A-E.",
+        "instead captures a detailed first-verdict contract. Archived answerability "
+        "traces may contain per-condition forced-choice entropy over A-E; the current "
+        "evidence-sufficiency verdict does not collect logits.",
         "",
         "For every row below, probabilities and entropy are recalculated from the stored raw "
         "choice weights using a softmax over the stored choice set. Legacy 1/2/3 rows are "
@@ -801,8 +810,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     entropy_report = {
         "calculation": {
             "probabilities": (
-                "softmax over stored raw weights for PASS/FAIL statuses or direct A-E "
-                "answerability choices"
+                "softmax over stored raw weights for PASS/FAIL statuses or archived "
+                "direct A-E answerability choices"
             ),
             "entropy_nats": "-sum(p_i * ln(p_i))",
             "normalized_entropy": "entropy_nats / ln(choice_count)",

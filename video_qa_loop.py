@@ -9,6 +9,7 @@ import hashlib
 import itertools
 import json
 import math
+import random
 import re
 import statistics
 import time
@@ -17,6 +18,7 @@ from typing import Any
 
 from .io_utils import append_jsonl, iter_jsonl, write_json, write_jsonl
 from .prompts import (
+    ANSWERABILITY_SCHEMA_VERSION,
     DEFAULT_QUALITY_QUOTA,
     GENERATION_MODES,
     JUDGE_OUTPUT_SCHEMA_MARKER,
@@ -90,6 +92,38 @@ MINIMAL_VERDICT_ENTROPY_VERSION = "independent_minimal_verdict_v1"
 FIRST_VERDICT_FIELD = "verdict"
 FIRST_VERDICT_CHOICES = ("pass", "fail")
 TEMPORAL_REASONING_MODE = "temporal_reasoning"
+
+
+def seed_video_loop_rng(seed: int) -> dict[str, Any]:
+    """Seed Python, NumPy when installed, and Torch CPU/CUDA generation RNGs."""
+
+    random.seed(seed)
+    seeded: dict[str, Any] = {
+        "generator_seed": seed,
+        "python": seed,
+        "numpy": None,
+        "torch": None,
+        "cuda": False,
+    }
+    try:
+        import numpy as np
+
+        numpy_seed = seed % (2**32)
+        np.random.seed(numpy_seed)
+        seeded["numpy"] = numpy_seed
+    except ImportError:
+        pass
+    try:
+        import torch
+
+        torch.manual_seed(seed)
+        seeded["torch"] = seed
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+            seeded["cuda"] = True
+    except ImportError:
+        pass
+    return seeded
 
 
 def verify_first_verdict_tokenization(runner: Any) -> dict[str, Any]:
@@ -708,39 +742,57 @@ def build_answerability_conditions(required_users: list[str]) -> list[dict[str, 
     return conditions
 
 
-def parsed_choice(value: Any) -> tuple[str | None, bool]:
-    text = str(value or "").strip().upper()
-    if text in OPTION_LETTERS:
-        return text, False
+def parsed_answerability(value: Any) -> tuple[bool | None, bool]:
+    """Parse the strict boolean verdict used by the answerability judge."""
+
+    if value is True:
+        return True, False
+    if value is False:
+        return False, False
     return None, True
 
 
 def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]]) -> dict[str, Any]:
-    try:
-        correct = normalize_correct(qa_item.get("correct"))
-    except ValueError as exc:
-        return {"passed": False, "reason": str(exc)}
-
     combined = [row for row in evaluations if row.get("condition_type") == "combined_all_users"]
     if not combined:
         return {"passed": False, "reason": "missing combined_all_users evaluation"}
 
-    combined_choice, combined_invalid = parsed_choice(combined[-1].get("choice"))
-    if combined_invalid:
-        return {
-            "passed": False,
-            "reason": "combined_all_users did not select exactly one A-E answer",
-            "invalid_evaluations": [
+    parsed_evaluations: list[tuple[dict[str, Any], bool]] = []
+    invalid_evaluations = []
+    for row in evaluations:
+        answerable, invalid = parsed_answerability(row.get("answerable"))
+        if invalid:
+            invalid_evaluations.append(
                 {
-                    "condition_id": combined[-1].get("condition_id"),
-                    "choice": combined[-1].get("choice"),
+                    "condition_id": row.get("condition_id"),
+                    "answerable": row.get("answerable"),
                 }
-            ],
-        }
-    if combined_choice != correct:
+            )
+            continue
+        parsed_evaluations.append((row, bool(answerable)))
+    if invalid_evaluations:
         return {
             "passed": False,
-            "reason": f"combined_all_users did not select correct answer {correct}",
+            "reason": "answerability condition did not return a JSON boolean: "
+            + ", ".join(str(item.get("condition_id")) for item in invalid_evaluations),
+            "invalid_evaluations": invalid_evaluations,
+        }
+
+    combined_evaluation = next(
+        (row for row, _ in reversed(parsed_evaluations) if row.get("condition_type") == "combined_all_users"),
+        combined[-1],
+    )
+    combined_answerable = combined_evaluation.get("answerable") is True
+    if not combined_answerable:
+        return {
+            "passed": False,
+            "reason": "combined_all_users judged the provided evidence unanswerable",
+            "combined_evaluation": {
+                "condition_id": combined_evaluation.get("condition_id"),
+                "answerable": False,
+                "reason": combined_evaluation.get("reason"),
+                "missing_information": combined_evaluation.get("missing_information"),
+            },
         }
 
     required_users = list(qa_item.get("required_users") or [])
@@ -748,20 +800,10 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
     evidence_provider_user = required_users[1] if len(required_users) > 1 else None
     blocking_leaks = []
     evidence_provider_answerable = []
-    invalid_evaluations = []
-    for row in evaluations:
+    for row, answerable in parsed_evaluations:
         if row.get("condition_type") == "combined_all_users":
             continue
-        choice, invalid = parsed_choice(row.get("choice"))
-        if invalid:
-            invalid_evaluations.append(
-                {
-                    "condition_id": row.get("condition_id"),
-                    "choice": row.get("choice"),
-                }
-            )
-            continue
-        if choice == correct:
+        if answerable:
             condition_id = row.get("condition_id")
             users = list(row.get("users") or [])
             if not users and isinstance(condition_id, str) and condition_id.startswith("single_user::"):
@@ -769,9 +811,9 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
             leak = {
                 "condition_id": condition_id,
                 "users": users,
-                "choice": choice,
-                "answer_text": row.get("answer_text"),
-                "evidence_used": row.get("evidence_used"),
+                "answerable": True,
+                "reason": row.get("reason"),
+                "missing_information": row.get("missing_information"),
             }
             if (
                 row.get("condition_type") == "single_user"
@@ -781,17 +823,10 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
                 evidence_provider_answerable.append(leak)
             else:
                 blocking_leaks.append(leak)
-    if invalid_evaluations:
-        return {
-            "passed": False,
-            "reason": "answerability condition did not select exactly one A-E answer: "
-            + ", ".join(str(item.get("condition_id")) for item in invalid_evaluations),
-            "invalid_evaluations": invalid_evaluations,
-        }
     if blocking_leaks:
         return {
             "passed": False,
-            "reason": "asker/subset condition answered correctly: "
+            "reason": "asker/subset condition judged the provided evidence answerable: "
             + ", ".join(str(item.get("condition_id")) for item in blocking_leaks),
             "blocking_single_or_subset_answerable": blocking_leaks,
             "evidence_provider_answerable": evidence_provider_answerable,
@@ -801,15 +836,18 @@ def answerability_gate(qa_item: dict[str, Any], evaluations: list[dict[str, Any]
 
     gate = {
         "passed": True,
-        "reason": "combined videos answer correctly and all single/subset conditions chose an incorrect answer",
+        "reason": (
+            "combined evidence was judged answerable and all blocking single/subset conditions "
+            "were judged unanswerable"
+        ),
         "evidence_provider_answerable": evidence_provider_answerable,
         "speaker_user": asker_user,
         "evidence_provider_user": evidence_provider_user,
     }
     if evidence_provider_answerable:
         gate["reason"] = (
-            "combined videos answer correctly; the evidence provider alone also answered correctly "
-            "and this is logged as acceptable evidence-provider answerability"
+            "combined evidence was judged answerable; the evidence provider alone was also judged "
+            "answerable and this is logged as acceptable evidence-provider answerability"
         )
         gate["warning"] = "evidence_provider_alone_can_answer"
     return gate
@@ -1471,7 +1509,7 @@ def decision_uncertainty_from_choice_logits(signal: dict[str, Any] | None) -> di
 def answerability_uncertainty_from_choice_logits(
     signal: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Normalize direct A-E answer logits without affecting the answerability gate."""
+    """Normalize archived direct A-E logits; this is not a production verdict."""
 
     choices = tuple(OPTION_LETTERS)
     if not isinstance(signal, dict):
@@ -1513,7 +1551,7 @@ def answerability_uncertainty_from_choice_logits(
         "generated_choice": generated if generated in choices else None,
         "token_index": signal.get("token_index"),
         "distribution_scope": "softmax restricted to direct answer tokens A, B, C, D, and E",
-        "note": "diagnostic only; production answerability is forced-choice over A-E",
+        "note": "archived diagnostic only; production now judges evidence sufficiency as a boolean",
     }
 
 
@@ -2023,8 +2061,8 @@ def answerability_check_from_gate(answerability: dict[str, Any] | None) -> dict[
         "status": "FAIL",
         "reason": reason or "answerability gate failed",
         "fix": (
-            "Revise the question-answer item so the combined required users select the correct answer "
-            "and the asker/subset conditions do not."
+            "Revise the question-answer item so the combined evidence is sufficient to determine one "
+            "answer and the asker/subset evidence is not."
         ),
     }
 
@@ -2459,6 +2497,7 @@ def run_answerability_eval(
         prompt_rows.append(
             {
                 "stage": "answerability",
+                "answerability_schema_version": ANSWERABILITY_SCHEMA_VERSION,
                 "qa_id": qa_item.get("qa_id"),
                 "generation_mode": qa_item.get("generation_mode"),
                 "condition_id": condition["condition_id"],
@@ -2499,9 +2538,9 @@ def run_answerability_eval(
             answer = extract_json_object(raw)
         except Exception as exc:
             answer = {
-                "choice": None,
-                "answer_text": "",
-                "evidence_used": f"parse_failed: {exc}",
+                "answerable": None,
+                "reason": f"parse_failed: {exc}",
+                "missing_information": "judge output could not be parsed",
             }
         evaluations.append(
             {
@@ -2518,7 +2557,11 @@ def run_answerability_eval(
             }
         )
     gate = answerability_gate(qa_item, evaluations)
-    return {"evaluations": evaluations, "gate": gate}
+    return {
+        "schema_version": ANSWERABILITY_SCHEMA_VERSION,
+        "evaluations": evaluations,
+        "gate": gate,
+    }
 
 
 def run_parallel_review_judges(
@@ -2848,6 +2891,7 @@ def generate_video_qa_loop(
     judge_entropy_report_path: str | Path | None = None,
     backend: str,
     model_id: str = DEFAULT_MODEL_ID,
+    generator_device: str = "auto",
     base_url: str = "http://127.0.0.1:8000/v1",
     target_count: int = 20,
     max_attempts: int = 3,
@@ -2860,6 +2904,7 @@ def generate_video_qa_loop(
     api_key: str | None = None,
     judge_backend: str | None = None,
     judge_model_id: str | None = None,
+    judge_device: str = "auto",
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
     judge_max_new_tokens: int | None = None,
@@ -2879,6 +2924,7 @@ def generate_video_qa_loop(
     generator_temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
     generator_top_p: float = DEFAULT_SAMPLING_TOP_P,
     generator_top_k: int | None = None,
+    generator_seed: int | None = None,
 ) -> list[dict[str, Any]]:
     judge_include_generator_rationale = False
     # Archived scored/quota production switch:
@@ -2911,6 +2957,13 @@ def generate_video_qa_loop(
         generator_top_p=generator_top_p,
         generator_top_k=generator_top_k,
     )
+    if generator_seed is not None:
+        seed_state = seed_video_loop_rng(generator_seed)
+        decode_config["seed"] = generator_seed
+        print(
+            "generator_seed_config " + json.dumps(seed_state, sort_keys=True),
+            flush=True,
+        )
     active_backend = "dry-run" if dry_run else backend
     active_judge_backend = "dry-run" if dry_run else (judge_backend or backend)
     runner = make_runner(
@@ -2924,6 +2977,7 @@ def generate_video_qa_loop(
         allow_openai_video_input=allow_openai_video_input,
         disable_thinking=disable_thinking,
         api_key=api_key,
+        device_map=generator_device,
     )
     effective_judge_model_id = judge_model_id or (
         DEFAULT_JUDGE_MODEL_ID if active_judge_backend != active_backend else model_id
@@ -2938,6 +2992,7 @@ def generate_video_qa_loop(
         and effective_judge_max_new_tokens == max_new_tokens
         and effective_judge_api_key == api_key
         and not judge_reasoning_effort
+        and judge_device == generator_device
     )
     judge_runner = runner
     if not judge_runner_matches_generator:
@@ -2953,6 +3008,7 @@ def generate_video_qa_loop(
             disable_thinking=disable_thinking,
             api_key=effective_judge_api_key,
             reasoning_effort=judge_reasoning_effort,
+            device_map=judge_device,
         )
     qa_formality_runner = runner if qa_formality_use_generator else judge_runner
     entropy_tokenizer_preflight: dict[str, Any] = {}
@@ -2983,8 +3039,10 @@ def generate_video_qa_loop(
     print(
         "qa_runner_config "
         f"generator_backend={active_backend} generator_model={runner.model_id} "
+        f"generator_device={generator_device} "
         f"qa_formality_model={qa_formality_runner.model_id} "
         f"visual_judge_backend={active_judge_backend} visual_judge_model={judge_runner.model_id} "
+        f"visual_judge_device={judge_device} "
         f"judge_runner_shared_with_generator={judge_runner is runner} "
         f"visual_judge_reasoning_effort={judge_reasoning_effort or 'provider_default'} "
         f"judge_video_source={judge_video_source} "
@@ -3599,12 +3657,28 @@ def generate_video_qa_loop(
 
 def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--backend", default="transformers-local", choices=["transformers-local", "transformers-local-memory-safe", "openai-compatible-local", "openrouter", "gemini"])
-    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
+    parser.add_argument(
+        "--model-id",
+        "--generator-model-id",
+        dest="model_id",
+        default=DEFAULT_MODEL_ID,
+        help="Generator model ID; --generator-model-id is the role-explicit alias.",
+    )
+    parser.add_argument(
+        "--generator-device",
+        default="auto",
+        help="Transformers device map for the generator, for example cuda:0.",
+    )
     parser.add_argument("--generation-mode", default="baseline", choices=GENERATION_MODES)
     parser.add_argument("--generator-decode-mode", default="greedy", choices=GENERATOR_DECODING_MODES)
     parser.add_argument("--generator-temperature", type=float, default=DEFAULT_SAMPLING_TEMPERATURE)
     parser.add_argument("--generator-top-p", type=float, default=DEFAULT_SAMPLING_TOP_P)
     parser.add_argument("--generator-top-k", type=int)
+    parser.add_argument(
+        "--generator-seed",
+        type=int,
+        help="Seed Python, NumPy, and Torch RNGs before generator model loading.",
+    )
     parser.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
     parser.add_argument("--max-new-tokens", type=int, default=1536)
     parser.add_argument("--max-image-pixels", type=int, default=262144)
@@ -3615,6 +3689,11 @@ def add_video_loop_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--api-key", help="Provider API key; OpenRouter reads OPENROUTER_API_KEY and Gemini reads GEMINI_API_KEY or GOOGLE_API_KEY")
     parser.add_argument("--judge-backend", choices=["transformers-local", "transformers-local-memory-safe", "openai-compatible-local", "openrouter", "gemini"])
     parser.add_argument("--judge-model-id", help=f"Model for review judges/evaluators; defaults to {DEFAULT_JUDGE_MODEL_ID} when judge backend differs")
+    parser.add_argument(
+        "--judge-device",
+        default="auto",
+        help="Transformers device map for review judges, for example cuda:1.",
+    )
     parser.add_argument("--judge-base-url")
     parser.add_argument("--judge-api-key")
     parser.add_argument("--judge-max-new-tokens", type=int)
@@ -3700,6 +3779,7 @@ def main(argv: list[str] | None = None) -> int:
         judge_entropy_report_path=args.judge_entropy_report_output,
         backend=args.backend,
         model_id=args.model_id,
+        generator_device=args.generator_device,
         base_url=args.base_url,
         target_count=args.target_count,
         max_attempts=args.max_attempts,
@@ -3712,6 +3792,7 @@ def main(argv: list[str] | None = None) -> int:
         api_key=args.api_key,
         judge_backend=args.judge_backend,
         judge_model_id=args.judge_model_id,
+        judge_device=args.judge_device,
         judge_base_url=args.judge_base_url,
         judge_api_key=args.judge_api_key,
         judge_max_new_tokens=args.judge_max_new_tokens,
@@ -3732,6 +3813,7 @@ def main(argv: list[str] | None = None) -> int:
         generator_temperature=args.generator_temperature,
         generator_top_p=args.generator_top_p,
         generator_top_k=args.generator_top_k,
+        generator_seed=args.generator_seed,
     )
     print(f"accepted {len(rows)} video-first question-answer rows")
     return 0

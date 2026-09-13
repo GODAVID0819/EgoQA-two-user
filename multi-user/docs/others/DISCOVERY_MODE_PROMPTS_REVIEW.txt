@@ -1,0 +1,544 @@
+Discovery Mode Prompt Review
+============================
+
+Purpose
+-------
+This file is a condensed review guide, not a verbatim prompt dump. It
+summarizes and reorganizes the active prompts and prompt-adjacent gates used by
+generate_video_qa_loop --generation-mode discovery.
+
+For exact source wording with no summarization, see:
+DISCOVERY_MODE_PROMPTS_EXACT_SOURCE.txt
+
+Primary source files:
+- prompts.py
+- video_qa_loop.py
+- schema.py
+- observations.py, separate observe_clips command only
+
+
+1. Discovery Planner Prompt
+---------------------------
+Source function:
+build_relation_discovery_prompt(packet, question_type, feedback=None)
+
+Used when:
+- generation_mode == "discovery"
+- before writing the MCQ
+
+Role:
+Ask the VLM to inspect the raw egocentric videos and discover possible
+cross-user information needs. It must not write the MCQ yet.
+
+Core instruction:
+You are planning one template-free EgoLife two-user MCQ from raw egocentric
+videos. Do not write the MCQ yet. First discover possible cross-user
+information needs. Use only raw videos, metadata, and available gaze summary.
+Do not use captions, transcripts, or outside knowledge.
+
+Question-type guidance:
+- commonality: prefer a relation where one user's anchor and another user's
+  missing detail together establish a shared state, consequence, or follow-up.
+- difference: prefer a relation where the users' views reveal a meaningful
+  asymmetry or complementary detail.
+
+The model must list 3-5 possible information needs. For each need, include:
+- what the speaker user knows or sees
+- what each other required user knows or sees
+- what is only clear when combining them
+- why someone in the situation would naturally ask this
+- whether it is likely answerable by one video alone
+
+Then select exactly one relation that is:
+- natural
+- visually grounded
+- least likely to be answerable from one user's video alone
+
+Avoid:
+- examples
+- stock phrasing
+- fixed templates
+- thinking in terms of question patterns instead of the situation
+
+Retry feedback block:
+If previous feedback exists, the prompt includes:
+"Previous reviewer/evaluator feedback to address: ..."
+The model must revise the question, options, answer, and evidence to address
+the feedback and avoid repeating the rejected issue.
+
+Expected output schema:
+{
+  "information_needs": [
+    {
+      "need": "natural first-person question someone in the situation might ask",
+      "speaker_user": "user whose own experience anchors the question",
+      "other_required_users": ["users whose views provide missing information"],
+      "what_speaker_knows_sees": "visual fact available to the speaker user",
+      "what_others_know_see": {
+        "Alice": "visual fact available only from this user's view"
+      },
+      "only_clear_when_combining": "answer-relevant relation or detail that becomes clear only when the users' views are combined",
+      "why_natural_to_ask": "why this would arise naturally in the situation",
+      "likely_answerable_by_one_video_alone": "yes/no/uncertain, with a brief reason"
+    }
+  ],
+  "selected_relation": {
+    "need": "chosen question or information need",
+    "speaker_user": "chosen speaker user",
+    "other_required_users": ["chosen supporting users"],
+    "what_speaker_knows_sees": "speaker-side visual anchor",
+    "what_others_know_see": {
+      "Alice": "missing visual detail"
+    },
+    "only_clear_when_combining": "combined relation to turn into an MCQ",
+    "why_natural_to_ask": "situated reason",
+    "likely_answerable_by_one_video_alone": "no, because ..."
+  },
+  "selection_reason": "why this relation is more natural, and less answerable from one user's video alone, than the alternatives"
+}
+
+
+2. Discovery MCQ Generator Prompt
+---------------------------------
+Source function:
+build_relation_mcq_prompt(packet, question_type, discovered_relation, feedback=None)
+
+Used when:
+- generation_mode == "discovery"
+- after the discovery planner returns a selected relation
+
+Role:
+Turn the discovered cross-user relation into one natural first-person
+five-option MCQ.
+
+Core instruction:
+You are writing one natural first-person EgoLife MCQ from a discovered
+cross-user relation. Use the discovered relation to write one natural
+first-person MCQ. You may choose the wording freely. Do not reuse examples or
+phrasing. Do not follow a fixed template.
+
+Input rule:
+Look directly at the raw videos and use only visual evidence, video metadata,
+and the provided gaze summary when available.
+
+Requirements:
+1. Generate exactly one five-option multiple-choice question.
+2. question_type must match the requested type.
+   - commonality: answer is only clear after combining required users' views.
+   - difference: question is about a meaningful asymmetry or complementary detail.
+3. The question must feel natural for an AR-glasses user or someone in the
+   situation.
+4. The answer must require visual evidence from at least two required users.
+5. Any single required user's video alone must be insufficient.
+6. Combined required users' videos must make exactly one option correct.
+7. Do not use these words in the question or options:
+   video, footage, recording, frame, dataset, camera, clip, caption, subtitle,
+   timestamp, CLIP, embedding, similarity, novelty.
+8. Options must be multi-word, plausible, parallel in length/style, and have
+   exactly one correct answer.
+9. Fill evidence fields with each needed user's visual fact and a specific
+   timeframe.
+10. Return every field in the JSON shape exactly.
+11. answer must exactly equal options[correct].
+12. correct must be one letter: A, B, C, D, or E.
+
+Retry feedback block:
+If previous feedback exists, the prompt includes:
+"Previous reviewer/evaluator feedback to address: ..."
+The model must revise the question, options, answer, and evidence to address
+the feedback and avoid repeating the rejected issue.
+
+Expected output schema:
+{
+  "qa_id": "string",
+  "question_type": "commonality or difference",
+  "question": "natural first-person question from an AR-glasses user's perspective; do not mention timestamps, video, footage, recordings, frames, or cameras",
+  "options": ["A option", "B option", "C option", "D option", "E option"],
+  "correct": "A/B/C/D/E",
+  "answer": "exact text of the correct option",
+  "category": "one of: social_interaction, task_coordination, theory_of_mind, temporal_reasoning, environmental_interaction",
+  "required_users": ["at least two user names"],
+  "evidence": [
+    {
+      "user": "name",
+      "needed_fact": "visual fact from this user's own video",
+      "timeframe": "specific start-end time range, or an approximate moment, in this user's video",
+      "frames_used": ["video-level evidence or approximate moment labels"]
+    }
+  ],
+  "referred_timestamps": [
+    {
+      "user": "name",
+      "timestamp_seconds": 0.0,
+      "moment": "brief visual moment used as evidence"
+    }
+  ],
+  "single_user_answerability": {
+    "Jake": "insufficient because Jake alone only provides ...",
+    "Alice": "insufficient because Alice alone only provides ..."
+  },
+  "combined_answerability": "sufficient because the required users' videos together support exactly one option",
+  "generator_rationale": "why this is a natural question and why the missing detail depends on multiple users",
+  "why_two_users_needed": "why each required user provides necessary, non-redundant visual evidence",
+  "per_user_evidence_claims": [
+    {
+      "user": "name",
+      "claim": "claim grounded in that user's own video"
+    }
+  ],
+  "review": {
+    "generator_self_check": "why one user alone cannot answer this, and why the question is not just asking what both users saw",
+    "status": "draft"
+  }
+}
+
+
+3. Legacy / Baseline Generator Prompt
+-------------------------------------
+Source function:
+build_video_generation_prompt(packet, question_type, feedback=None, generation_mode="baseline")
+
+Used when:
+- generation_mode == "baseline" or "clip_guided"
+- not normally used as the two-step discovery prompt
+
+Discovery-mode note:
+If build_video_generation_prompt is called with generation_mode == "discovery",
+it delegates to build_relation_mcq_prompt with an empty discovered_relation.
+The actual generate_video_qa_loop discovery path uses:
+1. build_relation_discovery_prompt
+2. build_relation_mcq_prompt
+
+Role in baseline/clip-guided:
+Generate one video-first MCQ directly from raw videos.
+
+Key additional rules in this direct generator:
+- Must start from one user's speaker-side anchor event.
+- Must ask about a related missing detail visible only in another required
+  user's video.
+- Timestamp overlap is not enough.
+- Do not ask what both users saw, noticed, looked at, did, handled, had,
+  shared, or were doing together.
+- Do not ask generic comparisons of views, rooms, or camera angles.
+- For commonality, the commonality must be the relationship between the
+  speaker anchor and another user's missing detail, not merely a shared object
+  or shared action visible in both views.
+
+It also includes a good example:
+- Speaker checks a setup and leaves toward a stairwell.
+- Another user's view shows the room front where a tutorial continues.
+- Good question asks what was still happening after the speaker left.
+
+Clip-guided note:
+In generation_mode == "clip_guided", the direct generator also includes CLIP
+retrieval hints as attention guidance only. Discovery mode does not inject this
+CLIP guidance block in the active two-step path.
+
+
+4. Judger / Reviewer Prompt
+---------------------------
+Source function:
+build_judger_prompt(qa_item, packet)
+
+Used when:
+- after schema validation of the generated QA
+- same for baseline, clip_guided, and discovery modes
+
+Role:
+Ask a strict VLM reviewer to evaluate the generated QA using the same raw
+egocentric videos used by the generator.
+
+Core instruction:
+You are a strict reviewer for EgoLife video-first two-user MCQ generation.
+Judge whether the generated question is acceptable. Return every check in the
+JSON schema. Focus most carefully on multi_video_necessity.
+
+Structured checks:
+1. first_person_naturalness
+   Natural first-person memory/AR-assistant wording.
+
+2. agent_perspective
+   No dataset-observer wording, and no video/footage/recording/frame/camera/
+   clip/timestamp language in the question or options.
+
+3. source_scope
+   Answerable from provided raw videos and metadata only.
+
+4. question_type_semantics
+   commonality means shared or jointly verified; difference means meaningful
+   contrast, asymmetry, or complementary detail.
+
+5. multi_video_necessity
+   Main check. PASS only if:
+   - one required user's video provides a speaker-side anchor event
+   - another required user's video provides a missing visual detail
+   - the detail is simultaneous, follow-up, or otherwise naturally related
+   - both videos are necessary
+   - removing either user's video would make the question unanswerable or leave
+     more than one plausible option
+   - the connection is a plausible memory or AR-assistant question
+
+  FAIL if:
+   - the question merely stitches together clips from the same time interval
+   - activities are unrelated and only timestamp-aligned
+   - the question asks what both users saw, noticed, or looked at
+   - the question is a generic comparison of views, rooms, or camera angles
+   - the question asks what "the other person", "everyone else", or "others"
+     were doing nearby, unless tied to a concrete missing visual detail
+   - a single user's video already reveals the correct answer
+
+   UNCERTAIN if:
+   - the videos do not clearly show the anchor, missing detail, or relation
+
+   The reason must explicitly name:
+   - the speaker-side anchor
+   - the missing visual detail
+   - why the second video is or is not needed
+
+6. visual_grounding
+   Correct option and evidence claims are grounded in concrete visual moments.
+
+7. mcq_option_quality
+   Exactly five plausible options and exactly one correct answer.
+
+8. gaze_safety
+   Do not invent exact gaze-to-object claims when 2D gaze is unavailable.
+
+9. human_auditability
+   Enough user/video/time evidence exists for a human to inspect later.
+
+Expected output schema:
+{
+  "review_passed": true,
+  "checks": {
+    "first_person_naturalness": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if not PASS; empty if PASS"
+    },
+    "agent_perspective": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if not PASS; empty if PASS"
+    },
+    "source_scope": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if not PASS; empty if PASS"
+    },
+    "question_type_semantics": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if not PASS; empty if PASS"
+    },
+    "multi_video_necessity": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if not PASS; empty if PASS"
+    },
+    "visual_grounding": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if not PASS; empty if PASS"
+    },
+    "mcq_option_quality": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if not PASS; empty if PASS"
+    },
+    "gaze_safety": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if not PASS; empty if PASS"
+    },
+    "human_auditability": {
+      "status": "PASS/FAIL/UNCERTAIN",
+      "reason": "short evidence-grounded explanation",
+      "fix": "specific repair instruction if not PASS; empty if PASS"
+    }
+  },
+  "blocking_failures": ["names of failed checks that should block acceptance"],
+  "why_generator_asked_this": "brief explanation of why the generator may have asked this",
+  "feedback_to_generator": "specific revision instructions if review_passed is false; use an empty string if it passed"
+}
+
+
+5. Judger Deterministic Gate
+----------------------------
+Source function:
+judge_gate(judge)
+
+This is not a prompt. It is code that gates the judger output.
+
+Blocking checks:
+- first_person_naturalness
+- agent_perspective
+- source_scope
+- question_type_semantics
+- multi_video_necessity
+- visual_grounding
+- mcq_option_quality
+- gaze_safety
+- human_auditability
+
+Pass condition:
+- every blocking check exists
+- every blocking check status is PASS
+- blocking_failures is empty
+
+Important behavior:
+If all structured checks PASS but top-level review_passed is false, the gate
+still passes and records a warning. Structured checks are authoritative.
+
+
+6. Answerability Prompt
+-----------------------
+Source function:
+build_answerability_prompt(qa_item, condition)
+
+Used when:
+- after the judger gate passes
+- same for baseline, clip_guided, and discovery modes
+
+Role:
+Ask the VLM to answer the MCQ using only a restricted set of videos.
+
+Conditions tested:
+- single_user::<user>
+- proper_subset::<users>, only when more than two users are required
+- combined_all_users::<users>
+
+Core instruction:
+Answer this EgoLife multiple-choice question using only the videos provided for
+this condition.
+
+Rules:
+- Choose A, B, C, D, or E only if the provided videos are sufficient.
+- If the condition does not contain enough evidence, set choice to
+  "insufficient".
+- Do not guess from common sense or from the answer options.
+- Do not use information from users or videos outside this condition.
+
+Expected output schema:
+{
+  "choice": "A/B/C/D/E or insufficient",
+  "answer_text": "selected option text, or empty string if insufficient",
+  "confidence": 0.0,
+  "evidence_used": "short explanation grounded only in the provided videos",
+  "insufficient_reason": "explain what is missing if choice is insufficient"
+}
+
+
+7. Answerability Deterministic Gate
+-----------------------------------
+Source function:
+answerability_gate(qa_item, evaluations)
+
+This is not a prompt. It is code that gates the answerability evaluations.
+
+Pass condition:
+- combined_all_users evaluation must select the correct answer
+- every single_user and proper_subset condition must be insufficient or select
+  an incorrect answer
+
+Fail conditions:
+- missing combined_all_users evaluation
+- combined_all_users says insufficient
+- combined_all_users selects the wrong answer
+- any single_user or proper_subset condition selects the correct answer
+
+Common failure reason:
+"single/subset condition answered correctly: single_user::Alice"
+
+
+8. Schema / Strict Review Gate
+------------------------------
+Source function:
+validate_qa_item(item, strict_review=False)
+
+This is not a prompt. It validates generated QA rows.
+
+Basic validation checks:
+- required fields are present
+- options has exactly five non-empty strings
+- correct is A-E
+- answer equals options[correct]
+- required_users lists at least two unique users
+- single_user_answerability is an object
+- each required user appears in single_user_answerability
+- each single-user entry says insufficient, cannot, or not enough
+- combined_answerability says sufficient or support
+- question_type is commonality or difference
+- review is an object
+
+Strict review checks:
+- video_evidence is non-empty
+- generation_trace is non-empty
+- human_audit exists
+- review.status == "passed"
+- review.review_passed == true
+- review.judger.gate.passed == true
+- all judger checks exist and are PASS
+- review.answerability.gate.passed == true
+- review.answerability.evaluations is a list
+- review.schema_validation.passed == true
+
+
+9. Retry Feedback Sources
+-------------------------
+Source:
+generate_video_qa_loop
+
+Feedback can be generated from:
+- discovery output invalid JSON
+- generator output invalid JSON
+- schema validation errors
+- judger rejection
+- answerability gate failure
+- strict validation errors
+
+That feedback is passed back into:
+- discovery planner prompt
+- MCQ generator prompt
+
+Feedback wording template:
+"Previous reviewer/evaluator feedback to address:
+<feedback>
+Revise the new question, options, answer, and evidence to address this
+feedback. Do not repeat the rejected issue."
+
+
+10. Separate Observation Prompt
+-------------------------------
+Source function:
+build_observation_prompt(clip_packet)
+
+Used by:
+observe_clips command
+
+Not part of:
+generate_video_qa_loop --generation-mode discovery
+
+Role:
+Summarize one user's egocentric clip for downstream multi-user QA construction.
+
+Core instruction:
+Describe only what is supported by provided images and metadata. Prefer atomic
+facts that could later be combined with facts from another user. The gaze CSV
+contains Aria CPF yaw/pitch/depth values, not image pixels. Treat projected 2D
+gaze as usable only when projection_status is projected.
+
+Expected output schema:
+{
+  "agent_name": "string",
+  "day": "DAY1",
+  "time_token": "HHMMSScc",
+  "location_guess": "short visual location description",
+  "visible_people": ["names or descriptions"],
+  "salient_objects": ["objects that matter"],
+  "actions": ["short action/event facts"],
+  "gaze_focus": ["what the wearer appears to be attending to"],
+  "projected_gaze_use": "only use projected 2D gaze when projection_status is projected",
+  "key_facts": ["atomic facts useful for QA construction"],
+  "uncertain_details": ["things that are unclear or should not be used as facts"]
+}

@@ -13,16 +13,16 @@ under `egolife_two_user_qa/hpc`.
 
 ## 主流程
 
-当前主路径是 video-first。也就是说，Qwen3-VL 直接接收对齐后的 EgoLife 原始视频，而不是先把视频转成 caption/observation 再出题。之后用 judger 和 answerability evaluation 过滤掉单用户可答、合并视频也答不准、或者问题口吻不自然的题。
+当前主路径是 video-first。也就是说，Qwen3-VL 直接接收对齐后的 EgoLife 原始视频，而不是先把视频转成 caption/observation 再出题。之后用 judger 和 answerability evaluation 过滤掉单用户证据已经足够、合并证据仍不足以唯一作答、或者问题口吻不自然的题。
 
 ```text
 EgoLife video + EyeGaze/EyeTracking tree
 -> build_manifest
 -> prepare_evidence: 按 day / time token 对齐至少两个用户，并缓存视频/gaze
 -> generate_video_qa_loop:
-   -> generator: 直接看多用户视频，生成 commonality/difference MCQ
+   -> generator: 只看 surviving CLIP-cluster-member frames，按当前 neutral-only contract 生成 MCQ
    -> judger: 解释为什么问这个问题，并给 generator 反馈
-   -> answerability eval: 分别测试单用户视频和合并视频能否答题
+   -> answerability eval: 分别判断单用户证据和合并证据是否足以唯一确定答案
 -> validate_outputs: 做确定性的 schema/gate 检查
 ```
 
@@ -99,10 +99,87 @@ ten-minute launcher to protect host RAM.
 later QA pipeline experiments. For each synchronized timestamp, it randomly
 selects exactly two videos, samples one frame per second from each selected
 30-second video, embeds those sampled frames with CLIP, clusters embeddings
-within each selected video into 12 clusters by default, and compares cross-video representative frames.
-When representative frames are highly similar across the two selected videos,
-the prep step prunes the corresponding sampled-frame interval plus every frame
-assigned to that representative cluster.
+within each selected video into 12 visual clusters by default, splits each
+visual cluster into contiguous temporal components, and compares cross-video
+representative frames only inside a two-second timestamp gate. Pair-level
+`mean_sim` and `topk_sim` use the same eligible visual-plus-time comparisons.
+When eligible representative frames are highly similar across the two selected
+videos, the prep step prunes the corresponding sampled-frame interval plus every
+frame assigned to that temporal component. Similar representatives outside the
+time gate are recorded as `preserved_cross_time` and are not pruning triggers.
+Use `--timestamp-agnostic-pruning --no-split-noncontiguous-clusters` only for the
+legacy visual-only ablation.
+
+To compare the recurrent-scene failure mode directly, use the opt-in temporal
+clustering evidence sidecar. It reads any two-video evidence JSONL; if a packet
+is already pruned, it automatically starts again from `full_local_video`. Every
+packet is sampled and CLIP-embedded once, then written to two matched arms. The
+baseline uses unsplit global cosine K-means plus the normal cross-video time
+gate. The experimental arm repeatedly merges only adjacent temporal clusters,
+so every final cluster is a contiguous sampled-frame run, and applies the same
+time gate, similarity threshold, and duration protection.
+
+Submit the GPU sidecar through Slurm. By default it consumes the 50-packet
+`outputs/two_user_cluster_summary_frames_qwen36_27b_50/group_relative_pruned_pairs.jsonl`
+cohort and uses K=12 with a two-second cross-video gate:
+
+```bash
+sbatch hpc/run_temporal_clustering_evidence_sidecar.sbatch
+```
+
+For another evidence cohort, pass its project-relative or absolute path at
+submission time:
+
+```bash
+sbatch --export=ALL,TEMPORAL_CLUSTERING_EVIDENCE_PATH=egolife_two_user_qa/outputs/my_cohort/evidence.jsonl \
+  hpc/run_temporal_clustering_evidence_sidecar.sbatch
+```
+
+The launcher preflight-checks that at least 50 input rows exist and fails unless
+both evidence arms and the comparison file contain exactly 50 rows. Override
+the strict cohort size with `TEMPORAL_CLUSTERING_PACKET_COUNT`. The launcher
+also accepts corresponding `TEMPORAL_CLUSTERING_*` overrides for the
+output directory, cache, duration, sampling interval, K, similarity threshold,
+time gate, pruning protection, and CLIP batch size. It validates CUDA before
+starting, requires the project-root `hpc/cuda.py`, and keeps that utilization
+helper alive through evidence generation and final paired-output verification.
+The keeper log is written beneath the experiment output directory.
+
+The two downstream-ready inputs are
+`kmeans_time_gate/evidence.jsonl` and
+`temporal_agglomerative_time_gate/evidence.jsonl`. Run the same QA/gating command
+once per file. `clustering_comparisons.jsonl` pairs rows by the unchanged
+`evidence_id` and reports cluster contiguity, pruned frame assignments, retained
+duration, and arm deltas. `experiment_summary.json` records the full fairness
+contract and settings. The production evidence path is not modified.
+
+Add `--summarize-clusters` to run a two-stage relation retriever. The first VLM
+inference batches every temporal cluster and returns one compact `event_summary`
+per cluster. The second inference is text-only: it consumes those summaries and
+returns at most three conservative cross-user relation hypotheses. Thus the
+normal path is two upstream model calls per pair, not one call per cluster.
+Raw summaries and responses remain in packet diagnostics for auditing, but the
+generator prompt deliberately withholds them. It receives only the selected
+relation-map candidates and must independently verify them against the retained
+visual evidence. The group-relative launchers enable this experiment by default;
+set `GRP_SUMMARIZE_CLUSTERS=0` to disable both stages.
+
+For the 50-pair two-user trial, submit the dedicated Qwen3.6-27B launcher from
+the `Long-video-understanding-clip` project root:
+
+```bash
+sbatch hpc/run_two_user_cluster_summary_frames_qwen36_27b_50.sbatch
+```
+
+It randomly samples one two-user pair from each eligible synchronized six-user
+group, keeps the two-second time-aware pruning gate, and performs the batched
+summary plus separate relation-mapping stages. The generator receives mapped
+relation candidates alongside only the retained cluster-member frames; raw
+event summaries are excluded. `cuda.py` runs for the lifetime of the job. On
+HPC, helper scripts resolve from `${PROJECT_ROOT}/hpc`, while the Python package
+and output directory resolve from `${PROJECT_ROOT}/egolife_two_user_qa`. The job
+hard-fails if the two-call mapping contract, summary withholding, or retained-
+frame routing is violated.
 
 The emitted evidence packets route media deliberately: `local_video` points to
 the CLIP-guided pruned MP4 for generation, while `full_local_video` and
@@ -371,9 +448,9 @@ traces, or accepted rows.
 
 PASS/FAIL choice logits are disabled in ordinary production. The opt-in entropy
 mode below adds a separate diagnostic judge call; strict acceptance validation
-does not require its verdict or entropy. The A-E answerability evaluator still
-uses ordinary JSON generation and does not request or store choice logits or
-entropy.
+does not require its verdict or entropy. The answerability evaluator uses
+ordinary JSON generation to return an evidence-sufficiency boolean; it does not
+select an A-E answer or request/store choice logits or entropy.
 
 ### Independent minimal-verdict production entropy
 
@@ -741,12 +818,12 @@ format-repair feedback without making the malformed text part of the candidate
 lineage.
 
 Generation uses the existing retained CLIP-cluster-member frames. Its prompt
-explicitly describes them as sparse, chronologically ordered samples and
-forbids unsupported inference about actions, transitions, or moments between
-frames. The existing parallel formality, groundedness, and answerability path
-remains unchanged and receives the full original videos. Those same two
-full-video paths are the media references recorded for future reward-model
-examples. Automated PASS or FAIL is metadata rather than a human label.
+identifies the packet-image range belonging to each person and says that each
+range is chronological; it does not expose the per-frame timestamp table.
+The existing parallel formality, groundedness, and answerability path remains
+unchanged and receives the full original videos. Those same two full-video
+paths are the media references recorded for future reward-model examples.
+Automated PASS or FAIL is metadata rather than a human label.
 Sampling defaults to temperature `0.70`, top-p `0.95`, and top-k `40`, with a
 stable unique seed for every generation identity.
 
@@ -784,11 +861,76 @@ available for a single custom window through
 `hpc/run_reward_candidate_collection_qwen36_27b.sbatch` and its per-job
 `REWARD_PACKET_COUNT` variable.
 
+For the next 100-packet reward-model cohort, use the balanced full-window
+submitter instead of splitting the clock range:
+
+```bash
+cd /scratch/$USER/Long-video-understanding-clip
+REWARD_SUBMIT_DRY_RUN=1 bash hpc/submit_reward_candidate_collection_balanced_full_window.sh
+bash hpc/submit_reward_candidate_collection_balanced_full_window.sh
+```
+
+Its defaults reproduce the intended `DAY1`-`DAY7`, `[06:00,18:00)` scope with
+100 packets and the current checked-out `prompts.py`. The submitter prints that
+prompt file's SHA-256 before submission, and each collection manifest retains
+the prompt implementation hash already recorded by the candidate collector.
+
+The two H100 jobs both cover the complete clock window. A stable SHA-256 split
+assigns every synchronized `(day, time_token)` group to exactly one job, so the
+jobs remain disjoint without turning one job into a morning cohort and the
+other into an afternoon cohort. Each 50-packet partition fills five packets in
+each of ten equal-width bins over the available timeline. The pair schedulers
+coordinate their bin plans, so a participant pair appears at most once in a
+time bin across the combined cohort, and they fill coordinated global pair
+quotas of six or seven packets per pair. Across both jobs this produces ten
+packets per time bin and 100 packets total. `--strict-balance` makes evidence preparation
+fail before question generation unless every time-bin and participant-pair
+quota is met. The CLIP filter may reject a planned pair, in which case the
+scheduler tries an unused group/pair in the same underfilled time bin rather
+than borrowing a packet from a more common time.
+
+Override `REWARD_WINDOW_LABEL`, `REWARD_DAYS`, `REWARD_START_CLOCK`, or
+`REWARD_END_CLOCK` only to define a different cohort. Keep
+`REWARD_TOTAL_PACKET_COUNT=100` and `REWARD_TIME_BIN_COUNT=10` for the fixed
+100-packet run. The output roots end in `part1_partition0` and
+`part2_partition1`; together they contain 100 six-question packets (600
+candidate questions).
+
+To add a second 100-packet cohort without reusing the previously selected
+people at the same synchronized moment, use the dedicated non-overlap
+submitter:
+
+```bash
+cd /scratch/$USER/Long-video-understanding-clip
+REWARD_SUBMIT_DRY_RUN=1 bash hpc/submit_reward_candidate_collection_next100_nonoverlap.sh
+bash hpc/submit_reward_candidate_collection_next100_nonoverlap.sh
+```
+
+Before either dry-run or submission, it reads the prior two
+`evidence_build/evidence_cluster_member_frames.jsonl` files and requires
+exactly 100 unique evidence packets. For every prior `(day, time_token)`, both
+new jobs remove only the two `agent_id` values selected last time; other people
+at that same day/time remain eligible. The worker records the source-file
+hashes and excluded `(day, time_token, agent_id)` digest in `build_config.json`,
+requires every old group/user assignment to match the selected `DAY1`-`DAY7`
+window, and fails final evidence verification if a prior user is reused within
+the same group. The default new labels end in
+`cohort2_nonoverlap_part1_partition0` and
+`cohort2_nonoverlap_part2_partition1`.
+
 The worker defaults to `Qwen/Qwen3.6-27B`, one GPU, and one resident model
 shared by generation and the serialized local judge calls. Different window
 labels create different output directories and can run concurrently. Set
 `REWARD_OUTPUT_DIR` explicitly and `REWARD_RESUME=1` to resume an interrupted
 window with the exact same configuration.
+
+Each worker requires `${PROJECT_ROOT}/hpc/cuda_slurm.py` and
+`${PROJECT_ROOT}/hpc/cuda.py`. It starts the Slurm-aware keeper before manifest
+construction, confirms the logical-to-physical GPU mapping, and keeps the
+process alive through evidence preparation, CLIP mining, candidate generation,
+and final output verification. During CPU-, download-, and I/O-heavy gaps, the
+keeper maintains GPU activity according to its utilization threshold. The exit
+trap stops it after the final verification.
 
 Each window directory retains the raw and filtered manifests, CLIP-pruned pair
 evidence, and generated frame sidecar beneath `evidence_build/`. No external
@@ -812,6 +954,84 @@ evidence manifest. All artifacts are ordinary uncompressed JSON or JSONL. A
 successful 100-packet run is required to contain all 600 candidates; a missing
 six-candidate packet makes final verification fail instead of silently
 producing a short dataset.
+
+#### Repairing the four discarded pilot packets
+
+The pilot's two incomplete halves can be repaired together on one H100 without
+rerunning evidence mining, downloads, or the 96 complete packets:
+
+```bash
+cd /scratch/$USER/Long-video-understanding-clip
+sbatch hpc/run_reward_candidate_repair_qwen36_27b.sbatch
+```
+
+The repair worker discovers the two existing `day1_4_full_day_part*` roots,
+extracts exactly their four `discarded_packets.jsonl` evidence IDs, verifies
+that every retained sampled frame and full original video still exists, and
+loads `Qwen/Qwen3.6-27B` once for all four packets. It preserves the original
+prompt and sampling configuration while setting both the raw-call and
+malformed-call ceilings to 24, so the raw-call ceiling becomes the effective
+emergency stop. The original half directories remain unchanged. Results go to
+`day1_4_full_day_repair_4packets/collection`, and `repair_summary.json` verifies
+that the 576 retained source candidates plus 24 repaired candidates cover the
+original 100 evidence IDs and total exactly 600 candidates. Override
+`REWARD_REPAIR_SOURCE_PART1`, `REWARD_REPAIR_SOURCE_PART2`, or
+`REWARD_REPAIR_DIR` only if the original labels were relocated. Use
+`REWARD_REPAIR_RESUME=1` only to resume an interrupted repair with the same
+configuration.
+
+### RLHF human preference labeling
+
+`rlhf_human_labeling.py` turns one or more completed reward-collection roots
+into a blinded, evidence-first annotation package. It reuses the manual
+ablation reviewer's lazy full-video playback, synchronized controls, local
+autosave, backup/restore, and CSV export. One packet is shown at a time with all
+six questions in a deterministically shuffled, blinded order. For every
+question, annotators assign 1-3 formality (F), evidence-grounding (E), and
+answerability (A) scores, plus an aggregate rank from 1 (best) to 6 (worst).
+Each question card shows a live `F + E + A` total out of 9, and exports retain
+the completed total as `fea_total_score`.
+Ranks may repeat, so tied questions remain tied rather than being forced into
+an artificial order. Automatic judge outcomes, generation order, and lineage
+are excluded from the annotator payload.
+
+After both time-half jobs and the four-packet repair finish, build one
+100-packet/600-question assignment from the project root:
+
+```bash
+python -m egolife_two_user_qa.rlhf_human_labeling \
+  --collection-dir egolife_two_user_qa/outputs/reward_candidate_collection_qwen36_27b/day1_4_full_day_part1_060000_120000 \
+  --collection-dir egolife_two_user_qa/outputs/reward_candidate_collection_qwen36_27b/day1_4_full_day_part2_120000_180000 \
+  --collection-dir egolife_two_user_qa/outputs/reward_candidate_collection_qwen36_27b/day1_4_full_day_repair_4packets/collection \
+  --assignment-id day5_7_pilot_001 \
+  --output-dir egolife_two_user_qa/outputs/rlhf_labeling/day5_7_pilot_001
+
+python egolife_two_user_qa/outputs/rlhf_labeling/day5_7_pilot_001/serve_rlhf_labeling.py
+```
+
+The builder accepts the two unrepaired halves as well. In that case it includes
+the 96 complete packets (576 questions), explicitly excludes only the four
+zero-candidate packets recorded in `discarded_packets.jsonl`, and writes their
+evidence IDs, counters, and failure reasons to `assignment_manifest.json`.
+The page also displays the excluded count and IDs. A partial packet with one to
+five candidates, or a zero-candidate packet without an explicit discard record,
+is a hard error rather than a silent omission. When the repair collection is
+added, exact duplicate evidence manifests are accepted, the repaired six-item
+sets supersede the old discard status, and the assignment returns to 100
+packets/600 questions.
+
+Use `--packet-start` and `--packet-count` to create disjoint annotator
+assignments. The package contains `rlhf_labeling.html`, compact embedded data,
+an assignment manifest, a blank CSV template, and local launchers. Browser
+state is namespaced by dataset fingerprint and assignment ID. F/E/A and rank
+controls are immediately interactive; an annotator ID is required only before
+advancing or exporting. CSV exports one row per candidate. JSONL exports one completed packet
+per line, retaining the six stable candidate IDs, QA payloads, F/E/A scores,
+aggregate ranks, notes, active time, and reward-model video references. It also
+derives all 15 within-packet candidate pairs: unequal ranks produce a strict
+preferred/rejected relation, while equal ranks produce an explicit tie marked
+for a tie-aware objective. Packet-level skipping remains available only for
+unavailable or genuinely unjudgeable video evidence.
 
 ## Fixed 001–100 QA ablations
 
@@ -928,10 +1148,12 @@ and `Unset` rows are excluded rather than guessed.
 
 Every model arm receives the same three independent conditions for each QA:
 asker video only, evidence-provider video only, and both videos together. The
-deterministic gate still requires the asker-only call to miss the declared
-answer and the combined call to recover it; provider-only correctness remains
-an allowed diagnostic. There is exactly one external pass and no verifier
-output is returned to the generator or any retry loop.
+model judges whether each condition contains enough evidence to determine one
+unique option, without returning an option choice. The deterministic gate
+requires the asker-only condition to be judged unanswerable and the combined
+condition to be judged answerable; provider-only answerability remains an
+allowed diagnostic. There is exactly one external pass and no verifier output
+is returned to the generator or any retry loop.
 
 The checked-in benchmark configuration uses the six runs represented in
 `ablation_manual_review_fa662de7a5885094dd12.csv` and enables these arms:
@@ -968,8 +1190,8 @@ Results are written under `outputs/answerability_verifier_benchmark/`:
 - `comparison.csv` and `comparison.json`: confusion matrices, accuracy,
   balanced accuracy, failure recall/precision, false-accept rate, confidence
   intervals, per-run metrics, per-error-tag metrics, and paired arm counts.
-- `predictions.jsonl`: the gold label, final gate, and all three condition
-  choices for every QA/model arm.
+- `predictions.jsonl`: the gold label, final gate, and all three condition-level
+  answerability verdicts for every QA/model arm.
 - `disagreements.jsonl`: only model-versus-human disagreements for inspection.
 - `benchmark_plan.json`: the validated cohort and exact call count before the
   first model request.
@@ -1096,6 +1318,50 @@ sbatch egolife_two_user_qa/hpc/run_answerability_verifier_remaining17_cpu.sbatch
 
 Results are written under
 `outputs/answerability_verifier_remaining17_gemini35_high/`.
+
+### Gemini 2.5 Flash: all six videos versus the minimal answerable set
+
+`hpc/run_gemini25_flash_44_six_vs_minimal_cpu.sbatch` is the tracked launcher
+template. Copy it to the `Long-video-understanding-clip/` project root on the
+cluster; it expects `./egolife_two_user_qa/__init__.py` beneath that location.
+It evaluates the frozen 44-question accepted set twice through OpenRouter. The
+`all_six` condition uses all six full original videos from the native six-user
+packet. The `minimal_answerable` condition uses the speaker's full original
+plus the full originals of the unique providers named by the accepted QA's
+`supporting_user_claims`. Consequently, the minimal video count can vary by
+question. Every minimal video is byte-for-byte the same source used in the
+all-six arm, and both arms preserve `required_users` order.
+
+The launcher performs a non-billable full preflight before inference. It
+requires exactly 44 unique accepted QAs, six distinct `required_users` per QA,
+at least one valid provider in `supporting_user_claims`, matching native
+six-user evidence rows, and six existing full original media files. It also
+snapshots OpenRouter's live model metadata
+and confirms that `google/gemini-2.5-flash` still advertises video-to-text
+support. The planned budget is exactly 88 logical calls (44 questions x 2
+conditions), with client retries disabled. Re-submitting the job safely retries
+only error rows because the launcher always uses `--resume`.
+
+The job also passes `--turbo`, which keeps the exact Gemini model fixed while
+setting OpenRouter provider sorting to `throughput` (its Nitro routing mode).
+
+Point `RUN_DIR` at the completed run containing `qa_mcq.jsonl`,
+`six_user_candidates.jsonl`, and `six_user_qa_result.json`. For run 16266077:
+
+```bash
+export RUN_DIR=/scratch/$USER/Long-video-understanding-clip/egolife_two_user_qa/multi-user/outputs/six_user_qa/six_user_baseline_neutral_reuse_packets_100_16266077
+export OPENROUTER_API_KEY="..."
+cp egolife_two_user_qa/hpc/run_gemini25_flash_44_six_vs_minimal_cpu.sbatch .
+sbatch run_gemini25_flash_44_six_vs_minimal_cpu.sbatch
+```
+
+Set `OUTPUT_DIR` to override the default
+`${RUN_DIR}/gemini25_flash_44_six_vs_minimal/`. The output includes the immutable
+`evaluation_plan.json`, a live `openrouter_model_snapshot.json`, per-condition
+results/prompts/summaries, `per_question_comparison.{jsonl,csv}`, and aggregate
+`comparison.json` and `run_summary.json`. Moderate 720px, 2-FPS, CRF-23 CPU
+transcodes and a shared cache are used by default; the corresponding
+`OPENROUTER_VIDEO_*` environment variables can override them.
 
 ### Question-only balanced option-rotation follow-up
 

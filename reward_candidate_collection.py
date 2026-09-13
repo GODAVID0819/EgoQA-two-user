@@ -252,44 +252,38 @@ def validate_raw_generated_qa(qa: dict[str, Any]) -> list[str]:
 def answerability_class(
     qa: dict[str, Any], answerability: dict[str, Any]
 ) -> dict[str, Any]:
-    """Preserve the current gate and add the agreed deterministic 3/2/1 class."""
+    """Classify condition-level evidence sufficiency without scoring answer choices."""
 
-    correct = str(qa.get("correct") or "").strip().upper()
     required_users = list(qa.get("required_users") or [])
     asker = required_users[0] if required_users else None
     provider = required_users[1] if len(required_users) > 1 else None
     evaluations = list(answerability.get("evaluations") or [])
 
-    def choice_for(condition_type: str, user: Any = None) -> str | None:
+    def answerable_for(condition_type: str, user: Any = None) -> bool | None:
         for row in evaluations:
             if row.get("condition_type") != condition_type:
                 continue
             users = list(row.get("users") or [])
             if user is not None and users != [user]:
                 continue
-            choice = str(row.get("choice") or "").strip().upper()
-            return choice if choice in OPTION_LETTERS else None
+            answerable = row.get("answerable")
+            return answerable if answerable is True or answerable is False else None
         return None
 
-    asker_choice = choice_for("single_user", asker)
-    provider_choice = choice_for("single_user", provider)
-    combined_choice = choice_for("combined_all_users")
+    asker_answerable = answerable_for("single_user", asker)
+    provider_answerable = answerable_for("single_user", provider)
+    combined_answerable = answerable_for("combined_all_users")
     if (
-        correct in OPTION_LETTERS
-        and combined_choice == correct
-        and asker_choice in OPTION_LETTERS
-        and asker_choice != correct
-        and provider_choice in OPTION_LETTERS
-        and provider_choice != correct
+        combined_answerable is True
+        and asker_answerable is False
+        and provider_answerable is False
     ):
         score = 3
         label = "requires_both_videos"
     elif (
-        correct in OPTION_LETTERS
-        and combined_choice == correct
-        and asker_choice in OPTION_LETTERS
-        and asker_choice != correct
-        and provider_choice == correct
+        combined_answerable is True
+        and asker_answerable is False
+        and provider_answerable is True
     ):
         score = 2
         label = "provider_alone_answerable"
@@ -299,12 +293,11 @@ def answerability_class(
     return {
         "score": score,
         "label": label,
-        "correct": correct,
         "asker_user": asker,
         "provider_user": provider,
-        "asker_choice": asker_choice,
-        "provider_choice": provider_choice,
-        "combined_choice": combined_choice,
+        "asker_answerable": asker_answerable,
+        "provider_answerable": provider_answerable,
+        "combined_answerable": combined_answerable,
         "current_answerability_gate": deepcopy(answerability.get("gate") or {}),
     }
 

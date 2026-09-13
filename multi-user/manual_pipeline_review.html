@@ -1,0 +1,1591 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Attempt-level manual accuracy audit for EgoLife automated QA judges.">
+  <title>EgoLife judge accuracy review</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #091015;
+      --panel: #111a21;
+      --panel-2: #17232c;
+      --panel-3: #1d2c36;
+      --line: #2b3c48;
+      --line-strong: #496374;
+      --text: #f3f7f8;
+      --muted: #9babb6;
+      --lime: #c9f769;
+      --lime-ink: #172000;
+      --blue: #72c8ff;
+      --amber: #ffc66d;
+      --red: #ff8d87;
+      --green: #76df9a;
+      --violet: #c4a7ff;
+      --radius: 16px;
+      --shadow: 0 20px 60px rgba(0, 0, 0, .26);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      min-width: 330px;
+      min-height: 100vh;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% -6%, rgba(114, 200, 255, .13), transparent 34rem),
+        radial-gradient(circle at 86% 0%, rgba(201, 247, 105, .09), transparent 31rem),
+        var(--bg);
+    }
+
+    button, input, select, textarea { font: inherit; }
+
+    button, .file-button {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 12px;
+      color: var(--text);
+      background: #1a2630;
+      cursor: pointer;
+      transition: border-color .16s ease, background .16s ease, transform .16s ease;
+    }
+
+    button:hover, .file-button:hover { border-color: var(--line-strong); background: #22323e; }
+    button:active, .file-button:active { transform: translateY(1px); }
+    button:disabled { cursor: not-allowed; opacity: .42; }
+    button.primary { border-color: var(--lime); color: var(--lime-ink); background: var(--lime); font-weight: 800; }
+    button.primary:hover { background: #d8ff8b; }
+    button.ghost { background: transparent; }
+    button.danger { color: #ffd0cd; border-color: #6f3c3a; background: #2d1d1e; }
+    button.small { min-height: 34px; padding: 6px 10px; font-size: .8rem; }
+
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      color: var(--text);
+      background: #0c141a;
+    }
+
+    input, select { min-height: 42px; padding: 0 10px; }
+    textarea { min-height: 110px; padding: 10px; line-height: 1.48; resize: vertical; }
+    input::placeholder, textarea::placeholder { color: #657682; }
+
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible,
+    .file-button:focus-within, [tabindex]:focus-visible {
+      outline: 3px solid rgba(114, 200, 255, .34);
+      outline-offset: 2px;
+    }
+
+    a { color: var(--blue); }
+    code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .hidden { display: none !important; }
+
+    .shell { width: min(1660px, calc(100% - 32px)); margin: 0 auto; padding: 30px 0 72px; }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 30px;
+      align-items: end;
+      margin-bottom: 22px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--lime);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .75rem;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    h1 { margin: 0; font-size: clamp(2.1rem, 5.4vw, 4.8rem); line-height: .95; letter-spacing: -.055em; }
+    .lede { max-width: 820px; margin: 15px 0 0; color: var(--muted); line-height: 1.55; }
+
+    .headline-metrics { display: grid; grid-template-columns: repeat(4, minmax(90px, 1fr)); gap: 9px; }
+    .metric { min-width: 105px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 13px; background: rgba(17, 26, 33, .9); box-shadow: var(--shadow); }
+    .metric strong { display: block; font-size: 1.55rem; letter-spacing: -.04em; }
+    .metric span { display: block; margin-top: 2px; color: var(--muted); font-size: .72rem; letter-spacing: .035em; text-transform: uppercase; }
+
+    .load-panel {
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) minmax(240px, 1fr) auto;
+      gap: 12px;
+      align-items: stretch;
+      margin-bottom: 16px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(17, 26, 33, .94);
+      box-shadow: var(--shadow);
+    }
+
+    .file-slot { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 11px; align-items: center; min-height: 70px; padding: 12px; border: 1px dashed var(--line-strong); border-radius: 12px; background: #0d161c; cursor: pointer; }
+    .file-slot:hover { border-color: var(--blue); }
+    .file-slot input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+    .file-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 10px; color: var(--lime-ink); background: var(--lime); font-weight: 900; }
+    .file-copy { min-width: 0; }
+    .file-copy strong, .file-copy span { display: block; }
+    .file-copy strong { margin-bottom: 3px; }
+    .file-copy span { overflow: hidden; color: var(--muted); font-size: .82rem; text-overflow: ellipsis; white-space: nowrap; }
+    .load-actions { display: flex; flex-direction: column; justify-content: center; gap: 8px; min-width: 160px; }
+    .load-status { margin: 0 0 16px; color: var(--muted); font-size: .83rem; }
+    .load-status.error { color: var(--red); }
+
+    .toolbar {
+      position: sticky;
+      z-index: 30;
+      top: 0;
+      display: grid;
+      grid-template-columns: minmax(220px, 1.15fr) repeat(3, minmax(145px, .45fr)) auto;
+      gap: 10px;
+      align-items: end;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(12, 20, 26, .95);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, .3);
+      backdrop-filter: blur(16px);
+    }
+
+    .field, .review-field { display: grid; gap: 6px; min-width: 0; }
+    .field > span, .review-field > span { color: var(--muted); font-size: .69rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+    .toolbar-actions { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
+
+    .progress-strip { display: grid; grid-template-columns: minmax(160px, 1fr) auto; gap: 13px; align-items: center; margin: 12px 2px 18px; }
+    .progress-track { height: 7px; overflow: hidden; border-radius: 999px; background: #1b2932; }
+    .progress-fill { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--lime)); transition: width .25s ease; }
+    .progress-copy { color: var(--muted); font-size: .79rem; }
+
+    .workspace { display: grid; grid-template-columns: 286px minmax(0, 1fr); gap: 14px; align-items: start; }
+    .queue { position: sticky; top: 104px; max-height: calc(100vh - 124px); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(17, 26, 33, .92); box-shadow: var(--shadow); }
+    .queue-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 13px 14px; border-bottom: 1px solid var(--line); }
+    .queue-head strong { font-size: .9rem; }
+    .queue-head span { color: var(--muted); font-size: .75rem; }
+    .queue-list { max-height: calc(100vh - 180px); overflow: auto; padding: 7px; }
+    .queue-empty { padding: 28px 16px; color: var(--muted); text-align: center; line-height: 1.45; }
+
+    .queue-item { width: 100%; min-height: 0; margin: 0 0 5px; padding: 10px; text-align: left; background: transparent; }
+    .queue-item.active { border-color: var(--blue); background: rgba(114, 200, 255, .1); box-shadow: inset 3px 0 0 var(--blue); }
+    .queue-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .queue-index { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .72rem; }
+    .queue-title { display: block; overflow: hidden; margin: 6px 0; font-size: .82rem; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; }
+    .queue-meta { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: .7rem; }
+
+    .dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }
+    .dot.accepted { background: var(--green); box-shadow: 0 0 0 4px rgba(118, 223, 154, .1); }
+    .dot.rejected { background: var(--red); box-shadow: 0 0 0 4px rgba(255, 141, 135, .09); }
+    .dot.reviewed { background: var(--lime); }
+
+    .stage { min-width: 0; }
+    .record-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 12px; padding: 17px 18px; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(17, 26, 33, .94); box-shadow: var(--shadow); }
+    .record-head h2 { overflow-wrap: anywhere; margin: 3px 0 10px; font-size: clamp(1.15rem, 2.2vw, 1.65rem); letter-spacing: -.025em; }
+    .badges { display: flex; flex-wrap: wrap; gap: 7px; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; min-height: 27px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: #101a21; font-size: .72rem; font-weight: 750; }
+    .badge.accepted, .badge.pass, .badge.visible { color: #b9f6ce; border-color: #356149; background: #12261c; }
+    .badge.rejected, .badge.fail, .badge.not-visible { color: #ffc6c2; border-color: #6b3f3d; background: #2b1d1e; }
+    .badge.ambiguous, .badge.warn { color: #ffe0a8; border-color: #705c38; background: #2b2519; }
+    .badge.pending { color: #d4c6ef; border-color: #57486f; background: #211c2d; }
+    .record-nav { display: flex; flex: 0 0 auto; gap: 7px; }
+
+    .stage-grid { display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 14px; align-items: start; }
+    .content-panel, .review-panel { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(17, 26, 33, .94); box-shadow: var(--shadow); }
+    .tabs { display: flex; overflow-x: auto; gap: 4px; padding: 9px; border-bottom: 1px solid var(--line); }
+    .tab { min-height: 35px; padding: 6px 10px; border-color: transparent; color: var(--muted); background: transparent; font-size: .78rem; white-space: nowrap; }
+    .tab.active { color: var(--text); border-color: var(--line-strong); background: var(--panel-3); }
+    .tab-body { padding: 18px; }
+
+    .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 13px; }
+    .section-head h3, .panel-title { margin: 0; font-size: 1rem; }
+    .section-head p { margin: 4px 0 0; color: var(--muted); font-size: .8rem; }
+
+    .question { margin: 0 0 15px; font-size: clamp(1.08rem, 1.7vw, 1.4rem); font-weight: 720; line-height: 1.42; letter-spacing: -.015em; }
+    .options { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+    .option { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 9px; align-items: start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #0e171d; line-height: 1.45; }
+    .option.correct { border-color: #527238; background: rgba(201, 247, 105, .08); }
+    .option-letter { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 7px; color: var(--muted); background: var(--panel-3); font-size: .75rem; font-weight: 850; }
+    .option.correct .option-letter { color: var(--lime-ink); background: var(--lime); }
+    .answer-line { margin: 12px 0 0; color: var(--muted); font-size: .83rem; }
+
+    .callout { margin: 12px 0; padding: 11px 12px; border-left: 3px solid var(--blue); border-radius: 0 9px 9px 0; color: #d9e8ef; background: rgba(114, 200, 255, .07); line-height: 1.5; }
+    .callout.fail { border-color: var(--red); background: rgba(255, 141, 135, .07); }
+    .callout.warn { border-color: var(--amber); background: rgba(255, 198, 109, .07); }
+    .callout p { margin: 0; }
+
+    .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 15px; }
+    .detail { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: #0d161c; }
+    .detail.wide { grid-column: 1 / -1; }
+    .detail strong { display: block; margin-bottom: 6px; color: var(--blue); font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; }
+    .detail p { margin: 0; color: #d5dfe4; font-size: .85rem; line-height: 1.5; white-space: pre-wrap; }
+
+    details { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; background: #0c151b; }
+    summary { padding: 10px 12px; cursor: pointer; color: #dce8ed; font-size: .82rem; font-weight: 760; }
+    details > .details-body { padding: 0 12px 12px; color: var(--muted); font-size: .81rem; line-height: 1.5; }
+    pre { max-height: 560px; overflow: auto; margin: 0; padding: 13px; border: 1px solid var(--line); border-radius: 10px; color: #c8d8df; background: #071015; font: .73rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+
+    .attempt-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; }
+    .attempt-button { min-height: 35px; font-size: .78rem; }
+    .attempt-button.active { border-color: var(--blue); background: rgba(114, 200, 255, .12); }
+    .attempt-button.accepted::before { content: "✓ "; color: var(--green); }
+    .attempt-button.rejected::before { content: "× "; color: var(--red); }
+
+    .check-grid { display: grid; gap: 10px; }
+    .check-card { padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: #0d161c; }
+    .check-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+    .check-top h4 { margin: 0; font-size: .9rem; text-transform: capitalize; }
+    .check-card p { margin: 9px 0 0; color: #d3dee3; font-size: .84rem; line-height: 1.5; }
+    .check-card .fix { color: var(--amber); }
+    .subchecks { display: grid; gap: 7px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+    .subcheck { display: grid; grid-template-columns: minmax(120px, .45fr) auto minmax(0, 1fr); gap: 9px; align-items: start; color: var(--muted); font-size: .77rem; }
+
+    .facts { display: grid; gap: 8px; margin: 12px 0 17px; }
+    .fact { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: #0c151b; }
+    .fact-id { color: var(--lime); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-weight: 850; }
+    .fact p { margin: 0; line-height: 1.45; }
+    .fact small { display: block; margin-top: 4px; color: var(--muted); line-height: 1.4; }
+
+    .audit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .audit-card { min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: #0d161c; }
+    .audit-card h4 { margin: 0 0 8px; }
+    .audit-card > p { margin: 0 0 10px; color: var(--muted); font-size: .8rem; line-height: 1.48; }
+    .fact-audits { display: grid; gap: 7px; }
+    .fact-audit { padding: 9px; border-radius: 8px; background: #111e25; }
+    .fact-audit-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .fact-audit p { margin: 6px 0 0; color: #cbd7dc; font-size: .77rem; line-height: 1.45; }
+    .segments { margin-top: 5px; color: var(--muted); font: .7rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; word-break: break-word; }
+
+    .locator-list { display: grid; gap: 10px; }
+    .locator-card { padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: #0d161c; }
+    .locator-card h4 { margin: 0 0 7px; font-size: .9rem; }
+    .locator-card p { margin: 0; color: #d3dee3; font-size: .83rem; line-height: 1.5; }
+    .locator-source { margin-top: 5px !important; color: var(--muted) !important; font-size: .74rem !important; }
+    .locator-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .locator-button { min-height: 32px; padding: 5px 9px; border-color: #47677a; color: #d9effb; background: #132633; font: .72rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .locator-button:hover { border-color: var(--blue); background: #193446; }
+    .locator-empty { color: var(--muted); font-size: .78rem; }
+
+    .media-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .media-note { color: var(--muted); font-size: .77rem; }
+    .media-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .media-card { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #0d161c; }
+    .media-head, .media-foot { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 10px 11px; }
+    .media-head strong { font-size: .86rem; }
+    .media-head span, .media-foot span { color: var(--muted); font-size: .72rem; }
+    .video-stage { position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; background: #05090c; }
+    .video-stage video { width: 100%; height: 100%; object-fit: contain; }
+    .media-card:not(.loaded) video { display: none; }
+    .video-placeholder { display: grid; justify-items: center; gap: 9px; padding: 12px; color: var(--muted); text-align: center; font-size: .78rem; }
+    .media-card.loaded .video-placeholder { display: none; }
+    .media-controls { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 9px 10px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .segment-label { overflow: hidden; color: #c9d6dc; font: .7rem ui-monospace, SFMono-Regular, Consolas, monospace; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+    .media-links { display: flex; gap: 5px; }
+
+    .review-panel { position: sticky; top: 104px; overflow: hidden; }
+    .review-head { padding: 15px 16px; border-bottom: 1px solid var(--line); }
+    .review-head h3 { margin: 0; font-size: 1rem; }
+    .review-head p { margin: 5px 0 0; color: var(--muted); font-size: .77rem; line-height: 1.4; }
+    .review-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 14px; }
+    .review-field.wide { grid-column: 1 / -1; }
+    .tag-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag { display: inline-flex; align-items: center; gap: 6px; min-height: 31px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 999px; color: #c9d4d9; background: #111d24; font-size: .71rem; cursor: pointer; }
+    .tag:has(input:checked) { border-color: var(--amber); color: #ffe5b8; background: #2b2519; }
+    .tag input { width: auto; min-height: 0; margin: 0; accent-color: var(--amber); }
+    .save-copy { grid-column: 1 / -1; color: var(--muted); font-size: .72rem; line-height: 1.4; }
+
+    .empty { padding: 50px 24px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); background: var(--panel); text-align: center; line-height: 1.6; }
+    .footer-note { margin-top: 18px; padding: 12px 2px; color: var(--muted); font-size: .77rem; line-height: 1.5; }
+    .toast { position: fixed; z-index: 80; right: 20px; bottom: 20px; max-width: min(420px, calc(100% - 40px)); padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: 11px; color: var(--text); background: #192631; box-shadow: var(--shadow); opacity: 0; transform: translateY(10px); pointer-events: none; transition: opacity .18s ease, transform .18s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 1280px) {
+      .headline-metrics { grid-template-columns: repeat(2, 1fr); }
+      .toolbar { grid-template-columns: repeat(4, minmax(140px, 1fr)); }
+      .toolbar-actions { grid-column: 1 / -1; justify-content: flex-start; }
+      .stage-grid { grid-template-columns: minmax(0, 1fr); }
+      .review-panel { position: static; }
+    }
+
+    @media (max-width: 920px) {
+      header { grid-template-columns: 1fr; }
+      .headline-metrics { grid-template-columns: repeat(4, 1fr); }
+      .load-panel { grid-template-columns: 1fr 1fr; }
+      .load-actions { grid-column: 1 / -1; flex-direction: row; }
+      .workspace { grid-template-columns: 1fr; }
+      .queue { position: static; max-height: none; }
+      .queue-list { display: flex; max-height: none; overflow-x: auto; }
+      .queue-item { min-width: 230px; }
+      .media-grid, .audit-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 660px) {
+      .shell { width: min(100% - 20px, 1660px); padding-top: 20px; }
+      .headline-metrics { grid-template-columns: repeat(2, 1fr); }
+      .load-panel, .toolbar { grid-template-columns: 1fr; }
+      .load-actions { grid-column: auto; flex-direction: column; }
+      .toolbar-actions { grid-column: auto; justify-content: stretch; }
+      .toolbar-actions > * { flex: 1 1 45%; }
+      .record-head { display: grid; }
+      .record-nav { width: 100%; }
+      .record-nav button { flex: 1; }
+      .detail-grid, .review-form { grid-template-columns: 1fr; }
+      .detail.wide, .review-field.wide { grid-column: auto; }
+      .subcheck { grid-template-columns: 1fr auto; }
+      .subcheck span:last-child { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">EgoLife · attempt-level judge audit</p>
+        <h1>One attempt.<br>One judge verdict.</h1>
+        <p class="lede">
+          Load the accepted output and intermediate checkpoint together. Review every generation attempt
+          independently to measure whether the automated judge made the right decision for that candidate.
+        </p>
+      </div>
+      <div class="headline-metrics" aria-label="Dataset summary">
+        <div class="metric"><strong id="recordMetric">0</strong><span>attempts</span></div>
+        <div class="metric"><strong id="acceptedMetric">0</strong><span>judge pass</span></div>
+        <div class="metric"><strong id="rejectedMetric">0</strong><span>judge reject</span></div>
+        <div class="metric"><strong id="reviewedMetric">0</strong><span>reviewed</span></div>
+      </div>
+    </header>
+
+    <section class="load-panel" aria-label="Load review files">
+      <label class="file-slot">
+        <input id="acceptedFile" type="file" accept=".jsonl,.json,application/x-ndjson,application/json">
+        <span class="file-mark">A</span>
+        <span class="file-copy">
+          <strong>Accepted QA JSONL</strong>
+          <span id="acceptedFileName">Choose qa_mcq.jsonl · optional</span>
+        </span>
+      </label>
+      <label class="file-slot">
+        <input id="intermediateFile" type="file" accept=".jsonl,.json,application/x-ndjson,application/json">
+        <span class="file-mark">I</span>
+        <span class="file-copy">
+          <strong>Intermediate JSONL</strong>
+          <span id="intermediateFileName">Choose qa_mcq.intermediate.jsonl · optional</span>
+        </span>
+      </label>
+      <div class="load-actions">
+        <button id="loadFiles" class="primary" type="button" disabled>Build review queue</button>
+        <button id="clearFiles" class="ghost" type="button">Clear files</button>
+      </div>
+    </section>
+    <p id="loadStatus" class="load-status" role="status" aria-live="polite">
+      Either file can be reviewed alone; loading both links accepted rows back to their full attempt history.
+    </p>
+
+    <section id="reviewApp" class="hidden">
+      <div class="toolbar" aria-label="Review controls">
+        <label class="field">
+          <span>Search</span>
+          <input id="searchFilter" type="search" placeholder="Evidence ID, QA ID, question, reason…">
+        </label>
+        <label class="field">
+          <span>Judge decision</span>
+          <select id="pipelineFilter">
+            <option value="all">All judge decisions</option>
+            <option value="accepted">Accepted</option>
+            <option value="rejected">Rejected</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Manual status</span>
+          <select id="manualFilter">
+            <option value="all">All manual states</option>
+            <option value="Pending">Pending</option>
+            <option value="Pass">Pass</option>
+            <option value="Fail">Fail</option>
+            <option value="Unsure">Unsure</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Question type</span>
+          <select id="typeFilter"><option value="all">All types</option></select>
+        </label>
+        <div class="toolbar-actions">
+          <button id="nextPending" class="primary" type="button">Next pending</button>
+          <button id="exportCsv" type="button">Export CSV</button>
+          <button id="exportJson" type="button">Backup JSON</button>
+          <label class="file-button">Restore JSON<input id="importJson" class="hidden" type="file" accept=".json,application/json"></label>
+          <button id="resetReviews" class="danger" type="button">Reset</button>
+        </div>
+      </div>
+
+      <div class="progress-strip">
+        <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+        <div id="progressCopy" class="progress-copy">0 of 0 reviewed</div>
+      </div>
+
+      <div class="workspace">
+        <aside class="queue" aria-label="Review queue">
+          <div class="queue-head"><strong>Review queue</strong><span id="queueCount">0 shown</span></div>
+          <div id="queueList" class="queue-list"></div>
+        </aside>
+        <main id="stage" class="stage"></main>
+      </div>
+    </section>
+
+    <div class="footer-note">
+      Review state is saved automatically in this browser and keyed to the loaded dataset fingerprint
+      <code id="fingerprint">not loaded</code>. Source clips stay unloaded until Stream is pressed.
+      Export a JSON backup before switching machines or browsers.
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    "use strict";
+
+    const AGENTS = [
+      { dir: "A1_JAKE", name: "Jake", id: "A1" },
+      { dir: "A2_ALICE", name: "Alice", id: "A2" },
+      { dir: "A3_TASHA", name: "Tasha", id: "A3" },
+      { dir: "A4_LUCIA", name: "Lucia", id: "A4" },
+      { dir: "A5_KATRINA", name: "Katrina", id: "A5" },
+      { dir: "A6_SHURE", name: "Shure", id: "A6" },
+    ];
+    const VIDEO_DATASET = "https://huggingface.co/datasets/lmms-lab/EgoLife/resolve/main";
+    const REVIEW_STATUSES = ["Pending", "Pass", "Fail", "Unsure"];
+    const ERROR_TAGS = [
+      ["wrong_answer", "Wrong answer"],
+      ["unsupported", "Unsupported"],
+      ["ambiguous", "Ambiguous"],
+      ["speaker_leak", "Speaker can answer"],
+      ["all_users_insufficient", "All users insufficient"],
+      ["not_multi_user", "Not multi-user"],
+      ["formality", "Formality"],
+      ["schema", "Schema"],
+      ["judge_error", "Judge error"],
+      ["other", "Other"],
+    ];
+    const CSV_COLUMNS = [
+      "review_order", "checkpoint_order", "attempt_number", "attempt_result", "checkpoint_status",
+      "evidence_id", "qa_id", "question_type",
+      "question", "option_A", "option_B", "option_C", "option_D", "option_E",
+      "model_correct_letter", "model_answer", "total_attempts",
+      "automatic_reason", "manual_status", "reviewer_answer", "answer_correct",
+      "evidence_grounded", "speaker_only_answerable", "all_users_answerable",
+      "multi_user_required", "wording_quality", "judge_formality_correct",
+      "judge_groundedness_correct", "judge_answerability_correct", "pipeline_decision_correct",
+      "error_tags", "reviewer_notes", "reviewed_at", "speaker_user", "provider_users",
+      "required_users", "generation_mode", "judge_video_source", "review_key",
+    ];
+
+    const els = {
+      acceptedFile: document.querySelector("#acceptedFile"),
+      intermediateFile: document.querySelector("#intermediateFile"),
+      acceptedFileName: document.querySelector("#acceptedFileName"),
+      intermediateFileName: document.querySelector("#intermediateFileName"),
+      loadFiles: document.querySelector("#loadFiles"),
+      clearFiles: document.querySelector("#clearFiles"),
+      loadStatus: document.querySelector("#loadStatus"),
+      reviewApp: document.querySelector("#reviewApp"),
+      recordMetric: document.querySelector("#recordMetric"),
+      acceptedMetric: document.querySelector("#acceptedMetric"),
+      rejectedMetric: document.querySelector("#rejectedMetric"),
+      reviewedMetric: document.querySelector("#reviewedMetric"),
+      searchFilter: document.querySelector("#searchFilter"),
+      pipelineFilter: document.querySelector("#pipelineFilter"),
+      manualFilter: document.querySelector("#manualFilter"),
+      typeFilter: document.querySelector("#typeFilter"),
+      nextPending: document.querySelector("#nextPending"),
+      exportCsv: document.querySelector("#exportCsv"),
+      exportJson: document.querySelector("#exportJson"),
+      importJson: document.querySelector("#importJson"),
+      resetReviews: document.querySelector("#resetReviews"),
+      progressFill: document.querySelector("#progressFill"),
+      progressCopy: document.querySelector("#progressCopy"),
+      queueCount: document.querySelector("#queueCount"),
+      queueList: document.querySelector("#queueList"),
+      stage: document.querySelector("#stage"),
+      fingerprint: document.querySelector("#fingerprint"),
+      toast: document.querySelector("#toast"),
+    };
+
+    let data = { accepted: [], intermediate: [], records: [], fingerprint: "" };
+    let reviewState = { version: 1, dataset_fingerprint: "", reviews: {} };
+    let visibleRecords = [];
+    let currentKey = "";
+    let activeTab = "overview";
+    let toastTimer = null;
+    let pendingMediaJump = null;
+    const mediaSelection = new Map();
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function titleCase(value) {
+      return String(value || "unknown").replaceAll("_", " ").replace(/\b\w/g, char => char.toUpperCase());
+    }
+
+    function toast(message) {
+      clearTimeout(toastTimer);
+      els.toast.textContent = message;
+      els.toast.classList.add("show");
+      toastTimer = setTimeout(() => els.toast.classList.remove("show"), 2500);
+    }
+
+    function stableHash(value) {
+      let hash = 2166136261;
+      for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16).padStart(8, "0");
+    }
+
+    function parseJsonRecords(text, filename) {
+      const trimmed = text.replace(/^\uFEFF/, "").trim();
+      if (!trimmed) throw new Error(`${filename} is empty.`);
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && Array.isArray(parsed.rows)) return parsed.rows;
+        return [parsed];
+      } catch (wholeFileError) {
+        const records = [];
+        for (const [index, line] of trimmed.split(/\r?\n/).entries()) {
+          if (!line.trim()) continue;
+          try {
+            const parsed = JSON.parse(line);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              throw new Error("expected an object");
+            }
+            records.push(parsed);
+          } catch (error) {
+            throw new Error(`${filename}: invalid JSON on non-empty line ${index + 1} (${error.message}).`);
+          }
+        }
+        if (!records.length) throw wholeFileError;
+        return records;
+      }
+    }
+
+    function classifyRows(rows) {
+      return {
+        accepted: rows.filter(row => row && !Array.isArray(row.attempts) && Array.isArray(row.options)),
+        intermediate: rows.filter(row => row && Array.isArray(row.attempts)),
+      };
+    }
+
+    function qaFromAttempt(attempt) {
+      const generation = attempt?.generation || {};
+      const direct = attempt?.qa && typeof attempt.qa === "object" ? attempt.qa : null;
+      const parsed = generation.parsed_qa && typeof generation.parsed_qa === "object"
+        ? generation.parsed_qa
+        : null;
+      const normalized = generation.normalized_qa && typeof generation.normalized_qa === "object"
+        ? generation.normalized_qa
+        : null;
+      if (!direct && !parsed && !normalized) return null;
+      return {
+        ...(direct || {}),
+        ...(parsed || {}),
+        ...(normalized || {}),
+        review: {
+          ...(direct?.review || {}),
+          ...(parsed?.review || {}),
+          ...(normalized?.review || {}),
+        },
+      };
+    }
+
+    function buildRecords(acceptedRows, intermediateRows) {
+      const acceptedByEvidence = new Map();
+      const acceptedByQa = new Map();
+      for (const row of acceptedRows) {
+        if (row.evidence_id) acceptedByEvidence.set(String(row.evidence_id), row);
+        if (row.qa_id) acceptedByQa.set(String(row.qa_id), row);
+      }
+
+      const usedAccepted = new Set();
+      const checkpoints = intermediateRows.map((intermediate, index) => {
+        const accepted = acceptedByEvidence.get(String(intermediate.evidence_id || "")) ||
+          acceptedByQa.get(String(intermediate.qa_id || "")) || null;
+        if (accepted) usedAccepted.add(accepted);
+        const keyBase = intermediate.evidence_id || intermediate.qa_id || `intermediate-${index + 1}`;
+        return normalizeRecord(String(keyBase), accepted, intermediate, index + 1);
+      });
+
+      for (const accepted of acceptedRows) {
+        if (usedAccepted.has(accepted)) continue;
+        const keyBase = accepted.evidence_id || accepted.qa_id || `accepted-${checkpoints.length + 1}`;
+        checkpoints.push(normalizeRecord(String(keyBase), accepted, null, checkpoints.length + 1));
+      }
+
+      const reviewAttempts = [];
+      checkpoints.forEach((checkpoint, checkpointIndex) => {
+        const attempts = checkpoint.attempts.length ? checkpoint.attempts : [null];
+        attempts.forEach((attempt, attemptIndex) => {
+          const attemptNumber = attempt?.attempt ?? attemptIndex + 1;
+          const attemptQa = qaFromAttempt(attempt);
+          const attemptAccepted = attempt ? Boolean(attempt.result?.accepted) : Boolean(checkpoint.accepted);
+          reviewAttempts.push({
+            ...checkpoint,
+            key: `${checkpoint.key}::attempt-${attemptNumber}`,
+            order: reviewAttempts.length + 1,
+            checkpointOrder: checkpointIndex + 1,
+            checkpointKey: checkpoint.key,
+            checkpointStatus: checkpoint.status,
+            reviewAttempt: attempt,
+            attemptIndex,
+            attemptNumber,
+            status: attemptAccepted ? "accepted" : "rejected",
+            qaId: attempt?.qa_id || attemptQa?.qa_id || checkpoint.qaId,
+          });
+        });
+      });
+      return reviewAttempts;
+    }
+
+    function normalizeRecord(keyBase, accepted, intermediate, order) {
+      const key = `${keyBase}::${intermediate?.qa_id || accepted?.qa_id || order}`;
+      const status = String(intermediate?.status || (accepted ? "accepted" : "unknown")).toLowerCase();
+      const attempts = Array.isArray(intermediate?.attempts) ? intermediate.attempts : [];
+      const questionType = intermediate?.question_type || accepted?.question_type || "unknown";
+      const finalQa = accepted || intermediate?.qa || qaFromAttempt(attempts.at(-1)) || null;
+      return {
+        key,
+        order,
+        accepted,
+        intermediate,
+        attempts,
+        finalQa,
+        status,
+        evidenceId: intermediate?.evidence_id || accepted?.evidence_id || "",
+        qaId: accepted?.qa_id || intermediate?.qa_id || finalQa?.qa_id || "",
+        questionType,
+      };
+    }
+
+    function selectedAttempt(record) {
+      return record.reviewAttempt || null;
+    }
+
+    function displayedQa(record) {
+      return qaFromAttempt(selectedAttempt(record)) || record.finalQa;
+    }
+
+    function defaultReview() {
+      return {
+        manual_status: "Pending",
+        reviewer_answer: "",
+        answer_correct: "Unset",
+        evidence_grounded: "Unset",
+        speaker_only_answerable: "Unset",
+        all_users_answerable: "Unset",
+        multi_user_required: "Unset",
+        wording_quality: "Unset",
+        judge_formality_correct: "Unset",
+        judge_groundedness_correct: "Unset",
+        judge_answerability_correct: "Unset",
+        pipeline_decision_correct: "Unset",
+        error_tags: [],
+        reviewer_notes: "",
+        reviewed_attempt: "",
+        reviewed_at: "",
+      };
+    }
+
+    function storageKey() {
+      return `egolife.pipelineReview.${data.fingerprint}`;
+    }
+
+    function loadReviewState() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(storageKey()) || "{}");
+        if (parsed.dataset_fingerprint !== data.fingerprint || typeof parsed.reviews !== "object") {
+          throw new Error("new dataset");
+        }
+        reviewState = parsed;
+      } catch {
+        reviewState = { version: 1, dataset_fingerprint: data.fingerprint, reviews: {} };
+      }
+    }
+
+    function saveReviewState() {
+      localStorage.setItem(storageKey(), JSON.stringify(reviewState));
+      updateProgress();
+    }
+
+    function getReview(record) {
+      return { ...defaultReview(), ...(reviewState.reviews[record.key] || {}) };
+    }
+
+    function setReview(record, field, value) {
+      const next = { ...getReview(record), [field]: value };
+      const attempt = selectedAttempt(record);
+      next.reviewed_attempt = attempt?.attempt ?? next.reviewed_attempt;
+      if (field === "manual_status") {
+        next.reviewed_at = value === "Pending" ? "" : new Date().toISOString();
+      }
+      reviewState.reviews[record.key] = next;
+      saveReviewState();
+      const previousKey = currentKey;
+      refreshFilters(false);
+      if (currentKey !== previousKey) renderCurrent();
+    }
+
+    function automaticReason(record, attempt = selectedAttempt(record)) {
+      return attempt?.result?.reason ||
+        record.accepted?.review?.final_decision?.reason ||
+        record.intermediate?.review?.final_decision?.reason ||
+        record.intermediate?.rejections?.at(-1)?.reason ||
+        (record.status === "accepted" ? "Accepted by the judge." : "No automatic reason recorded.");
+    }
+
+    function searchText(record) {
+      const qa = displayedQa(record) || {};
+      return [record.evidenceId, record.qaId, record.questionType, qa.question, qa.answer,
+        automaticReason(record), ...(qa.options || [])].join(" ").toLowerCase();
+    }
+
+    function refreshFilters(renderStage = true) {
+      const query = els.searchFilter.value.trim().toLowerCase();
+      const pipeline = els.pipelineFilter.value;
+      const manual = els.manualFilter.value;
+      const type = els.typeFilter.value;
+      visibleRecords = data.records.filter(record => {
+        if (pipeline !== "all" && record.status !== pipeline) return false;
+        if (manual !== "all" && getReview(record).manual_status !== manual) return false;
+        if (type !== "all" && record.questionType !== type) return false;
+        return !query || searchText(record).includes(query);
+      });
+      if (!visibleRecords.some(record => record.key === currentKey)) {
+        currentKey = visibleRecords[0]?.key || "";
+      }
+      renderQueue();
+      if (renderStage) renderCurrent();
+      updateProgress();
+    }
+
+    function renderQueue() {
+      els.queueCount.textContent = `${visibleRecords.length} shown`;
+      if (!visibleRecords.length) {
+        els.queueList.innerHTML = `<div class="queue-empty">No attempt matches the current filters.</div>`;
+        return;
+      }
+      els.queueList.innerHTML = visibleRecords.map((record, index) => {
+        const qa = displayedQa(record) || {};
+        const review = getReview(record);
+        const label = qa.question || record.qaId || record.evidenceId || "Unparsed attempt";
+        const dotClass = review.manual_status === "Pending" ? record.status : "reviewed";
+        return `
+          <button class="queue-item${record.key === currentKey ? " active" : ""}" type="button" data-record-key="${escapeHtml(record.key)}">
+            <span class="queue-row">
+              <span class="queue-index">${String(index + 1).padStart(2, "0")} / ${visibleRecords.length}</span>
+              <span class="badge ${escapeHtml(record.status)}">${escapeHtml(record.status)}</span>
+            </span>
+            <span class="queue-title">${escapeHtml(label)}</span>
+            <span class="queue-meta"><span class="dot ${dotClass}"></span>Attempt ${escapeHtml(record.attemptNumber)} of ${record.attempts.length || 1} · ${escapeHtml(review.manual_status)}</span>
+          </button>`;
+      }).join("");
+      els.queueList.querySelectorAll("[data-record-key]").forEach(button => {
+        button.addEventListener("click", () => navigateTo(button.dataset.recordKey));
+      });
+    }
+
+    function navigateTo(key) {
+      if (!key) return;
+      currentKey = key;
+      renderQueue();
+      renderCurrent();
+      window.scrollTo({ top: 0, behavior: "instant" });
+    }
+
+    function moveRecord(delta) {
+      const index = visibleRecords.findIndex(record => record.key === currentKey);
+      const next = visibleRecords[index + delta];
+      if (next) navigateTo(next.key);
+    }
+
+    function badge(value, label = value) {
+      const normalized = String(value || "unknown").toLowerCase().replaceAll("_", "-");
+      const className = normalized.includes("not-visible") ? "not-visible" :
+        normalized.includes("ambiguous") ? "ambiguous" :
+        normalized.includes("pass") || normalized.includes("visible") || normalized.includes("accept") ? "pass" :
+        normalized.includes("fail") || normalized.includes("reject") ? "fail" : "pending";
+      return `<span class="badge ${className}">${escapeHtml(label)}</span>`;
+    }
+
+    function selectMarkup(field, value, options) {
+      return `<select data-review-field="${escapeHtml(field)}">${options.map(option => {
+        const pair = typeof option === "string" ? [option, option] : option;
+        return `<option value="${escapeHtml(pair[0])}"${pair[0] === value ? " selected" : ""}>${escapeHtml(pair[1])}</option>`;
+      }).join("")}</select>`;
+    }
+
+    function detail(label, value, wide = false) {
+      if (value === null || value === undefined || value === "" || (Array.isArray(value) && !value.length)) return "";
+      const text = typeof value === "string" ? value : Array.isArray(value) ? value.join(" · ") : JSON.stringify(value);
+      return `<div class="detail${wide ? " wide" : ""}"><strong>${escapeHtml(label)}</strong><p>${escapeHtml(text)}</p></div>`;
+    }
+
+    function questionMarkup(qa, reveal = true) {
+      if (!qa) {
+        return `<div class="empty">This attempt did not produce a parseable QA object. Inspect the attempt reason or raw data.</div>`;
+      }
+      const letters = ["A", "B", "C", "D", "E"];
+      const options = Array.isArray(qa.options) ? qa.options : [];
+      return `
+        <p class="question">${escapeHtml(qa.question || "No question recorded")}</p>
+        <ol class="options">${options.map((option, index) => {
+          const letter = letters[index] || String(index + 1);
+          const isCorrect = reveal && letter === qa.correct;
+          return `<li class="option${isCorrect ? " correct" : ""}"><span class="option-letter">${letter}</span><span>${escapeHtml(option)}</span></li>`;
+        }).join("")}</ol>
+        ${reveal ? `<p class="answer-line"><strong>Provided answer:</strong> ${escapeHtml(qa.correct || "—")} · ${escapeHtml(qa.answer || "—")}</p>` : ""}`;
+    }
+
+    function speakerUser(record, qa = displayedQa(record)) {
+      return qa?.review?.speaker_user || record.accepted?.speaker_user || "";
+    }
+
+    function providerUsers(record, qa = displayedQa(record)) {
+      return qa?.review?.provider_users || qa?.review?.evidence_provider_users ||
+        record.accepted?.provider_users || record.accepted?.evidence_provider_users || [];
+    }
+
+    function renderOverview(record) {
+      const qa = displayedQa(record);
+      const attempt = selectedAttempt(record);
+      const reason = automaticReason(record, attempt);
+      const claims = qa?.per_user_evidence_claims || qa?.supporting_user_claims || [];
+      return `
+        <div class="section-head">
+          <div><h3>Attempt ${escapeHtml(record.attemptNumber)} candidate</h3><p>This candidate and its judge decision are one independent manual-review unit.</p></div>
+          ${badge(record.status)}
+        </div>
+        ${questionMarkup(qa)}
+        <div class="callout ${record.status === "rejected" ? "fail" : ""}"><p><strong>Judge decision:</strong> ${escapeHtml(reason)}</p></div>
+        <div class="detail-grid">
+          ${detail("Speaker", speakerUser(record, qa))}
+          ${detail("Providers", providerUsers(record, qa))}
+          ${detail("Required users", qa?.required_users)}
+          ${detail("Generation mode", record.intermediate?.generation_mode || record.accepted?.generation_mode)}
+          ${detail("Generator rationale", qa?.generator_rationale, true)}
+          ${detail("Why multiple users are needed", qa?.why_two_users_needed, true)}
+          ${detail("Combined answerability", qa?.combined_answerability, true)}
+          ${detail("Evidence claims", claims.map(item => `${item.user || "Unknown"}: ${item.claim || item.needed_fact || ""}`), true)}
+        </div>`;
+    }
+
+    function renderAttempts(record) {
+      if (!record.attempts.length) {
+        return `<div class="empty">No intermediate attempts were loaded for this accepted QA.</div>`;
+      }
+      const selected = selectedAttempt(record);
+      const selectedIndex = record.attemptIndex;
+      const qa = qaFromAttempt(selected);
+      const result = selected?.result || {};
+      return `
+        <div class="section-head"><div><h3>Attempt context</h3><p>Each button opens a separate review entry; verdicts are never shared across attempts.</p></div>${badge(result.accepted ? "accepted" : "rejected")}</div>
+        <div class="attempt-strip">${record.attempts.map((attempt, index) => `
+          <button type="button" class="attempt-button ${attempt.result?.accepted ? "accepted" : "rejected"}${index === selectedIndex ? " active" : ""}" data-attempt-index="${index}">Attempt ${escapeHtml(attempt.attempt ?? index + 1)}</button>
+        `).join("")}</div>
+        ${questionMarkup(qa)}
+        <div class="callout ${result.accepted ? "" : "fail"}"><p><strong>Attempt result:</strong> ${escapeHtml(result.reason || "No reason recorded.")}</p></div>
+        ${selected?.feedback_in ? `<div class="callout warn"><p><strong>Feedback into this attempt:</strong> ${escapeHtml(selected.feedback_in)}</p></div>` : ""}
+        <div class="detail-grid">
+          ${detail("Generator elapsed", selected?.generation?.elapsed_seconds ? `${selected.generation.elapsed_seconds}s` : "")}
+          ${detail("Raw output chars", selected?.generation?.raw_output_chars)}
+          ${detail("Previous generation chars", selected?.previous_generation_chars)}
+          ${detail("Prompt chars", selected?.generation?.prompt_chars)}
+          ${detail("Media summary", selected?.media_summary, true)}
+        </div>`;
+    }
+
+    function findCheck(value, name, seen = new Set()) {
+      if (!value || typeof value !== "object" || seen.has(value)) return null;
+      seen.add(value);
+      if (value.status && (value.reason !== undefined || value.fix !== undefined)) return value;
+      if (value.checks?.[name]) return findCheck(value.checks[name], name, seen) || value.checks[name];
+      for (const key of ["merged", "model_branch", "schema_branch", "pass_fail_only", "parsed"]) {
+        const found = findCheck(value[key], name, seen);
+        if (found) return found;
+      }
+      if (value[name]) {
+        const found = findCheck(value[name], name, seen);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function judgeSource(record) {
+      const attempt = selectedAttempt(record);
+      return attempt?.judge || record.accepted?.review?.judger || record.intermediate?.review?.judger || {};
+    }
+
+    function renderCheck(name, check) {
+      if (!check) return `<article class="check-card"><div class="check-top"><h4>${escapeHtml(titleCase(name))}</h4>${badge("missing", "Not recorded")}</div></article>`;
+      const semantic = check.semantic_subchecks || {};
+      return `<article class="check-card">
+        <div class="check-top"><h4>${escapeHtml(titleCase(name))}</h4>${badge(check.status || (check.review_passed ? "PASS" : "FAIL"))}</div>
+        ${check.reason ? `<p>${escapeHtml(check.reason)}</p>` : ""}
+        ${check.fix ? `<p class="fix"><strong>Suggested fix:</strong> ${escapeHtml(check.fix)}</p>` : ""}
+        ${Object.keys(semantic).length ? `<div class="subchecks">${Object.entries(semantic).map(([key, value]) => `
+          <div class="subcheck"><strong>${escapeHtml(titleCase(key))}</strong>${badge(value.status || "unknown")}<span>${escapeHtml(value.reason || "")}</span></div>
+        `).join("")}</div>` : ""}
+      </article>`;
+    }
+
+    function judgeBranchSource(record, name) {
+      const attempt = selectedAttempt(record);
+      if (name === "qa_formality") return attempt?.judge?.qa_formality || null;
+      if (name === "evidence_groundedness") return attempt?.judge?.evidence_groundedness || null;
+      if (name === "answerability") return attempt?.answerability || null;
+      return null;
+    }
+
+    function renderJudgeReview(record, name) {
+      const source = judgeSource(record);
+      const branch = judgeBranchSource(record, name);
+      const check = findCheck(source, name) || findCheck(branch, name);
+      const labels = {
+        qa_formality: ["Formality judge", "Question form, naturalness, schema, and prohibited activity-query checks"],
+        evidence_groundedness: ["Groundedness judge", "Whether the candidate's claims and answer are supported by the visual evidence"],
+      };
+      const [title, description] = labels[name] || [titleCase(name), "Automated judge result"];
+      const blocking = source.merged?.blocking_failures || source.blocking_failures || [];
+      return `
+        <div class="section-head"><div><h3>${escapeHtml(title)} · attempt ${escapeHtml(record.attemptNumber)}</h3><p>${escapeHtml(description)}</p></div>${badge(check?.status || "Not recorded")}</div>
+        ${renderCheck(name, check)}
+        ${blocking.length ? `<div class="callout fail"><p><strong>Attempt blocking failures:</strong> ${escapeHtml(blocking.join(" · "))}</p></div>` : ""}
+        <div class="detail-grid">
+          ${detail("Model", branch?.model_id)}
+          ${detail("Elapsed", branch?.elapsed_seconds ? `${branch.elapsed_seconds}s` : "")}
+          ${detail("Raw output chars", branch?.raw_output_chars)}
+          ${detail("Mode", branch?.mode)}
+        </div>
+        <details open><summary>${escapeHtml(title)} result</summary><div class="details-body"><pre>${escapeHtml(prettyRaw(branch || check || {}))}</pre></div></details>`;
+    }
+
+    function answerabilitySource(record) {
+      return selectedAttempt(record)?.answerability || record.accepted?.review?.answerability ||
+        record.intermediate?.review?.answerability || {};
+    }
+
+    function visibilityBadge(value) {
+      return badge(String(value || "unknown").toLowerCase().replaceAll("_", "-"), value || "unknown");
+    }
+
+    function renderFactAudits(factAudits) {
+      return (factAudits || []).map(audit => `
+        <div class="fact-audit">
+          <div class="fact-audit-top"><strong>${escapeHtml(audit.fact_id || "Fact")}</strong>${visibilityBadge(audit.visibility)}</div>
+          <p>${escapeHtml(audit.visual_description || "No visual description recorded.")}</p>
+          ${(audit.segment_references || []).length ? `<div class="segments">${escapeHtml(audit.segment_references.join(" · "))}</div>` : ""}
+        </div>`).join("");
+    }
+
+    function renderAnswerability(record) {
+      const source = answerabilitySource(record);
+      const check = findCheck(judgeSource(record), "answerability");
+      const plan = source.fact_plan || {};
+      const facts = plan.needed_facts || [];
+      const audits = source.user_audits || [];
+      const evaluations = source.evaluations || [];
+      const gate = source.gate || {};
+      return `
+        <div class="section-head"><div><h3>Answerability judge · attempt ${escapeHtml(record.attemptNumber)}</h3><p>Needed facts are traced through each user's visibility report and the evaluated conditions.</p></div>${badge(check?.status || (gate.passed ? "PASS" : "FAIL"), gate.passed === undefined && !check ? "No result" : check?.status || (gate.passed ? "Gate passed" : "Gate failed"))}</div>
+        ${renderCheck("answerability", check)}
+        ${gate.reason ? `<div class="callout ${gate.passed ? "" : "fail"}"><p>${escapeHtml(gate.reason)}</p></div>` : ""}
+        ${plan.reason ? `<div class="detail wide"><strong>Fact plan</strong><p>${escapeHtml(plan.reason)}</p></div>` : ""}
+        <div class="facts">${facts.map(fact => `<div class="fact"><span class="fact-id">${escapeHtml(fact.fact_id || "F?")}</span><div><p>${escapeHtml(fact.fact || "")}</p><small>${escapeHtml(fact.why_needed || "")}</small></div></div>`).join("")}</div>
+        ${audits.length ? `<div class="section-head"><div><h3>Per-user audits</h3><p>${audits.length} source views</p></div></div><div class="audit-grid">${audits.map(audit => `
+          <article class="audit-card"><h4>${escapeHtml(audit.user || "Unknown user")}</h4><p>${escapeHtml(audit.reason || "")}</p><div class="fact-audits">${renderFactAudits(audit.fact_audits)}</div></article>
+        `).join("")}</div>` : `<div class="empty">No per-user answerability audit was recorded for this attempt.</div>`}
+        ${evaluations.length ? `<div class="section-head" style="margin-top:18px"><div><h3>Condition evaluations</h3><p>Speaker-only and combined-user conclusions</p></div></div><div class="check-grid">${evaluations.map(evaluation => `
+          <article class="check-card"><div class="check-top"><h4>${escapeHtml(titleCase(evaluation.condition_type || evaluation.condition_id))}</h4><span class="badge pending">${escapeHtml((evaluation.users || []).join(" + "))}</span></div><p>${escapeHtml(evaluation.reason || "")}</p><div class="fact-audits">${renderFactAudits(evaluation.fact_audits)}</div></article>
+        `).join("")}</div>` : ""}
+        <details><summary>Answerability judge result</summary><div class="details-body"><pre>${escapeHtml(prettyRaw(source))}</pre></div></details>`;
+    }
+
+    function formatOffset(seconds) {
+      const safe = Math.max(0, Number(seconds) || 0);
+      const minutes = Math.floor(safe / 60);
+      const remainder = safe - minutes * 60;
+      return `${String(minutes).padStart(2, "0")}:${remainder.toFixed(1).padStart(4, "0")}`;
+    }
+
+    function locatorButton(user, clipIndex, offsetSeconds, label, title = "") {
+      return `<button class="locator-button" type="button"
+        data-locate-user="${escapeHtml(user)}"
+        data-locate-clip="${clipIndex}"
+        data-locate-offset="${Number(offsetSeconds) || 0}"
+        title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
+    }
+
+    function timestampPin(item) {
+      if (!Number.isFinite(Number(item?.timestamp_seconds))) return "";
+      const seconds = Math.max(0, Math.min(599.999, Number(item.timestamp_seconds)));
+      const clipIndex = Math.floor(seconds / 30);
+      const offset = seconds - clipIndex * 30;
+      return locatorButton(
+        item.user || "",
+        clipIndex,
+        offset,
+        `clip ${clipIndex + 1} · +${formatOffset(offset)}`,
+        item.moment || "Generator-referred timestamp"
+      );
+    }
+
+    function segmentPin(user, reference) {
+      const match = String(reference || "").match(/segment_(\d+)/i);
+      if (!match) return "";
+      const clipIndex = Math.max(0, Number(match[1]) - 1);
+      return locatorButton(user, clipIndex, 0, `clip ${clipIndex + 1}`, `Judge reference ${reference}`);
+    }
+
+    function renderClaimLocator(record) {
+      const qa = displayedQa(record) || {};
+      const claims = qa.per_user_evidence_claims || qa.supporting_user_claims || [];
+      const timestamps = Array.isArray(qa.referred_timestamps) ? qa.referred_timestamps : [];
+      const claimedUsers = new Set(claims.map(claim => String(claim.user || "").toLowerCase()));
+      const claimCards = claims.map(claim => {
+        const pins = timestamps.filter(item => String(item.user || "").toLowerCase() === String(claim.user || "").toLowerCase());
+        return `<article class="locator-card">
+          <h4>${escapeHtml(claim.user || "Unknown user")}</h4>
+          <p>${escapeHtml(claim.claim || claim.needed_fact || "No claim text recorded.")}</p>
+          <p class="locator-source">Generator claim and referred timestamps</p>
+          <div class="locator-actions">${pins.length ? pins.map(timestampPin).join("") : `<span class="locator-empty">No exact timestamp was supplied for this claim.</span>`}</div>
+        </article>`;
+      });
+      const unmatchedTimestampCards = timestamps
+        .filter(item => !claimedUsers.has(String(item.user || "").toLowerCase()))
+        .map(item => `<article class="locator-card"><h4>${escapeHtml(item.user || "Unknown user")}</h4><p>${escapeHtml(item.moment || "Referred moment")}</p><p class="locator-source">Generator timestamp without a matching claim row</p><div class="locator-actions">${timestampPin(item)}</div></article>`);
+
+      const audits = answerabilitySource(record).user_audits || [];
+      const auditCards = audits.flatMap(audit => (audit.fact_audits || []).map(factAudit => {
+        const references = [...new Set(factAudit.segment_references || [])];
+        if (!references.length) return "";
+        return `<article class="locator-card">
+          <h4>${escapeHtml(audit.user || "Unknown user")} · ${escapeHtml(factAudit.fact_id || "Fact")}</h4>
+          <p>${escapeHtml(factAudit.visual_description || audit.reason || "No visual description recorded.")}</p>
+          <p class="locator-source">Answerability judge segment references · ${escapeHtml(factAudit.visibility || "unknown")}</p>
+          <div class="locator-actions">${references.map(reference => segmentPin(audit.user || "", reference)).join("")}</div>
+        </article>`;
+      })).filter(Boolean);
+
+      return `
+        <div class="section-head"><div><h3>Claim locator · attempt ${escapeHtml(record.attemptNumber)}</h3><p>Jump from generated claims or judge evidence references to the corresponding 30-second source clip.</p></div><span class="badge pending">20 clips per user</span></div>
+        <div class="callout warn"><p><strong>Precision:</strong> generator timestamps seek to an exact offset inside a clip. Judge <code>segment_###</code> references identify the clip but not a finer timestamp. These pointers are evidence to inspect, not proof that the claim is correct.</p></div>
+        <div class="section-head"><div><h3>Generator claim pointers</h3><p>${timestamps.length} referred timestamp${timestamps.length === 1 ? "" : "s"}</p></div></div>
+        <div class="locator-list">${claimCards.length || unmatchedTimestampCards.length ? [...claimCards, ...unmatchedTimestampCards].join("") : `<div class="empty">This attempt contains no generator claim timestamps.</div>`}</div>
+        <div class="section-head" style="margin-top:18px"><div><h3>Answerability judge pointers</h3><p>Every cited source segment, grouped by user and needed fact</p></div></div>
+        <div class="locator-list">${auditCards.length ? auditCards.join("") : `<div class="empty">This attempt contains no answerability segment references.</div>`}</div>`;
+    }
+
+    function parseEvidenceWindow(record) {
+      const text = `${record.evidenceId} ${record.accepted?.video_evidence?.[0]?.day || ""} ${record.accepted?.video_evidence?.[0]?.time_token || ""}`;
+      const dayMatch = text.toUpperCase().match(/DAY_?([1-7])/);
+      const tokenMatch = text.match(/(?:^|_)(\d{8})(?:_|$)/);
+      return { day: dayMatch ? `DAY${dayMatch[1]}` : "", token: tokenMatch ? tokenMatch[1] : "" };
+    }
+
+    function addSecondsToToken(token, secondsToAdd) {
+      const digits = String(token || "").padEnd(8, "0");
+      const baseSeconds = Number(digits.slice(0, 2)) * 3600 + Number(digits.slice(2, 4)) * 60 + Number(digits.slice(4, 6));
+      const total = (baseSeconds + secondsToAdd + 86400) % 86400;
+      const hours = String(Math.floor(total / 3600)).padStart(2, "0");
+      const minutes = String(Math.floor(total % 3600 / 60)).padStart(2, "0");
+      const seconds = String(total % 60).padStart(2, "0");
+      return `${hours}${minutes}${seconds}${digits.slice(6, 8)}`;
+    }
+
+    function clockFromToken(token) {
+      return `${token.slice(0, 2)}:${token.slice(2, 4)}:${token.slice(4, 6)}.${token.slice(6, 8)}`;
+    }
+
+    function rawVideoUrl(agentDir, day, token) {
+      return `${VIDEO_DATASET}/${agentDir}/${day}/${day}_${agentDir}_${token}.mp4`;
+    }
+
+    function mediaClips(record) {
+      const evidenceRows = record.accepted?.video_evidence || [];
+      const normalized = evidenceRows.map((row, rowIndex) => {
+        const agent = AGENTS.find(item => item.name === row.user || item.dir === row.agent_dir || item.id === row.agent_id) || AGENTS[rowIndex];
+        let segments = Array.isArray(row.source_segments) ? row.source_segments.map(segment => ({
+          token: segment.time_token || String(segment.video_url || "").match(/_(\d{8})\.mp4/)?.[1] || "",
+          url: segment.video_url || "",
+        })) : [];
+        if (!segments.length && Array.isArray(row.source_video_urls)) {
+          segments = row.source_video_urls.map(url => ({ token: String(url || "").match(/_(\d{8})\.mp4/)?.[1] || "", url }));
+        }
+        if (!segments.length && row.video_url) segments = [{ token: row.time_token || "", url: row.video_url }];
+        return { name: row.user || agent?.name || `User ${rowIndex + 1}`, id: row.agent_id || agent?.id || "?", dir: row.agent_dir || agent?.dir || "", segments, source: "accepted manifest" };
+      }).filter(clip => clip.segments.length);
+      if (normalized.length) return normalized;
+
+      const { day, token } = parseEvidenceWindow(record);
+      if (!day || !token) return [];
+      return AGENTS.map(agent => ({
+        ...agent,
+        source: "constructed from evidence window",
+        segments: Array.from({ length: 20 }, (_, index) => {
+          const segmentToken = addSecondsToToken(token, index * 30);
+          return { token: segmentToken, url: rawVideoUrl(agent.dir, day, segmentToken) };
+        }),
+      }));
+    }
+
+    function renderMediaCard(record, clip, index) {
+      const stateKey = `${record.key}::${clip.dir || clip.name}`;
+      const segmentIndex = Math.max(0, Math.min(clip.segments.length - 1, mediaSelection.get(stateKey) || 0));
+      const segment = clip.segments[segmentIndex];
+      return `<article class="media-card" data-media-index="${index}" data-media-key="${escapeHtml(stateKey)}">
+        <div class="media-head"><strong>${escapeHtml(clip.name)}</strong><span>${escapeHtml(clip.id || clip.dir)} · ${clip.segments.length} clips</span></div>
+        <div class="video-stage"><video controls playsinline preload="none"></video><div class="video-placeholder"><span>No video bytes requested.</span><button class="primary small" type="button" data-media-action="stream">Stream segment</button></div></div>
+        <div class="media-controls"><button class="small" type="button" data-media-action="previous"${segmentIndex === 0 ? " disabled" : ""}>←</button><span class="segment-label">${segmentIndex + 1} / ${clip.segments.length} · ${escapeHtml(clockFromToken(segment.token))}</span><button class="small" type="button" data-media-action="next"${segmentIndex === clip.segments.length - 1 ? " disabled" : ""}>→</button></div>
+        <div class="media-foot"><span>${escapeHtml(clip.source)}</span><span class="media-links"><button class="small" type="button" data-media-action="copy">Copy URL</button><button class="small" type="button" data-media-action="open">Open</button><button class="small" type="button" data-media-action="unload" disabled>Unload</button></span></div>
+      </article>`;
+    }
+
+    function renderMedia(record) {
+      const clips = mediaClips(record);
+      if (!clips.length) return `<div class="empty">No source-video mapping could be resolved from this record.</div>`;
+      return `<div class="section-head"><div><h3>Source media</h3><p>Linked accepted metadata supplies exact segment URLs; otherwise the six-user 10-minute window is reconstructed from the evidence ID.</p></div><span class="badge pending">${clips.length} users</span></div>
+        <div class="media-toolbar"><button id="unloadAllMedia" type="button">Unload all</button><span class="media-note">Each card advances through the ordered 30-second source clips.</span></div>
+        <div class="media-grid">${clips.map((clip, index) => renderMediaCard(record, clip, index)).join("")}</div>`;
+    }
+
+    function compactRawValue(value, key = "") {
+      if (!value || typeof value !== "object") return value;
+      if (Array.isArray(value)) {
+        if (["sampled_frames", "generator_frames"].includes(key) || value.length > 100) {
+          return {
+            __summary__: `${value.length} items; first 3 shown`,
+            first_items: value.slice(0, 3).map(item => compactRawValue(item)),
+          };
+        }
+        return value.map(item => compactRawValue(item));
+      }
+      return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, compactRawValue(child, childKey)]));
+    }
+
+    function prettyRaw(value) {
+      return JSON.stringify(compactRawValue(value), null, 2);
+    }
+
+    function renderRaw(record) {
+      const attempt = selectedAttempt(record);
+      return `<div class="section-head"><div><h3>Raw structures</h3><p>Use this view when a normalized panel omits a field you need.</p></div></div>
+        <div class="callout warn"><p>Very large frame arrays are summarized here to keep the browser responsive; exports never modify the source files.</p></div>
+        ${attempt ? `<details open><summary>Attempt ${escapeHtml(record.attemptNumber)}</summary><div class="details-body"><pre>${escapeHtml(prettyRaw(attempt))}</pre></div></details>` : ""}
+        ${record.accepted ? `<details><summary>Linked accepted row</summary><div class="details-body"><pre>${escapeHtml(prettyRaw(record.accepted))}</pre></div></details>` : ""}
+        ${record.intermediate ? `<details><summary>Intermediate checkpoint</summary><div class="details-body"><pre>${escapeHtml(prettyRaw(record.intermediate))}</pre></div></details>` : ""}`;
+    }
+
+    function renderTab(record) {
+      if (activeTab === "attempts") return renderAttempts(record);
+      if (activeTab === "formality") return renderJudgeReview(record, "qa_formality");
+      if (activeTab === "groundedness") return renderJudgeReview(record, "evidence_groundedness");
+      if (activeTab === "answerability") return renderAnswerability(record);
+      if (activeTab === "claims") return renderClaimLocator(record);
+      if (activeTab === "media") return renderMedia(record);
+      if (activeTab === "raw") return renderRaw(record);
+      return renderOverview(record);
+    }
+
+    function renderReviewPanel(record) {
+      const review = getReview(record);
+      const tags = ERROR_TAGS.map(([tag, label]) => `<label class="tag"><input type="checkbox" data-error-tag="${tag}"${review.error_tags.includes(tag) ? " checked" : ""}>${escapeHtml(label)}</label>`).join("");
+      const accuracyOptions = ["Unset", "Yes", "No", "Unsure", "Not available"];
+      return `<aside class="review-panel">
+        <div class="review-head"><h3>Attempt-level judge audit</h3><p>Saved only for attempt ${escapeHtml(record.attemptNumber)}. Other attempts in this checkpoint keep independent verdicts.</p></div>
+        <div class="review-form">
+          <label class="review-field"><span>Manual candidate verdict</span>${selectMarkup("manual_status", review.manual_status, REVIEW_STATUSES)}</label>
+          <label class="review-field"><span>Your answer</span>${selectMarkup("reviewer_answer", review.reviewer_answer, [["", "—"], "A", "B", "C", "D", "E", "Unclear"])}</label>
+          <label class="review-field"><span>Provided answer correct?</span>${selectMarkup("answer_correct", review.answer_correct, ["Unset", "Yes", "No", "Unsure", "Not assessable"])}</label>
+          <label class="review-field"><span>Evidence grounded?</span>${selectMarkup("evidence_grounded", review.evidence_grounded, ["Unset", "Yes", "No", "Unsure"])}</label>
+          <label class="review-field"><span>Speaker-only answerable?</span>${selectMarkup("speaker_only_answerable", review.speaker_only_answerable, ["Unset", "No", "Yes", "Unsure"])}</label>
+          <label class="review-field"><span>All users answerable?</span>${selectMarkup("all_users_answerable", review.all_users_answerable, ["Unset", "Yes", "No", "Unsure"])}</label>
+          <label class="review-field"><span>Multi-user evidence required?</span>${selectMarkup("multi_user_required", review.multi_user_required, ["Unset", "Yes", "No", "Unsure"])}</label>
+          <label class="review-field"><span>Wording quality</span>${selectMarkup("wording_quality", review.wording_quality, ["Unset", "Pass", "Fail", "Unsure"])}</label>
+          <label class="review-field"><span>Formality judge accurate?</span>${selectMarkup("judge_formality_correct", review.judge_formality_correct, accuracyOptions)}</label>
+          <label class="review-field"><span>Groundedness judge accurate?</span>${selectMarkup("judge_groundedness_correct", review.judge_groundedness_correct, accuracyOptions)}</label>
+          <label class="review-field"><span>Answerability judge accurate?</span>${selectMarkup("judge_answerability_correct", review.judge_answerability_correct, accuracyOptions)}</label>
+          <label class="review-field"><span>Overall judge decision correct?</span>${selectMarkup("pipeline_decision_correct", review.pipeline_decision_correct, accuracyOptions)}</label>
+          <div class="review-field wide"><span>Error tags</span><div class="tag-list">${tags}</div></div>
+          <label class="review-field wide"><span>Reviewer notes</span><textarea data-review-field="reviewer_notes" placeholder="Where did this attempt's judge agree or disagree with your manual assessment?">${escapeHtml(review.reviewer_notes)}</textarea></label>
+          <div class="save-copy">Autosaved locally${review.reviewed_at ? ` · last verdict ${escapeHtml(review.reviewed_at)}` : ""}${review.reviewed_attempt ? ` · attempt ${escapeHtml(review.reviewed_attempt)}` : ""}</div>
+        </div>
+      </aside>`;
+    }
+
+    function renderCurrent() {
+      const record = data.records.find(item => item.key === currentKey);
+      if (!record) {
+        els.stage.innerHTML = `<div class="empty">No attempt is selected.</div>`;
+        return;
+      }
+      const visibleIndex = visibleRecords.findIndex(item => item.key === currentKey);
+      const review = getReview(record);
+      els.stage.innerHTML = `
+        <section class="record-head">
+          <div><p class="eyebrow">Review attempt ${record.order} of ${data.records.length}</p><h2>${escapeHtml(record.evidenceId || record.qaId || "Unnamed attempt")}</h2><div class="badges"><span class="badge ${escapeHtml(record.status)}">Judge · ${escapeHtml(record.status)}</span><span class="badge pending">Checkpoint ${record.checkpointOrder}</span><span class="badge pending">Attempt ${escapeHtml(record.attemptNumber)} of ${record.attempts.length || 1}</span><span class="badge pending">${escapeHtml(record.questionType)}</span><span class="badge ${review.manual_status.toLowerCase()}">Manual · ${escapeHtml(review.manual_status)}</span></div></div>
+          <div class="record-nav"><button id="previousRecord" type="button"${visibleIndex <= 0 ? " disabled" : ""}>← Previous</button><button id="nextRecord" type="button"${visibleIndex < 0 || visibleIndex >= visibleRecords.length - 1 ? " disabled" : ""}>Next →</button></div>
+        </section>
+        <div class="stage-grid">
+          <section class="content-panel">
+            <nav class="tabs" aria-label="Record views">
+              ${[["overview", "Overview"], ["attempts", `Sibling attempts · ${record.attempts.length}`], ["formality", "Formality judge"], ["groundedness", "Groundedness judge"], ["answerability", "Answerability judge"], ["claims", "Claim locator"], ["media", "Source media"], ["raw", "Raw"]].map(([id, label]) => `<button class="tab${activeTab === id ? " active" : ""}" type="button" data-tab="${id}">${label}</button>`).join("")}
+            </nav>
+            <div class="tab-body">${renderTab(record)}</div>
+          </section>
+          ${renderReviewPanel(record)}
+        </div>`;
+      bindStageEvents(record);
+    }
+
+    function openLocatedClip(record, control) {
+      const requestedUser = String(control.dataset.locateUser || "").toLowerCase();
+      if (!requestedUser) return toast("This evidence pointer does not name a source user.");
+      const clips = mediaClips(record);
+      const clip = clips.find(item => [item.name, item.id, item.dir].some(value =>
+        String(value || "").toLowerCase() === requestedUser ||
+        String(value || "").toLowerCase().includes(requestedUser)
+      ));
+      if (!clip) return toast(`No source-video card was found for ${control.dataset.locateUser || "that user"}.`);
+      const clipIndex = Math.max(0, Math.min(clip.segments.length - 1, Number(control.dataset.locateClip) || 0));
+      const stateKey = `${record.key}::${clip.dir || clip.name}`;
+      mediaSelection.set(stateKey, clipIndex);
+      pendingMediaJump = {
+        stateKey,
+        offsetSeconds: Math.max(0, Number(control.dataset.locateOffset) || 0),
+      };
+      activeTab = "media";
+      renderCurrent();
+    }
+
+    function bindStageEvents(record) {
+      document.querySelector("#previousRecord")?.addEventListener("click", () => moveRecord(-1));
+      document.querySelector("#nextRecord")?.addEventListener("click", () => moveRecord(1));
+      els.stage.querySelectorAll("[data-tab]").forEach(button => {
+        button.addEventListener("click", () => { activeTab = button.dataset.tab; renderCurrent(); });
+      });
+      els.stage.querySelectorAll("[data-attempt-index]").forEach(button => {
+        button.addEventListener("click", () => {
+          const sibling = data.records.find(item =>
+            item.checkpointKey === record.checkpointKey &&
+            item.attemptIndex === Number(button.dataset.attemptIndex)
+          );
+          if (sibling) navigateTo(sibling.key);
+        });
+      });
+      els.stage.querySelectorAll("[data-locate-user]").forEach(button => {
+        button.addEventListener("click", () => openLocatedClip(record, button));
+      });
+      els.stage.querySelectorAll("[data-review-field]").forEach(control => {
+        const eventName = control.tagName === "TEXTAREA" ? "input" : "change";
+        control.addEventListener(eventName, () => setReview(record, control.dataset.reviewField, control.value));
+      });
+      els.stage.querySelectorAll("[data-error-tag]").forEach(control => {
+        control.addEventListener("change", () => {
+          const selected = [...els.stage.querySelectorAll("[data-error-tag]:checked")].map(input => input.dataset.errorTag);
+          setReview(record, "error_tags", selected);
+        });
+      });
+      bindMediaEvents(record);
+    }
+
+    function bindMediaEvents(record) {
+      const clips = mediaClips(record);
+      els.stage.querySelectorAll(".media-card").forEach(card => {
+        const clip = clips[Number(card.dataset.mediaIndex)];
+        if (!clip) return;
+        const stateKey = card.dataset.mediaKey;
+        const video = card.querySelector("video");
+        const unload = card.querySelector('[data-media-action="unload"]');
+        const getIndex = () => Math.max(0, Math.min(clip.segments.length - 1, mediaSelection.get(stateKey) || 0));
+        const load = autoplay => {
+          const segment = clip.segments[getIndex()];
+          video.pause();
+          video.src = segment.url;
+          video.preload = "metadata";
+          video.load();
+          card.classList.add("loaded");
+          unload.disabled = false;
+          if (autoplay) video.play().catch(() => {});
+        };
+        card.querySelector('[data-media-action="stream"]')?.addEventListener("click", () => load(true));
+        card.querySelector('[data-media-action="previous"]')?.addEventListener("click", () => {
+          const wasLoaded = card.classList.contains("loaded");
+          mediaSelection.set(stateKey, getIndex() - 1);
+          renderCurrent();
+          if (wasLoaded) setTimeout(() => {
+            const replacement = els.stage.querySelector(`[data-media-key="${CSS.escape(stateKey)}"] [data-media-action="stream"]`);
+            replacement?.click();
+          });
+        });
+        card.querySelector('[data-media-action="next"]')?.addEventListener("click", () => {
+          const wasLoaded = card.classList.contains("loaded");
+          mediaSelection.set(stateKey, getIndex() + 1);
+          renderCurrent();
+          if (wasLoaded) setTimeout(() => {
+            const replacement = els.stage.querySelector(`[data-media-key="${CSS.escape(stateKey)}"] [data-media-action="stream"]`);
+            replacement?.click();
+          });
+        });
+        card.querySelector('[data-media-action="copy"]')?.addEventListener("click", async () => {
+          await copyText(clip.segments[getIndex()].url);
+          toast("Video URL copied.");
+        });
+        card.querySelector('[data-media-action="open"]')?.addEventListener("click", () => window.open(clip.segments[getIndex()].url, "_blank", "noopener,noreferrer"));
+        unload?.addEventListener("click", () => {
+          video.pause();
+          video.removeAttribute("src");
+          video.load();
+          card.classList.remove("loaded");
+          unload.disabled = true;
+        });
+        video.addEventListener("ended", () => {
+          if (getIndex() >= clip.segments.length - 1) return;
+          mediaSelection.set(stateKey, getIndex() + 1);
+          renderCurrent();
+          setTimeout(() => els.stage.querySelector(`[data-media-key="${CSS.escape(stateKey)}"] [data-media-action="stream"]`)?.click());
+        });
+        if (pendingMediaJump?.stateKey === stateKey) {
+          const jump = pendingMediaJump;
+          pendingMediaJump = null;
+          video.addEventListener("loadedmetadata", () => {
+            const maximum = Number.isFinite(video.duration) ? Math.max(0, video.duration - .1) : jump.offsetSeconds;
+            video.currentTime = Math.min(jump.offsetSeconds, maximum);
+          }, { once: true });
+          load(false);
+          setTimeout(() => card.scrollIntoView({ behavior: "smooth", block: "center" }));
+        }
+      });
+      document.querySelector("#unloadAllMedia")?.addEventListener("click", () => {
+        els.stage.querySelectorAll('.media-card [data-media-action="unload"]:not(:disabled)').forEach(button => button.click());
+      });
+    }
+
+    async function copyText(value) {
+      if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+      const area = document.createElement("textarea");
+      area.value = value;
+      document.body.append(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+    }
+
+    function updateProgress() {
+      const reviewed = data.records.filter(record => getReview(record).manual_status !== "Pending").length;
+      const pass = data.records.filter(record => getReview(record).manual_status === "Pass").length;
+      const fail = data.records.filter(record => getReview(record).manual_status === "Fail").length;
+      const unsure = data.records.filter(record => getReview(record).manual_status === "Unsure").length;
+      const percentage = data.records.length ? reviewed / data.records.length * 100 : 0;
+      els.recordMetric.textContent = data.records.length;
+      els.acceptedMetric.textContent = data.records.filter(record => record.status === "accepted").length;
+      els.rejectedMetric.textContent = data.records.filter(record => record.status === "rejected").length;
+      els.reviewedMetric.textContent = reviewed;
+      els.progressFill.style.width = `${percentage}%`;
+      els.progressCopy.textContent = `${reviewed} of ${data.records.length} reviewed · ${pass} pass · ${fail} fail · ${unsure} unsure`;
+    }
+
+    function reviewRows() {
+      return data.records.map(record => {
+        const review = getReview(record);
+        const attempt = selectedAttempt(record);
+        const qa = displayedQa(record) || {};
+        const options = qa.options || [];
+        return {
+          review_order: record.order,
+          checkpoint_order: record.checkpointOrder,
+          attempt_number: record.attemptNumber,
+          attempt_result: record.status,
+          checkpoint_status: record.checkpointStatus,
+          evidence_id: record.evidenceId,
+          qa_id: record.qaId || qa.qa_id || "",
+          question_type: record.questionType,
+          question: qa.question || "",
+          option_A: options[0] || "",
+          option_B: options[1] || "",
+          option_C: options[2] || "",
+          option_D: options[3] || "",
+          option_E: options[4] || "",
+          model_correct_letter: qa.correct || "",
+          model_answer: qa.answer || "",
+          total_attempts: record.attempts.length || record.accepted?.attempt_count || 1,
+          automatic_reason: automaticReason(record, attempt),
+          ...review,
+          speaker_user: speakerUser(record, qa),
+          provider_users: providerUsers(record, qa).join(" | "),
+          required_users: (qa.required_users || []).join(" | "),
+          generation_mode: record.intermediate?.generation_mode || record.accepted?.generation_mode || "",
+          judge_video_source: record.intermediate?.judge_video_source || record.accepted?.judge_video_source || "",
+          review_key: record.key,
+          error_tags: review.error_tags.join("|"),
+        };
+      });
+    }
+
+    function csvCell(value) {
+      return `"${String(value ?? "").replaceAll('"', '""')}"`;
+    }
+
+    function download(name, content, type) {
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = name;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function exportCsv() {
+      const rows = reviewRows();
+      const csv = [CSV_COLUMNS.map(csvCell).join(","), ...rows.map(row => CSV_COLUMNS.map(column => csvCell(row[column])).join(","))].join("\r\n");
+      download(`pipeline_manual_review_${data.fingerprint}.csv`, `\uFEFF${csv}`, "text/csv;charset=utf-8");
+      toast(`Exported ${rows.length} attempt rows.`);
+    }
+
+    function exportJson() {
+      const payload = { version: 1, dataset_fingerprint: data.fingerprint, exported_at: new Date().toISOString(), reviews: reviewState.reviews };
+      download(`pipeline_manual_review_backup_${data.fingerprint}.json`, JSON.stringify(payload, null, 2), "application/json");
+      toast("Review backup exported.");
+    }
+
+    async function importJson(file) {
+      const parsed = JSON.parse(await file.text());
+      if (parsed.dataset_fingerprint !== data.fingerprint) throw new Error("The backup belongs to a different loaded dataset.");
+      if (!parsed.reviews || typeof parsed.reviews !== "object") throw new Error("The backup does not contain review records.");
+      reviewState = { version: 1, dataset_fingerprint: data.fingerprint, reviews: parsed.reviews };
+      saveReviewState();
+      refreshFilters();
+      toast("Review backup restored.");
+    }
+
+    function nextPending() {
+      const pending = data.records.find(record => getReview(record).manual_status === "Pending");
+      if (!pending) return toast("No pending attempts remain.");
+      els.manualFilter.value = "all";
+      currentKey = pending.key;
+      refreshFilters();
+    }
+
+    async function loadSelectedFiles() {
+      const selectedFiles = [els.acceptedFile.files?.[0], els.intermediateFile.files?.[0]].filter(Boolean);
+      if (!selectedFiles.length) return;
+      els.loadFiles.disabled = true;
+      els.loadFiles.textContent = "Parsing…";
+      els.loadStatus.classList.remove("error");
+      els.loadStatus.textContent = "Reading JSONL and expanding every checkpoint into attempt-level review entries…";
+      try {
+        const contents = await Promise.all(selectedFiles.map(async file => ({ file, text: await file.text() })));
+        let accepted = [];
+        let intermediate = [];
+        for (const { file, text } of contents) {
+          const classified = classifyRows(parseJsonRecords(text, file.name));
+          accepted.push(...classified.accepted);
+          intermediate.push(...classified.intermediate);
+        }
+        if (!accepted.length && !intermediate.length) throw new Error("No accepted QA rows or intermediate checkpoint rows were found.");
+        const records = buildRecords(accepted, intermediate);
+        const identity = contents.map(({ file }) => `${file.name}:${file.size}:${file.lastModified}`).sort().join("|") +
+          `|${records.map(record => `${record.evidenceId}:${record.qaId}:${record.attempts.length}`).join("|")}`;
+        data = { accepted, intermediate, records, fingerprint: stableHash(identity) };
+        loadReviewState();
+        mediaSelection.clear();
+        activeTab = "overview";
+        currentKey = records[0]?.key || "";
+        const types = [...new Set(records.map(record => record.questionType))].sort();
+        els.typeFilter.innerHTML = `<option value="all">All types</option>${types.map(type => `<option value="${escapeHtml(type)}">${escapeHtml(titleCase(type))}</option>`).join("")}`;
+        els.reviewApp.classList.remove("hidden");
+        els.fingerprint.textContent = data.fingerprint;
+        els.loadStatus.textContent = `Built ${records.length} attempt-level review entries from ${intermediate.length || accepted.length} checkpoint${(intermediate.length || accepted.length) === 1 ? "" : "s"}; ${records.filter(record => record.status === "accepted").length} judge pass and ${records.filter(record => record.status === "rejected").length} judge reject.`;
+        updateProgress();
+        refreshFilters();
+      } catch (error) {
+        els.loadStatus.classList.add("error");
+        els.loadStatus.textContent = error.message || "Could not load those files.";
+      } finally {
+        els.loadFiles.disabled = false;
+        els.loadFiles.textContent = "Build review queue";
+      }
+    }
+
+    function updateFileLabels() {
+      els.acceptedFileName.textContent = els.acceptedFile.files?.[0]?.name || "Choose qa_mcq.jsonl · optional";
+      els.intermediateFileName.textContent = els.intermediateFile.files?.[0]?.name || "Choose qa_mcq.intermediate.jsonl · optional";
+      els.loadFiles.disabled = !(els.acceptedFile.files?.length || els.intermediateFile.files?.length);
+    }
+
+    function clearFiles() {
+      els.acceptedFile.value = "";
+      els.intermediateFile.value = "";
+      updateFileLabels();
+      data = { accepted: [], intermediate: [], records: [], fingerprint: "" };
+      reviewState = { version: 1, dataset_fingerprint: "", reviews: {} };
+      visibleRecords = [];
+      currentKey = "";
+      els.reviewApp.classList.add("hidden");
+      els.fingerprint.textContent = "not loaded";
+      els.loadStatus.classList.remove("error");
+      els.loadStatus.textContent = "Either file can be reviewed alone; loading both links accepted rows back to their full attempt history.";
+      updateProgress();
+    }
+
+    function initialize() {
+      els.acceptedFile.addEventListener("change", updateFileLabels);
+      els.intermediateFile.addEventListener("change", updateFileLabels);
+      els.loadFiles.addEventListener("click", loadSelectedFiles);
+      els.clearFiles.addEventListener("click", clearFiles);
+      els.searchFilter.addEventListener("input", () => refreshFilters());
+      els.pipelineFilter.addEventListener("change", () => refreshFilters());
+      els.manualFilter.addEventListener("change", () => refreshFilters());
+      els.typeFilter.addEventListener("change", () => refreshFilters());
+      els.nextPending.addEventListener("click", nextPending);
+      els.exportCsv.addEventListener("click", exportCsv);
+      els.exportJson.addEventListener("click", exportJson);
+      els.importJson.addEventListener("change", async () => {
+        const file = els.importJson.files?.[0];
+        if (!file) return;
+        try { await importJson(file); }
+        catch (error) { toast(error.message || "Could not restore that backup."); }
+        finally { els.importJson.value = ""; }
+      });
+      els.resetReviews.addEventListener("click", () => {
+        if (!confirm("Delete all locally saved reviews for this loaded dataset?")) return;
+        reviewState = { version: 1, dataset_fingerprint: data.fingerprint, reviews: {} };
+        saveReviewState();
+        refreshFilters();
+        toast("Local review state reset.");
+      });
+      document.addEventListener("keydown", event => {
+        if (event.target.matches("input, select, textarea")) return;
+        if (event.key === "[") moveRecord(-1);
+        if (event.key === "]") moveRecord(1);
+      });
+      updateFileLabels();
+      updateProgress();
+    }
+
+    initialize();
+  </script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# GRPO v3 三个 Gate 的固定版本；不跟随 main，不默认安装 bitsandbytes/QLoRA。
+ms-swift==4.2.2
+vllm==0.24.0
+torch==2.11.0
+torchvision==0.26.0
+torchaudio==2.11.0
+transformers==5.8.1
+qwen-vl-utils>=0.0.14
+decord
+peft

@@ -6,6 +6,10 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
+# Codex/editor scratch state
+/.codex_tmp/
+/tmp*/
+
 # HPC/runtime outputs
 slurm-*.out
 logs/
@@ -14,14 +18,33 @@ weights/
 data/reference/
 data/processed/
 artifacts/
-hpc/
+/hpc/*
+!/hpc/cuda.py
+!/hpc/qa/
+/hpc/qa/*
+!/hpc/qa/production/
+!/hpc/qa/smoke/
+/hpc/qa/production/*
+/hpc/qa/smoke/*
+!/hpc/qa/production/run_six_user_qa_packets_100.sbatch
+!/hpc/qa/production/run_six_user_qa_reuse_packets_50.sbatch
+!/hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch
+!/hpc/run_gemini25_flash_44_six_vs_minimal_cpu.sbatch
 output/
 outputs/
 reports/
 tmp/
-tests/
+/tests/
 analysis_outputs/
 *.npz
+
+# The nested multi-user package is source-controlled. Its own .gitignore
+# decides which generated artifacts under that directory stay local.
+!/multi-user/
+
+# Local transfer/archive copies
+/multi-user*.zip
+/training.zip
 
 # Local secrets
 .env

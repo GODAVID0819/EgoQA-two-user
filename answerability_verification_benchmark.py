@@ -885,32 +885,30 @@ def _condition_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ):
         group: dict[str, Any] = {"count": len(group_rows)}
         for field in (
-            "asker_selected_correct",
-            "provider_selected_correct",
-            "combined_selected_correct",
+            "asker_judged_answerable",
+            "provider_judged_answerable",
+            "combined_judged_answerable",
         ):
             valid = [row[field] for row in group_rows if row[field] is not None]
             group[field] = {
                 "valid_count": len(valid),
-                "correct_count": sum(valid),
-                "correct_rate": _safe_rate(sum(valid), len(valid)),
+                "answerable_count": sum(valid),
+                "answerable_rate": _safe_rate(sum(valid), len(valid)),
             }
         result[group_name] = group
     return result
 
 
-def _condition_choice(
-    verification: dict[str, Any], *, condition_id: str, correct: str
-) -> tuple[str | None, bool | None]:
+def _condition_answerability(
+    verification: dict[str, Any], *, condition_id: str
+) -> bool | None:
     answerability = (verification.get("verification") or {}).get("answerability") or {}
     evaluations = answerability.get("evaluations") or []
     matches = [row for row in evaluations if row.get("condition_id") == condition_id]
     if len(matches) != 1:
-        return None, None
-    choice = str(matches[0].get("choice") or "").strip().upper()
-    if choice not in "ABCDE" or len(choice) != 1:
-        return None, None
-    return choice, choice == correct
+        return None
+    answerable = matches[0].get("answerable")
+    return answerable if answerable is True or answerable is False else None
 
 
 def _testset_prediction_row(
@@ -919,21 +917,17 @@ def _testset_prediction_row(
     required_users = list(verification.get("required_users") or [])
     if len(required_users) < 2:
         raise ValueError(f"{run_id}/{verification.get('qa_id')}: fewer than two users")
-    correct = str(verification.get("correct") or "").strip().upper()
-    asker_choice, asker_correct = _condition_choice(
+    asker_answerable = _condition_answerability(
         verification,
         condition_id=f"single_user::{required_users[0]}",
-        correct=correct,
     )
-    provider_choice, provider_correct = _condition_choice(
+    provider_answerable = _condition_answerability(
         verification,
         condition_id=f"single_user::{required_users[1]}",
-        correct=correct,
     )
-    combined_choice, combined_correct = _condition_choice(
+    combined_answerable = _condition_answerability(
         verification,
         condition_id="combined_all_users::" + "+".join(required_users),
-        correct=correct,
     )
     metadata = verification.get("verification") or {}
     answerability = metadata.get("answerability") or {}
@@ -949,13 +943,10 @@ def _testset_prediction_row(
         "reasoning_effort": arm["reasoning_effort"],
         "predicted_passed": metadata.get("passed") is True,
         "asker_user": required_users[0],
-        "asker_choice": asker_choice,
-        "asker_selected_correct": asker_correct,
+        "asker_judged_answerable": asker_answerable,
         "provider_user": required_users[1],
-        "provider_choice": provider_choice,
-        "provider_selected_correct": provider_correct,
-        "combined_choice": combined_choice,
-        "combined_selected_correct": combined_correct,
+        "provider_judged_answerable": provider_answerable,
+        "combined_judged_answerable": combined_answerable,
         "gate_reason": str(gate.get("reason") or ""),
     }
 
@@ -964,16 +955,16 @@ def _testset_arm_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     passed = sum(row["predicted_passed"] for row in rows)
     conditions: dict[str, Any] = {}
     for field in (
-        "asker_selected_correct",
-        "provider_selected_correct",
-        "combined_selected_correct",
+        "asker_judged_answerable",
+        "provider_judged_answerable",
+        "combined_judged_answerable",
     ):
         valid = [row[field] for row in rows if row[field] is not None]
-        correct_count = sum(valid)
+        answerable_count = sum(valid)
         conditions[field] = {
             "valid_count": len(valid),
-            "correct_count": correct_count,
-            "correct_rate": _safe_rate(correct_count, len(valid)),
+            "answerable_count": answerable_count,
+            "answerable_rate": _safe_rate(answerable_count, len(valid)),
         }
     return {
         "count": len(rows),
@@ -1126,20 +1117,17 @@ def _prediction_row(
     required_users = list(verification.get("required_users") or [])
     if len(required_users) < 2:
         raise ValueError(f"{gold['benchmark_key']}: verification has fewer than two users")
-    correct = str(verification.get("correct") or "").strip().upper()
-    asker_choice, asker_correct = _condition_choice(
+    asker_answerable = _condition_answerability(
         verification,
         condition_id=f"single_user::{required_users[0]}",
-        correct=correct,
     )
-    provider_choice, provider_correct = _condition_choice(
+    provider_answerable = _condition_answerability(
         verification,
         condition_id=f"single_user::{required_users[1]}",
-        correct=correct,
     )
     combined_id = "combined_all_users::" + "+".join(required_users)
-    combined_choice, combined_correct = _condition_choice(
-        verification, condition_id=combined_id, correct=correct
+    combined_answerable = _condition_answerability(
+        verification, condition_id=combined_id
     )
     predicted_passed = (verification.get("verification") or {}).get("passed") is True
     return {
@@ -1150,13 +1138,10 @@ def _prediction_row(
         "predicted_passed": predicted_passed,
         "prediction_correct": predicted_passed == gold["gold_passed"],
         "asker_user": required_users[0],
-        "asker_choice": asker_choice,
-        "asker_selected_correct": asker_correct,
+        "asker_judged_answerable": asker_answerable,
         "provider_user": required_users[1],
-        "provider_choice": provider_choice,
-        "provider_selected_correct": provider_correct,
-        "combined_choice": combined_choice,
-        "combined_selected_correct": combined_correct,
+        "provider_judged_answerable": provider_answerable,
+        "combined_judged_answerable": combined_answerable,
         "gate_reason": str(
             ((((verification.get("verification") or {}).get("answerability") or {}).get("gate") or {}).get("reason"))
             or ""

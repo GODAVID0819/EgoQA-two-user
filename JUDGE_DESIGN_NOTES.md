@@ -43,11 +43,14 @@ completed traces. It retains the older detailed first-verdict contract, not the
 production pipeline's new one-field probe, and its rerun cannot alter the
 original production result.
 
-Each answerability condition uses `choice` as its answer-bearing JSON field.
-Production uses ordinary JSON generation and stores only the parsed response;
-the former A-E choice-weight and `evaluation.choice_uncertainty` path is
-archived. `answerability_gate()` uses the parsed choice under the existing
-single-user/subset/combined rules.
+Each answerability condition returns `answerable`, `reason`, and
+`missing_information`. The model judges whether the provided condition contains
+enough evidence to determine one unique answer; it does not select an option.
+Production uses ordinary JSON generation and stores only the parsed response.
+The former A-E choice-weight and `evaluation.choice_uncertainty` path is
+archived. `answerability_gate()` uses only the boolean verdict under the
+existing single-user/subset/combined rules and never compares a model selection
+with the declared answer key.
 
 Only the post-run analyzer computes `selection_sort_key` for evaluation and
 review prioritization. Sorting it ascending implements
@@ -178,15 +181,18 @@ Judger 是 semantic + format gate。它回答的是：
 
 > 这道题从定义上、问法上、证据说明上，是否应该被认为是合格 two-user QA？
 
-Answerability evaluation 是 behavioral gate。它回答的是：
+Answerability evaluation 是 evidence-sufficiency gate。它回答的是：
 
-> 在不同视频可见范围下，模型实际能不能答对？
+> 在不同视频可见范围下，现有证据是否足以唯一确定一个答案？
 
 具体测试条件是：
 
-- `single_user::<user>`：只给某一个用户的视频，应该答错或返回 insufficient；
-- `proper_subset::<users>`：对 3 个及以上 user 的题，只给部分 users，应该答错或 insufficient；
-- `combined_all_users::<users>`：给全部 required users 的视频，应该选中正确答案。
+- `single_user::<user>`：只给某一个用户的视频，应该判断证据不足；
+- `proper_subset::<users>`：对 3 个及以上 user 的题，只给部分 users，应该判断证据不足；
+- `combined_all_users::<users>`：给全部 required users 的视频，应该判断证据足以唯一作答。
+
+每个 condition 的输出不包含 A-E 选项预测。最终 gate 只读取
+`answerable: true/false`，因此不会因为模型没有选中数据集声明的正确答案而失败。
 
 最终一条 QA 只有同时通过 judger 和 answerability gate，才会被写入 accepted `qa_mcq.jsonl`。
 

@@ -1,0 +1,185 @@
+ARCHIVED CONCURRENCY PROMPT RESTRICTIONS
+Archived: 2026-08-22
+
+STATUS
+
+This file is inert. It is not imported or rendered by either prompts.py module.
+The active baseline-neutral policy is intentionally neutral about whether a
+question should use concurrent activities:
+
+- The generator is not told to generate concurrency questions.
+- The generator is not told to avoid concurrency questions.
+- QA formality does not fail an item merely because its answer is a concurrent
+  activity or because its options pair concurrent activities.
+- Ordinary formality, visual grounding, temporal grounding, and answerability
+  requirements still apply.
+
+The retired text below came from both:
+
+- prompts.py (two-user)
+- multi-user/prompts.py (multi-user)
+
+
+===============================================================================
+1. RETIRED GENERATOR RESTRICTION BLOCK
+===============================================================================
+
+Concurrent-activity restriction:
+- Do not generate a question whose answer is what one person was doing while or when another person was doing something else.
+- This restriction applies even when the anchor event is concrete, the supplied evidence comes from synchronized recordings, or the temporal overlap can be verified.
+- Do not generate reverse-direction variants that fix the evidence-provider event and ask what the asker was doing.
+- Do not generate options that encode pairs of concurrent activities.
+
+This block was previously stored as ANTI_ACTIVITY_QUERY_GUIDANCE and inserted
+after the generator's general guidelines.
+
+
+===============================================================================
+2. RETIRED GENERATOR COVERAGE RULE
+===============================================================================
+
+- Shared clock time or proximity is not a relation by itself. Do not generate a question whose answer is another person's concurrent activity. Never expose time values in the question or options.
+
+This line was previously the final bullet in
+RESTORED_GENERATOR_COVERAGE_GUIDANCE.
+
+
+===============================================================================
+3. RETIRED GENERATOR SELF-CHECK LANGUAGE
+===============================================================================
+
+Two-user suffix:
+
+, and why any activity relation is not semantically shallow
+
+Multi-user suffix:
+
+, and why any activity relation is not semantically shallow
+
+These suffixes appeared in VIDEO_GENERATION_SCHEMA.review.generator_self_check.
+
+
+===============================================================================
+4. RETIRED QA-FORMALITY OUTPUT SUBCHECK
+===============================================================================
+
+"other_person_activity_query": {
+  "status": "PASS/FAIL",
+  "reason": "whether the question asks what one person was doing concurrently with another event instead of asking for a concrete missing object, state, location, outcome, consequence, explanation, interaction result, or follow-up"
+}
+
+This entry appeared in QA_FORMALITY_CHECK_SCHEMA["semantic_subchecks"]. Its
+presence also caused QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES and the production
+judge-output validator to require the field.
+
+
+===============================================================================
+5. RETIRED QA-FORMALITY JUDGE RUBRIC
+===============================================================================
+
+3. other_person_activity_query
+- FAIL when the question asks what one person was doing while or when another person was doing something else, and the answer is that person's concurrent activity.
+- Apply this restriction in either direction: reject both an asker-side event used to query the provider's activity and a provider-side event used to query the asker's activity.
+- FAIL pair-matching questions whose options encode two concurrent activities.
+- The question still FAILS when the anchor event is concrete, the wording is natural, or the temporal overlap could be verified from synchronized videos.
+- PASS linked task outcomes, interactions, and post-handoff follow-ups only when the answer target is a concrete object, identity, state, location, placement, outcome, consequence, explanation, interaction result, or follow-up rather than a concurrent activity report.
+- Do not judge whether the described facts are visually grounded, whether a clip was cropped, or whether one view is sufficient.
+
+The later formality sections were numbered 4 through 6 while this section was
+active. They are numbered 3 through 5 in the neutral prompt.
+
+
+===============================================================================
+6. RETIRED QA-FORMALITY QUALITY WORDING
+===============================================================================
+
+- 3 / 3_strong: The JSON and five-option structure are clean, the question is natural and clearly first-person or shared-memory, references are unambiguous, no participant names or timestamp citations appear, and any activity relation is semantically concrete rather than shallow.
+- 2 / 2_acceptable: The item is acceptable but mildly stiff, generic, or uneven in option style. It still has no blocking schema, perspective, name, timestamp, ambiguity, or shallow-activity problem.
+- 1 / 1_weak_or_reject: The item has a blocking schema or semantic-form issue, lacks first-person perspective, directly names a participant, cites a timestamp, is unnatural or ambiguous, or asks only for a vague activity report.
+
+This was the retired concurrency-sensitive form of
+QA_FORMALITY_QUALITY_RUBRIC.
+
+
+===============================================================================
+7. RETIRED CONCURRENCY-SPECIFIC GROUNDEDNESS RULES
+===============================================================================
+
+- For a cross-view activity-pair question, verify that every component activity used across the options actually occurs, because the distractors are supposed to recombine real activities. Verify that only the declared pair overlaps.
+- For a single-anchor concurrent question, verify the fixed event in one view, the declared answer activity in the other view, and their overlap on the original synchronized timeline. Either view may supply the fixed event.
+- For a cross-view activity-pair question, verify the activity intervals and that exactly the declared pair overlaps on the original synchronized timeline. Do not compare equal playback positions in independently pruned videos; use original-video time or supplied pruned-to-original maps.
+- Outside a valid concurrent relation, FAIL unrelated timestamp stitching. For concurrency, FAIL when the claimed overlap is false, vague, or inferred only from proximity instead of verified synchronized intervals.
+
+The neutral evidence-groundedness prompt now applies generic temporal-grounding
+rules to every temporal claim instead of singling out concurrency questions.
+
+
+===============================================================================
+HOW TO RESTORE THE GENERATOR RESTRICTION
+===============================================================================
+
+Apply these steps to both prompts.py files:
+
+1. Recreate ANTI_ACTIVITY_QUERY_GUIDANCE using the exact block in section 1.
+2. Insert {ANTI_ACTIVITY_QUERY_GUIDANCE} in build_video_generation_prompt after
+   {guidelines_block} and before {RESTORED_GENERATOR_COVERAGE_GUIDANCE}.
+3. Append the exact section-2 bullet to
+   RESTORED_GENERATOR_COVERAGE_GUIDANCE.
+4. If desired, append the section-3 suffix to
+   VIDEO_GENERATION_SCHEMA.review.generator_self_check.
+
+Restoring only these four steps steers generation away from concurrency but
+does not make QA formality reject a concurrency item that still appears.
+
+
+===============================================================================
+HOW TO RESTORE THE FORMALITY REJECTION
+===============================================================================
+
+Apply these steps to both prompts.py files:
+
+1. Add the section-4 other_person_activity_query entry to
+   QA_FORMALITY_CHECK_SCHEMA["semantic_subchecks"] immediately after
+   naturalness_and_clarity.
+2. Insert the section-5 rubric into build_qa_formality_judge_prompt immediately
+   after naturalness_and_clarity.
+3. Renumber direct_name_leakage, timestamp_citation, and ambiguous_reference to
+   4, 5, and 6.
+4. Optionally restore section 6 if the archived three-point quality-scoring
+   path is also being reproduced.
+
+QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES is derived from the schema, so no separate
+hard-coded tuple edit is needed. The production output validator will begin
+requiring the restored subcheck automatically.
+
+
+===============================================================================
+HOW TO RESTORE THE SPECIAL GROUNDEDNESS RULES
+===============================================================================
+
+1. Replace the generic temporal-grounding bullets in
+   build_evidence_groundedness_judge_prompt with the exact rules from section 7.
+2. In temporal_pruning_brief, the archived wording was:
+
+   equal pruned playback positions do not prove concurrency.
+
+Restoring the groundedness rules does not itself forbid concurrency; it restores
+the former concurrency-specific evidence standard.
+
+
+===============================================================================
+REQUIRED FOLLOW-UP AFTER ANY RESTORATION
+===============================================================================
+
+1. Regenerate BASELINE_NEUTRAL_PROMPTS.txt from the prompt builders.
+2. Compile both prompt modules.
+3. Render baseline/neutral generator and judge prompts for two-user raw-video,
+   two-user sampled-frame, multi-user sampled-frame, and multi-user raw-video
+   inputs.
+4. Verify the intended policy explicitly:
+   - neutral policy: no generator concurrency steering and no formality
+     concurrency subcheck;
+   - restored generator restriction: restriction text appears only in generator
+     prompts;
+   - restored formality rejection: other_person_activity_query appears in both
+     the judge rubric and its JSON schema.

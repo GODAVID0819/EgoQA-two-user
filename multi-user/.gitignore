@@ -1,0 +1,103 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors, notebooks, and OS metadata
+.agents/
+.vscode/
+.idea/
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+
+# Local secrets (keep shareable examples)
+.env
+.env.*
+!.env.example
+*.token
+hpc/site.env
+
+# Runtime state and generated outputs
+slurm-*.out
+*.log
+logs/
+checkpoints/
+weights/
+artifacts/
+output/
+outputs/
+reports/
+analysis_outputs/
+tmp/
+
+# Downloaded or derived datasets
+data/raw/
+data/reference/
+data/processed/
+data/cache/
+
+# Large model and media artifacts
+*.ckpt
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.npy
+*.npz
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.vrs
+
+# Keep reproducible launchers and regression fixtures as source. These
+# exceptions also override broad hpc/ and tests/ rules in a parent repository
+# when this package is synced into a nested multi-user directory.
+!hpc/
+!hpc/**/
+!hpc/.gitkeep
+!hpc/**/*.md
+!hpc/**/*.py
+!hpc/**/*.sbatch
+!hpc/**/*.sh
+!tests/
+!tests/**/
+!tests/**/*.json
+!tests/**/*.mp4
+!tests/**/*.py
+
+# Never re-include local secrets or generated test caches.
+hpc/site.env
+tests/**/__pycache__/
+tests/**/*.py[cod]
+
+# Repo-local generated/sample artifacts
+/qa_mcq.jsonl
+/unused-*.jsonl
+/ablation_manual_review_*.csv
+
+# Auxiliary demos and archived prompt snapshots
+/notebooks/
+/prompts-backup.py
+/prompts-safe.py
+/DISCOVERY_MODE_PROMPTS_*.txt
+/evidence_streamer.html
+/manual_ablation_review_template.html
+
+# Temporary editor/patch files
+*.bak
+*.orig
+*.rej
+*.swp
+*.tmp
+*~

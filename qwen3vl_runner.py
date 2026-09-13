@@ -1301,6 +1301,7 @@ class OpenRouterRunner(OpenAICompatibleLocalRunner):
         api_key: str | None = None,
         allow_video_input: bool = False,
         reasoning_effort: str | None = None,
+        turbo: bool = False,
         max_retries: int | None = None,
         retry_delay_seconds: float | None = None,
     ) -> None:
@@ -1318,6 +1319,7 @@ class OpenRouterRunner(OpenAICompatibleLocalRunner):
             allow_video_input=allow_video_input,
         )
         self.reasoning_effort = reasoning_effort
+        self.turbo = bool(turbo)
         self.max_retries = int(
             os.getenv("OPENROUTER_MAX_RETRIES", str(DEFAULT_OPENROUTER_MAX_RETRIES))
             if max_retries is None
@@ -1580,7 +1582,11 @@ class OpenRouterRunner(OpenAICompatibleLocalRunner):
         raise last_error or OpenRouterRequestError("OpenRouter request failed")
 
     def _extra_request_payload(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"provider": {"allow_fallbacks": True}}
+        provider: dict[str, Any] = {"allow_fallbacks": True}
+        if self.turbo:
+            # OpenRouter's Nitro shortcut is exactly provider.sort=throughput.
+            provider["sort"] = "throughput"
+        payload: dict[str, Any] = {"provider": provider}
         if self.reasoning_effort is not None:
             payload["reasoning"] = {
                 "effort": self.reasoning_effort,
@@ -1958,6 +1964,7 @@ def make_runner(
     disable_thinking: bool = False,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
+    openrouter_turbo: bool = False,
     video_fps: float = DEFAULT_VIDEO_FPS,
     max_input_tokens: int | None = None,
     min_free_gib: float = 0.0,
@@ -2015,6 +2022,7 @@ def make_runner(
             api_key=api_key,
             allow_video_input=allow_openai_video_input,
             reasoning_effort=reasoning_effort,
+            turbo=openrouter_turbo,
         )
     if backend == "gemini":
         effective_base_url = (
