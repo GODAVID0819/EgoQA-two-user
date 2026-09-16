@@ -1,0 +1,1556 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Evidence-first manual review for EgoLife QA ablations.">
+  <title>EgoLife multi-ablation review</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #091015;
+      --panel: #111a21;
+      --panel-2: #17232c;
+      --panel-3: #1c2b35;
+      --line: #2b3c48;
+      --line-strong: #456071;
+      --text: #f2f6f8;
+      --muted: #9babb6;
+      --lime: #c9f769;
+      --lime-ink: #172000;
+      --blue: #72c8ff;
+      --amber: #ffc66d;
+      --red: #ff8d87;
+      --green: #76df9a;
+      --radius: 16px;
+      --shadow: 0 20px 60px rgba(0, 0, 0, .26);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      min-width: 330px;
+      min-height: 100vh;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% -6%, rgba(114, 200, 255, .13), transparent 34rem),
+        radial-gradient(circle at 86% 0%, rgba(201, 247, 105, .09), transparent 31rem),
+        var(--bg);
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button,
+    .file-button {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 12px;
+      color: var(--text);
+      background: #1a2630;
+      cursor: pointer;
+      transition: border-color .16s ease, background .16s ease, transform .16s ease;
+    }
+
+    button:hover,
+    .file-button:hover {
+      border-color: var(--line-strong);
+      background: #22323e;
+    }
+
+    button:active,
+    .file-button:active {
+      transform: translateY(1px);
+    }
+
+    button.primary {
+      border-color: var(--lime);
+      color: var(--lime-ink);
+      background: var(--lime);
+      font-weight: 800;
+    }
+
+    button.primary:hover {
+      background: #d8ff8b;
+    }
+
+    button.ghost {
+      background: transparent;
+    }
+
+    button.danger {
+      color: #ffd0cd;
+      border-color: #6f3c3a;
+      background: #2d1d1e;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .42;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      color: var(--text);
+      background: #0c141a;
+    }
+
+    input,
+    select {
+      min-height: 42px;
+      padding: 0 10px;
+    }
+
+    textarea {
+      min-height: 92px;
+      padding: 10px;
+      line-height: 1.45;
+      resize: vertical;
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible,
+    .file-button:focus-within {
+      outline: 3px solid rgba(114, 200, 255, .34);
+      outline-offset: 2px;
+    }
+
+    a {
+      color: var(--blue);
+    }
+
+    .shell {
+      width: min(1520px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 30px 0 72px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 30px;
+      align-items: end;
+      margin-bottom: 22px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--lime);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .75rem;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2.1rem, 5.4vw, 4.8rem);
+      line-height: .95;
+      letter-spacing: -.055em;
+    }
+
+    .lede {
+      max-width: 790px;
+      margin: 15px 0 0;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .headline-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(100px, 1fr));
+      gap: 9px;
+    }
+
+    .metric {
+      min-width: 116px;
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(17, 26, 33, .9);
+      box-shadow: var(--shadow);
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 1.55rem;
+      letter-spacing: -.04em;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: .75rem;
+      letter-spacing: .035em;
+      text-transform: uppercase;
+    }
+
+    .toolbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      display: grid;
+      grid-template-columns: minmax(230px, 1.2fr) minmax(150px, .55fr) minmax(150px, .55fr) minmax(260px, 1fr);
+      gap: 10px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(12, 20, 26, .94);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, .3);
+      backdrop-filter: blur(16px);
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .field > span,
+    .review-field > span {
+      color: var(--muted);
+      font-size: .7rem;
+      font-weight: 800;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+
+    .packet-tools {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .packet-tools button {
+      min-height: 34px;
+      padding: 0 10px;
+    }
+
+    .packet-tools input {
+      width: 76px;
+      min-height: 34px;
+      padding: 0 8px;
+      text-align: center;
+    }
+
+    .packet-position {
+      margin-left: auto;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: .75rem;
+      white-space: nowrap;
+    }
+
+    .toolbar-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .file-button {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: .85rem;
+      font-weight: 700;
+    }
+
+    .file-button input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .progress-strip {
+      display: grid;
+      grid-template-columns: minmax(150px, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      margin: 14px 0 18px;
+      padding: 11px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(17, 26, 33, .78);
+    }
+
+    .progress-track {
+      height: 9px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #26353f;
+    }
+
+    .progress-fill {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--blue), var(--lime));
+      transition: width .22s ease;
+    }
+
+    .progress-copy {
+      color: var(--muted);
+      font-size: .84rem;
+      white-space: nowrap;
+    }
+
+    .evidence-shell {
+      display: grid;
+      gap: 18px;
+    }
+
+    .evidence-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: start;
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+
+    .evidence-header h2 {
+      margin: 0;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: clamp(1rem, 2vw, 1.35rem);
+      line-height: 1.35;
+    }
+
+    .evidence-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 10px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 9px;
+      color: #c8d3d9;
+      background: #17232c;
+      font-size: .75rem;
+      font-weight: 700;
+    }
+
+    .evidence-nav {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 7px;
+    }
+
+    .video-panel {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 13px;
+    }
+
+    .panel-head h3 {
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .panel-head p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: .8rem;
+    }
+
+    .video-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .video-card {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: #070c10;
+    }
+
+    .video-card video {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #020405;
+    }
+
+    .video-placeholder {
+      display: grid;
+      place-items: center;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      padding: 22px;
+      color: #7f909b;
+      text-align: center;
+      background:
+        linear-gradient(135deg, rgba(114, 200, 255, .06), transparent 55%),
+        #070c10;
+    }
+
+    .video-card.loaded .video-placeholder {
+      display: none;
+    }
+
+    .video-card:not(.loaded) video {
+      display: none;
+    }
+
+    .video-copy {
+      display: grid;
+      gap: 5px;
+      padding: 11px 12px 13px;
+      border-top: 1px solid var(--line);
+    }
+
+    .video-copy strong {
+      font-size: .9rem;
+    }
+
+    .video-copy span {
+      color: var(--muted);
+      font-size: .76rem;
+    }
+
+    .video-copy a {
+      overflow: hidden;
+      font-size: .73rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .warning {
+      margin: 12px 0 0;
+      padding: 10px 12px;
+      border: 1px solid #624d2e;
+      border-radius: 10px;
+      color: #ffe0ac;
+      background: #2a2114;
+      font-size: .82rem;
+    }
+
+    .qa-section {
+      display: grid;
+      gap: 12px;
+    }
+
+    .qa-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 0 2px;
+    }
+
+    .qa-heading h3 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: .82rem;
+      cursor: pointer;
+    }
+
+    .toggle input {
+      width: 17px;
+      min-height: auto;
+      height: 17px;
+      accent-color: var(--lime);
+    }
+
+    .qa-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      align-items: start;
+    }
+
+    .qa-card {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: 0 12px 34px rgba(0, 0, 0, .18);
+      transition: border-color .18s ease;
+    }
+
+    .qa-card[data-status="Pass"] {
+      border-color: #3b7650;
+    }
+
+    .qa-card[data-status="Fail"] {
+      border-color: #874845;
+    }
+
+    .qa-card[data-status="Unsure"] {
+      border-color: #80663c;
+    }
+
+    .qa-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-2);
+    }
+
+    .run-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: #eaf1f4;
+      font-size: .8rem;
+      font-weight: 800;
+    }
+
+    .run-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--blue);
+    }
+
+    .qa-top span:last-child {
+      color: var(--muted);
+      font-size: .73rem;
+    }
+
+    .qa-body {
+      padding: 15px;
+    }
+
+    .question {
+      margin: 0 0 13px;
+      font-size: 1.02rem;
+      font-weight: 720;
+      line-height: 1.45;
+    }
+
+    .options {
+      display: grid;
+      gap: 7px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .option {
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      padding: 8px 9px;
+      border: 1px solid #273743;
+      border-radius: 9px;
+      color: #dce4e8;
+      background: #0e171d;
+      line-height: 1.35;
+    }
+
+    .option-letter {
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      color: var(--muted);
+      background: #1b2932;
+      font-size: .72rem;
+      font-weight: 850;
+    }
+
+    .answers-hidden .option.correct {
+      border-color: #273743;
+      background: #0e171d;
+    }
+
+    .answers-hidden .option.correct .option-letter {
+      color: var(--muted);
+      background: #1b2932;
+    }
+
+    .option.correct {
+      border-color: #4f7843;
+      background: #17271a;
+    }
+
+    .option.correct .option-letter {
+      color: var(--lime-ink);
+      background: var(--lime);
+    }
+
+    .answer-line {
+      margin: 11px 0 0;
+      padding: 10px 11px;
+      border: 1px solid #4f7843;
+      border-radius: 9px;
+      color: #dce9cf;
+      background: #17231a;
+      font-size: .88rem;
+      line-height: 1.4;
+    }
+
+    details {
+      margin-top: 12px;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+      color: #c5d0d6;
+      font-size: .8rem;
+    }
+
+    summary {
+      color: var(--blue);
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .detail-grid {
+      display: grid;
+      gap: 9px;
+      margin-top: 10px;
+    }
+
+    .detail-grid div {
+      padding: 8px 9px;
+      border-radius: 8px;
+      background: #0e171d;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+
+    .detail-grid strong {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--muted);
+      font-size: .67rem;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .review-panel {
+      padding: 14px 15px 16px;
+      border-top: 1px solid var(--line);
+      background: #0d161c;
+    }
+
+    .review-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .review-field {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .review-field.wide {
+      grid-column: 1 / -1;
+    }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 2px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 8px;
+      color: #bdc9d0;
+      background: #121d24;
+      font-size: .72rem;
+      cursor: pointer;
+    }
+
+    .tag input {
+      width: 14px;
+      min-height: auto;
+      height: 14px;
+      accent-color: var(--red);
+    }
+
+    .empty {
+      padding: 48px 22px;
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--radius);
+      color: var(--muted);
+      text-align: center;
+      background: var(--panel);
+    }
+
+    .footer-note {
+      margin-top: 18px;
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      color: var(--muted);
+      background: rgba(17, 26, 33, .72);
+      font-size: .8rem;
+      line-height: 1.5;
+    }
+
+    .toast {
+      position: fixed;
+      z-index: 80;
+      right: 20px;
+      bottom: 20px;
+      max-width: min(430px, calc(100% - 40px));
+      padding: 11px 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: 11px;
+      color: var(--text);
+      background: #1b2a34;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(12px);
+      pointer-events: none;
+      transition: opacity .18s ease, transform .18s ease;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 1100px) {
+      header {
+        grid-template-columns: 1fr;
+      }
+
+      .headline-metrics {
+        max-width: 520px;
+      }
+
+      .toolbar {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .toolbar-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+      }
+
+      .qa-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .shell {
+        width: min(100% - 20px, 1520px);
+        padding-top: 22px;
+      }
+
+      .toolbar {
+        position: static;
+        grid-template-columns: 1fr;
+      }
+
+      .toolbar-actions {
+        grid-column: auto;
+      }
+
+      .evidence-header {
+        grid-template-columns: 1fr;
+      }
+
+      .evidence-nav {
+        justify-content: flex-start;
+      }
+
+      .video-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .review-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .review-field.wide {
+        grid-column: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">EgoLife · evidence-first review</p>
+        <h1>One packet.<br>Every accepted QA.</h1>
+        <p class="lede">
+          Review the original evidence videos once, compare every available ablation question,
+          and export one flat CSV for Excel. Changes save automatically in this browser.
+        </p>
+      </div>
+      <div class="headline-metrics" aria-label="Dataset summary">
+        <div class="metric"><strong id="evidenceMetric">0</strong><span>evidence packets</span></div>
+        <div class="metric"><strong id="qaMetric">0</strong><span>accepted QAs</span></div>
+        <div class="metric"><strong id="reviewedMetric">0</strong><span>reviewed</span></div>
+      </div>
+    </header>
+
+    <section class="toolbar" aria-label="Review controls">
+      <div class="field">
+        <span>Evidence packet</span>
+        <select id="evidenceSelect" aria-label="Evidence packet"></select>
+        <div class="packet-tools" aria-label="Packet navigation">
+          <button id="toolbarPreviousEvidence" type="button" title="Previous visible packet" aria-label="Previous visible packet">←</button>
+          <input id="packetNumber" type="number" min="1" step="1" inputmode="numeric" aria-label="Visible packet number">
+          <button id="goPacket" type="button">Go</button>
+          <button id="toolbarNextEvidence" type="button" title="Next visible packet" aria-label="Next visible packet">→</button>
+          <span id="packetPosition" class="packet-position">0 / 0</span>
+        </div>
+      </div>
+      <label class="field">
+        <span>Run</span>
+        <select id="runFilter"></select>
+      </label>
+      <label class="field">
+        <span>Status</span>
+        <select id="statusFilter">
+          <option value="all">All statuses</option>
+          <option value="pending">Has pending QA</option>
+          <option value="reviewed">Fully reviewed packet</option>
+          <option value="Pass">Contains pass</option>
+          <option value="Fail">Contains fail</option>
+          <option value="Unsure">Contains unsure</option>
+        </select>
+      </label>
+      <div class="toolbar-actions">
+        <button id="nextUnreviewed" class="primary" type="button">Next unreviewed</button>
+        <button id="exportCsv" type="button">Export CSV</button>
+        <button id="exportJson" type="button">Backup JSON</button>
+        <label class="file-button">Restore JSON<input id="importJson" type="file" accept=".json,application/json"></label>
+        <button id="resetReviews" class="danger" type="button">Reset</button>
+      </div>
+    </section>
+
+    <div class="progress-strip">
+      <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+      <div id="progressCopy" class="progress-copy">0 of 0 QAs reviewed</div>
+    </div>
+
+    <main id="content"></main>
+
+    <div class="footer-note">
+      The page embeds only the compact review dataset, not generation traces. Video bytes are
+      requested only after “Load videos” is pressed. Review state is keyed to dataset
+      <code id="fingerprint"></code>; export a JSON backup periodically if reviewing across machines.
+      If a desktop file preview does not allow the controls to respond, launch the page with
+      <code>open_manual_review.cmd</code>.
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const DATA = __REVIEW_DATA__;
+    const STORAGE_KEY = `egolife.ablationReview.${DATA.dataset_fingerprint}`;
+    const STATUS_VALUES = ["Pending", "Pass", "Fail", "Unsure"];
+    const ERROR_TAGS = [
+      ["wrong_answer", "Wrong answer"],
+      ["unsupported", "Unsupported by evidence"],
+      ["ambiguous", "Ambiguous / multi-answer"],
+      ["asker_leak", "Asker alone can answer"],
+      ["not_two_user", "Not genuinely two-user"],
+      ["wording", "Wording / formality"],
+      ["timestamp", "Timestamp issue"],
+      ["other", "Other"],
+    ];
+    const CSV_COLUMNS = [
+      "evidence_order", "evidence_id", "qa_count_for_evidence", "run",
+      "question_type", "question", "option_A", "option_B", "option_C", "option_D", "option_E",
+      "model_correct_letter", "model_answer", "review_status", "reviewer_answer",
+      "answer_correct", "evidence_grounded", "asker_alone_answerable", "two_user_needed",
+      "wording_formality", "error_tags", "reviewer_notes", "reviewed_at", "qa_id",
+      "source_file", "required_users", "attempt_count", "judge_video_source",
+      "video_1_user", "video_1_url", "video_2_user", "video_2_url", "generator_rationale",
+      "evidence_claims", "referred_timestamps", "single_user_answerability",
+      "combined_answerability", "why_two_users_needed", "review_key",
+    ];
+
+    const els = {
+      evidenceMetric: document.querySelector("#evidenceMetric"),
+      qaMetric: document.querySelector("#qaMetric"),
+      reviewedMetric: document.querySelector("#reviewedMetric"),
+      evidenceSelect: document.querySelector("#evidenceSelect"),
+      toolbarPreviousEvidence: document.querySelector("#toolbarPreviousEvidence"),
+      packetNumber: document.querySelector("#packetNumber"),
+      goPacket: document.querySelector("#goPacket"),
+      toolbarNextEvidence: document.querySelector("#toolbarNextEvidence"),
+      packetPosition: document.querySelector("#packetPosition"),
+      runFilter: document.querySelector("#runFilter"),
+      statusFilter: document.querySelector("#statusFilter"),
+      nextUnreviewed: document.querySelector("#nextUnreviewed"),
+      exportCsv: document.querySelector("#exportCsv"),
+      exportJson: document.querySelector("#exportJson"),
+      importJson: document.querySelector("#importJson"),
+      resetReviews: document.querySelector("#resetReviews"),
+      progressFill: document.querySelector("#progressFill"),
+      progressCopy: document.querySelector("#progressCopy"),
+      content: document.querySelector("#content"),
+      toast: document.querySelector("#toast"),
+      fingerprint: document.querySelector("#fingerprint"),
+    };
+
+    let reviewState = loadReviewState();
+    let visibleEvidence = [...DATA.evidence];
+    let currentEvidenceId = visibleEvidence[0]?.evidence_id || "";
+    let revealAnswers = false;
+    let toastTimer = null;
+
+    function defaultReview() {
+      return {
+        review_status: "Pending",
+        reviewer_answer: "",
+        answer_correct: "Unset",
+        evidence_grounded: "Unset",
+        asker_alone_answerable: "Unset",
+        two_user_needed: "Unset",
+        wording_formality: "Unset",
+        error_tags: [],
+        reviewer_notes: "",
+        reviewed_at: "",
+      };
+    }
+
+    function loadReviewState() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+        if (parsed.dataset_fingerprint !== DATA.dataset_fingerprint || typeof parsed.reviews !== "object") {
+          return { version: 1, dataset_fingerprint: DATA.dataset_fingerprint, reviews: {} };
+        }
+        return parsed;
+      } catch {
+        return { version: 1, dataset_fingerprint: DATA.dataset_fingerprint, reviews: {} };
+      }
+    }
+
+    function saveReviewState() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(reviewState));
+      updateProgress();
+    }
+
+    function getReview(reviewKey) {
+      return { ...defaultReview(), ...(reviewState.reviews[reviewKey] || {}) };
+    }
+
+    function setReview(reviewKey, field, value) {
+      const previous = getReview(reviewKey);
+      const next = { ...previous, [field]: value };
+      if (field === "review_status" && value !== "Pending") {
+        next.reviewed_at = new Date().toISOString();
+      } else if (field === "review_status" && value === "Pending") {
+        next.reviewed_at = "";
+      }
+      reviewState.reviews[reviewKey] = next;
+      saveReviewState();
+      const card = document.querySelector(`[data-review-key="${cssEscape(reviewKey)}"]`);
+      if (card) {
+        card.dataset.status = next.review_status;
+      }
+      refreshFilters(false);
+    }
+
+    function cssEscape(value) {
+      return CSS.escape(String(value));
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function toast(message) {
+      clearTimeout(toastTimer);
+      els.toast.textContent = message;
+      els.toast.classList.add("show");
+      toastTimer = setTimeout(() => els.toast.classList.remove("show"), 2400);
+    }
+
+    function allQas() {
+      return DATA.evidence.flatMap(evidence =>
+        evidence.qas.map(qa => ({ evidence, qa }))
+      );
+    }
+
+    function qasForRun(evidence) {
+      const run = els.runFilter.value;
+      return run === "all" ? evidence.qas : evidence.qas.filter(qa => qa.run_id === run);
+    }
+
+    function evidenceMatchesStatus(evidence) {
+      const status = els.statusFilter.value;
+      const qas = qasForRun(evidence);
+      const reviews = qas.map(qa => getReview(qa.review_key));
+      if (status === "all") return true;
+      if (status === "pending") return reviews.some(review => review.review_status === "Pending");
+      if (status === "reviewed") return reviews.length > 0 && reviews.every(review => review.review_status !== "Pending");
+      return reviews.some(review => review.review_status === status);
+    }
+
+    function refreshFilters(render = true) {
+      visibleEvidence = DATA.evidence.filter(evidence => {
+        const hasRun = qasForRun(evidence).length > 0;
+        return hasRun && evidenceMatchesStatus(evidence);
+      });
+      if (!visibleEvidence.some(evidence => evidence.evidence_id === currentEvidenceId)) {
+        currentEvidenceId = visibleEvidence[0]?.evidence_id || "";
+      }
+      renderEvidenceOptions();
+      if (render) renderCurrentEvidence();
+    }
+
+    function renderEvidenceOptions() {
+      const selected = currentEvidenceId;
+      els.evidenceSelect.innerHTML = visibleEvidence.map(evidence => {
+        const reviews = qasForRun(evidence).map(qa => getReview(qa.review_key));
+        const reviewed = reviews.filter(review => review.review_status !== "Pending").length;
+        return `<option value="${escapeHtml(evidence.evidence_id)}">${String(evidence.evidence_order).padStart(2, "0")} · ${escapeHtml(evidence.evidence_id)} · ${reviewed}/${reviews.length}</option>`;
+      }).join("");
+      els.evidenceSelect.value = selected;
+      els.evidenceSelect.disabled = visibleEvidence.length === 0;
+      updatePacketControls();
+    }
+
+    function updatePacketControls() {
+      const index = visibleEvidence.findIndex(item => item.evidence_id === currentEvidenceId);
+      const hasSelection = index >= 0;
+      els.packetNumber.min = visibleEvidence.length ? "1" : "0";
+      els.packetNumber.max = String(visibleEvidence.length);
+      els.packetNumber.value = hasSelection ? String(index + 1) : "";
+      els.packetNumber.disabled = !hasSelection;
+      els.goPacket.disabled = !hasSelection;
+      els.toolbarPreviousEvidence.disabled = !hasSelection || index === 0;
+      els.toolbarNextEvidence.disabled = !hasSelection || index === visibleEvidence.length - 1;
+      els.packetPosition.textContent = hasSelection
+        ? `${index + 1} / ${visibleEvidence.length}`
+        : `0 / ${visibleEvidence.length}`;
+    }
+
+    function navigateToEvidence(evidenceId) {
+      if (!evidenceId || evidenceId === currentEvidenceId) {
+        updatePacketControls();
+        return;
+      }
+      currentEvidenceId = evidenceId;
+      els.evidenceSelect.value = currentEvidenceId;
+      renderCurrentEvidence();
+      updatePacketControls();
+    }
+
+    function goToPacketNumber() {
+      const position = Number.parseInt(els.packetNumber.value, 10);
+      if (!Number.isInteger(position) || position < 1 || position > visibleEvidence.length) {
+        updatePacketControls();
+        return toast(`Enter a visible packet number from 1 to ${visibleEvidence.length}.`);
+      }
+      navigateToEvidence(visibleEvidence[position - 1].evidence_id);
+    }
+
+    function selectMarkup(field, value, options) {
+      return `<select data-review-field="${escapeHtml(field)}">${options.map(option => {
+        const normalized = typeof option === "string" ? [option, option] : option;
+        return `<option value="${escapeHtml(normalized[0])}"${normalized[0] === value ? " selected" : ""}>${escapeHtml(normalized[1])}</option>`;
+      }).join("")}</select>`;
+    }
+
+    function detailBlock(label, value) {
+      if (!value) return "";
+      return `<div><strong>${escapeHtml(label)}</strong>${escapeHtml(value)}</div>`;
+    }
+
+    function renderQaCard(qa) {
+      const review = getReview(qa.review_key);
+      const letters = ["A", "B", "C", "D", "E"];
+      const options = qa.options.map((option, index) => {
+        const letter = letters[index];
+        return `<li class="option${letter === qa.correct ? " correct" : ""}">
+          <span class="option-letter">${letter}</span>
+          <span>${escapeHtml(option)}</span>
+        </li>`;
+      }).join("");
+      const tags = ERROR_TAGS.map(([tag, label]) => `
+        <label class="tag">
+          <input type="checkbox" data-error-tag="${tag}"${review.error_tags.includes(tag) ? " checked" : ""}>
+          ${escapeHtml(label)}
+        </label>
+      `).join("");
+      return `
+        <article class="qa-card${revealAnswers ? "" : " answers-hidden"}"
+          data-review-key="${escapeHtml(qa.review_key)}"
+          data-status="${escapeHtml(review.review_status)}">
+          <div class="qa-top">
+            <span class="run-badge"><span class="run-dot"></span>${escapeHtml(qa.run)}</span>
+            <span>${escapeHtml(qa.question_type || "neutral")} · attempt ${qa.attempt_count}</span>
+          </div>
+          <div class="qa-body">
+            <p class="question">${escapeHtml(qa.question)}</p>
+            <ol class="options">${options}</ol>
+            <p class="answer-line"><strong>Provided answer:</strong> ${escapeHtml(qa.correct)} · ${escapeHtml(qa.answer)}</p>
+            <details>
+              <summary>Generation rationale and evidence claims</summary>
+              <div class="detail-grid">
+                ${detailBlock("Required users", qa.required_users.join(" · "))}
+                ${detailBlock("Generator rationale", qa.generator_rationale)}
+                ${detailBlock("Evidence claims", qa.evidence_claims)}
+                ${detailBlock("Referred timestamps", qa.referred_timestamps)}
+                ${detailBlock("Single-user answerability", qa.single_user_answerability)}
+                ${detailBlock("Combined answerability", qa.combined_answerability)}
+                ${detailBlock("Why two users were needed", qa.why_two_users_needed)}
+              </div>
+            </details>
+          </div>
+          <div class="review-panel">
+            <div class="review-grid">
+              <label class="review-field">
+                <span>Overall verdict</span>
+                ${selectMarkup("review_status", review.review_status, STATUS_VALUES)}
+              </label>
+              <label class="review-field">
+                <span>Your answer</span>
+                ${selectMarkup("reviewer_answer", review.reviewer_answer, [["", "—"], "A", "B", "C", "D", "E", ["Unclear", "Unclear"]])}
+              </label>
+              <label class="review-field">
+                <span>Model answer correct?</span>
+                ${selectMarkup("answer_correct", review.answer_correct, ["Unset", "Yes", "No", "Unsure"])}
+              </label>
+              <label class="review-field">
+                <span>Evidence grounded?</span>
+                ${selectMarkup("evidence_grounded", review.evidence_grounded, ["Unset", "Yes", "No", "Unsure"])}
+              </label>
+              <label class="review-field">
+                <span>Asker alone answerable?</span>
+                ${selectMarkup("asker_alone_answerable", review.asker_alone_answerable, ["Unset", "No", "Yes", "Unsure"])}
+              </label>
+              <label class="review-field">
+                <span>Two-user evidence needed?</span>
+                ${selectMarkup("two_user_needed", review.two_user_needed, ["Unset", "Yes", "No", "Unsure"])}
+              </label>
+              <label class="review-field">
+                <span>Wording / formality</span>
+                ${selectMarkup("wording_formality", review.wording_formality, ["Unset", "Pass", "Fail", "Unsure"])}
+              </label>
+              <div class="review-field wide">
+                <span>Error tags</span>
+                <div class="tags">${tags}</div>
+              </div>
+              <label class="review-field wide">
+                <span>Reviewer notes</span>
+                <textarea data-review-field="reviewer_notes" placeholder="What is wrong, or why does it pass?">${escapeHtml(review.reviewer_notes)}</textarea>
+              </label>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderVideoCard(video, index) {
+      const meta = [video.agent_dir, video.day, video.clip_clock].filter(Boolean).join(" · ");
+      return `
+        <article class="video-card" data-video-index="${index}">
+          <div class="video-placeholder">Video bytes are not loaded yet.</div>
+          <video controls playsinline preload="none" data-src="${escapeHtml(video.url)}"></video>
+          <div class="video-copy">
+            <strong>${escapeHtml(video.user)}</strong>
+            <span>${escapeHtml(meta)}</span>
+            <a href="${escapeHtml(video.url)}" target="_blank" rel="noopener">Open original source video</a>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderCurrentEvidence() {
+      unloadVideos();
+      if (!currentEvidenceId) {
+        els.content.innerHTML = `<div class="empty">No evidence packets match the current filters.</div>`;
+        return;
+      }
+      const evidence = DATA.evidence.find(item => item.evidence_id === currentEvidenceId);
+      const qas = qasForRun(evidence);
+      const visibleIndex = visibleEvidence.findIndex(item => item.evidence_id === evidence.evidence_id);
+      const reviewed = qas.filter(qa => getReview(qa.review_key).review_status !== "Pending").length;
+      const warnings = evidence.warnings.map(warning => `<div class="warning">${escapeHtml(warning)}</div>`).join("");
+      els.content.innerHTML = `
+        <div class="evidence-shell">
+          <section class="evidence-header">
+            <div>
+              <p class="eyebrow">Packet ${evidence.evidence_order} of ${DATA.evidence.length}</p>
+              <h2>${escapeHtml(evidence.evidence_id)}</h2>
+              <div class="evidence-meta">
+                <span class="pill">${qas.length} visible QA${qas.length === 1 ? "" : "s"}</span>
+                <span class="pill">${reviewed}/${qas.length} reviewed</span>
+                ${evidence.runs.map(run => `<span class="pill">${escapeHtml(run)}</span>`).join("")}
+              </div>
+            </div>
+            <div class="evidence-nav">
+              <button id="copyEvidenceId" type="button">Copy ID</button>
+              <button id="previousEvidence" type="button"${visibleIndex <= 0 ? " disabled" : ""}>← Previous</button>
+              <button id="nextEvidence" type="button"${visibleIndex < 0 || visibleIndex >= visibleEvidence.length - 1 ? " disabled" : ""}>Next →</button>
+            </div>
+          </section>
+
+          <section class="video-panel">
+            <div class="panel-head">
+              <div>
+                <h3>Original source videos</h3>
+                <p>These are the base 30-second evidence clips, not the ablation-specific pruned media.</p>
+              </div>
+              <div class="video-actions">
+                <button id="loadVideos" class="primary" type="button">Load videos</button>
+                <button id="playBoth" type="button">Play both</button>
+                <button id="pauseBoth" type="button">Pause both</button>
+                <button id="syncVideos" type="button">Sync times</button>
+              </div>
+            </div>
+            <div class="video-grid">${evidence.videos.map(renderVideoCard).join("")}</div>
+            ${warnings}
+          </section>
+
+          <section class="qa-section">
+            <div class="qa-heading">
+              <h3>Accepted questions for this evidence</h3>
+              <label class="toggle"><input id="revealAnswers" type="checkbox"${revealAnswers ? " checked" : ""}>Highlight provided option</label>
+            </div>
+            <div class="qa-grid">${qas.map(renderQaCard).join("")}</div>
+          </section>
+        </div>
+      `;
+      bindEvidenceEvents();
+      window.scrollTo({ top: 0, behavior: "instant" });
+    }
+
+    function bindEvidenceEvents() {
+      document.querySelector("#copyEvidenceId")?.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(currentEvidenceId);
+        toast("Evidence ID copied.");
+      });
+      document.querySelector("#previousEvidence")?.addEventListener("click", () => moveEvidence(-1));
+      document.querySelector("#nextEvidence")?.addEventListener("click", () => moveEvidence(1));
+      document.querySelector("#loadVideos")?.addEventListener("click", loadVideos);
+      document.querySelector("#playBoth")?.addEventListener("click", () => {
+        loadedVideos().forEach(video => video.play().catch(() => {}));
+      });
+      document.querySelector("#pauseBoth")?.addEventListener("click", () => {
+        loadedVideos().forEach(video => video.pause());
+      });
+      document.querySelector("#syncVideos")?.addEventListener("click", () => {
+        const videos = loadedVideos();
+        if (videos.length < 2) return toast("Load both videos first.");
+        const target = Math.min(...videos.map(video => Number.isFinite(video.currentTime) ? video.currentTime : 0));
+        videos.forEach(video => { video.currentTime = target; });
+        toast(`Videos synchronized at ${target.toFixed(1)}s.`);
+      });
+      document.querySelector("#revealAnswers")?.addEventListener("change", event => {
+        revealAnswers = event.target.checked;
+        document.querySelectorAll(".qa-card").forEach(card =>
+          card.classList.toggle("answers-hidden", !revealAnswers)
+        );
+      });
+      document.querySelectorAll("[data-review-field]").forEach(control => {
+        const card = control.closest("[data-review-key]");
+        const key = card.dataset.reviewKey;
+        const field = control.dataset.reviewField;
+        const eventName = control.tagName === "TEXTAREA" ? "input" : "change";
+        control.addEventListener(eventName, () => setReview(key, field, control.value));
+      });
+      document.querySelectorAll("[data-error-tag]").forEach(control => {
+        const card = control.closest("[data-review-key]");
+        const key = card.dataset.reviewKey;
+        control.addEventListener("change", () => {
+          const selected = [...card.querySelectorAll("[data-error-tag]:checked")]
+            .map(input => input.dataset.errorTag);
+          setReview(key, "error_tags", selected);
+        });
+      });
+    }
+
+    function loadedVideos() {
+      return [...document.querySelectorAll(".video-card.loaded video")];
+    }
+
+    function loadVideos() {
+      document.querySelectorAll(".video-card").forEach(card => {
+        const video = card.querySelector("video");
+        if (!video.src) {
+          video.src = video.dataset.src;
+          video.load();
+        }
+        card.classList.add("loaded");
+      });
+      toast("Source videos loaded.");
+    }
+
+    function unloadVideos() {
+      document.querySelectorAll(".video-card video").forEach(video => {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      });
+    }
+
+    function moveEvidence(delta) {
+      const index = visibleEvidence.findIndex(item => item.evidence_id === currentEvidenceId);
+      const next = visibleEvidence[index + delta];
+      if (!next) return;
+      navigateToEvidence(next.evidence_id);
+    }
+
+    function updateProgress() {
+      const qas = allQas();
+      const reviewed = qas.filter(({ qa }) => getReview(qa.review_key).review_status !== "Pending").length;
+      const pass = qas.filter(({ qa }) => getReview(qa.review_key).review_status === "Pass").length;
+      const fail = qas.filter(({ qa }) => getReview(qa.review_key).review_status === "Fail").length;
+      const unsure = qas.filter(({ qa }) => getReview(qa.review_key).review_status === "Unsure").length;
+      const percentage = qas.length ? reviewed / qas.length * 100 : 0;
+      els.evidenceMetric.textContent = DATA.summary.evidence_count;
+      els.qaMetric.textContent = DATA.summary.qa_count;
+      els.reviewedMetric.textContent = reviewed;
+      els.progressFill.style.width = `${percentage}%`;
+      els.progressCopy.textContent = `${reviewed} of ${qas.length} QAs reviewed · ${pass} pass · ${fail} fail · ${unsure} unsure`;
+    }
+
+    function reviewRows() {
+      const rows = [];
+      for (const evidence of DATA.evidence) {
+        for (const qa of evidence.qas) {
+          const review = getReview(qa.review_key);
+          const videos = evidence.videos;
+          rows.push({
+            evidence_order: evidence.evidence_order,
+            evidence_id: evidence.evidence_id,
+            qa_count_for_evidence: evidence.qa_count,
+            run: qa.run,
+            question_type: qa.question_type,
+            question: qa.question,
+            option_A: qa.options[0] || "",
+            option_B: qa.options[1] || "",
+            option_C: qa.options[2] || "",
+            option_D: qa.options[3] || "",
+            option_E: qa.options[4] || "",
+            model_correct_letter: qa.correct,
+            model_answer: qa.answer,
+            review_status: review.review_status,
+            reviewer_answer: review.reviewer_answer,
+            answer_correct: review.answer_correct,
+            evidence_grounded: review.evidence_grounded,
+            asker_alone_answerable: review.asker_alone_answerable,
+            two_user_needed: review.two_user_needed,
+            wording_formality: review.wording_formality,
+            error_tags: review.error_tags.join("|"),
+            reviewer_notes: review.reviewer_notes,
+            reviewed_at: review.reviewed_at,
+            qa_id: qa.qa_id,
+            source_file: qa.source_file,
+            required_users: qa.required_users.join(" | "),
+            attempt_count: qa.attempt_count,
+            judge_video_source: qa.judge_video_source,
+            video_1_user: videos[0]?.user || "",
+            video_1_url: videos[0]?.url || "",
+            video_2_user: videos[1]?.user || "",
+            video_2_url: videos[1]?.url || "",
+            generator_rationale: qa.generator_rationale,
+            evidence_claims: qa.evidence_claims,
+            referred_timestamps: qa.referred_timestamps,
+            single_user_answerability: qa.single_user_answerability,
+            combined_answerability: qa.combined_answerability,
+            why_two_users_needed: qa.why_two_users_needed,
+            review_key: qa.review_key,
+          });
+        }
+      }
+      return rows;
+    }
+
+    function csvCell(value) {
+      const text = String(value ?? "");
+      return `"${text.replaceAll('"', '""')}"`;
+    }
+
+    function download(name, content, type) {
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = name;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function exportCsv() {
+      const rows = reviewRows();
+      const csv = [
+        CSV_COLUMNS.map(csvCell).join(","),
+        ...rows.map(row => CSV_COLUMNS.map(column => csvCell(row[column])).join(",")),
+      ].join("\r\n");
+      download(`ablation_manual_review_${DATA.dataset_fingerprint}.csv`, `\ufeff${csv}`, "text/csv;charset=utf-8");
+      toast(`Exported ${rows.length} QA rows for Excel.`);
+    }
+
+    function exportJson() {
+      const payload = {
+        version: 1,
+        dataset_fingerprint: DATA.dataset_fingerprint,
+        exported_at: new Date().toISOString(),
+        reviews: reviewState.reviews,
+      };
+      download(
+        `ablation_manual_review_backup_${DATA.dataset_fingerprint}.json`,
+        JSON.stringify(payload, null, 2),
+        "application/json"
+      );
+      toast("Review backup exported.");
+    }
+
+    async function importJson(file) {
+      const parsed = JSON.parse(await file.text());
+      if (parsed.dataset_fingerprint !== DATA.dataset_fingerprint) {
+        throw new Error("The backup belongs to a different review dataset.");
+      }
+      if (!parsed.reviews || typeof parsed.reviews !== "object") {
+        throw new Error("The backup does not contain review records.");
+      }
+      reviewState = {
+        version: 1,
+        dataset_fingerprint: DATA.dataset_fingerprint,
+        reviews: parsed.reviews,
+      };
+      saveReviewState();
+      refreshFilters();
+      toast("Review backup restored.");
+    }
+
+    function nextUnreviewed() {
+      const run = els.runFilter.value;
+      const candidate = DATA.evidence.find(evidence =>
+        evidence.qas.some(qa =>
+          (run === "all" || qa.run_id === run) &&
+          getReview(qa.review_key).review_status === "Pending"
+        )
+      );
+      if (!candidate) return toast("No pending QAs remain for this run filter.");
+      els.statusFilter.value = "all";
+      currentEvidenceId = candidate.evidence_id;
+      refreshFilters();
+    }
+
+    function initialize() {
+      els.fingerprint.textContent = DATA.dataset_fingerprint;
+      els.runFilter.innerHTML = [
+        `<option value="all">All runs</option>`,
+        ...DATA.runs.map(run => `<option value="${escapeHtml(run.run_id)}">${escapeHtml(run.run)} · ${run.accepted_qa_count}</option>`),
+      ].join("");
+      const navigateFromEvidenceSelect = () => navigateToEvidence(els.evidenceSelect.value);
+      els.evidenceSelect.addEventListener("input", navigateFromEvidenceSelect);
+      els.evidenceSelect.addEventListener("change", navigateFromEvidenceSelect);
+      els.toolbarPreviousEvidence.addEventListener("click", () => moveEvidence(-1));
+      els.toolbarNextEvidence.addEventListener("click", () => moveEvidence(1));
+      els.goPacket.addEventListener("click", goToPacketNumber);
+      els.packetNumber.addEventListener("keydown", event => {
+        if (event.key === "Enter") goToPacketNumber();
+      });
+      els.runFilter.addEventListener("change", () => refreshFilters());
+      els.statusFilter.addEventListener("change", () => refreshFilters());
+      els.nextUnreviewed.addEventListener("click", nextUnreviewed);
+      els.exportCsv.addEventListener("click", exportCsv);
+      els.exportJson.addEventListener("click", exportJson);
+      els.importJson.addEventListener("change", async () => {
+        const file = els.importJson.files?.[0];
+        if (!file) return;
+        try {
+          await importJson(file);
+        } catch (error) {
+          toast(error.message || "Could not restore that backup.");
+        } finally {
+          els.importJson.value = "";
+        }
+      });
+      els.resetReviews.addEventListener("click", () => {
+        if (!confirm("Delete all locally saved reviews for this dataset?")) return;
+        reviewState = { version: 1, dataset_fingerprint: DATA.dataset_fingerprint, reviews: {} };
+        saveReviewState();
+        refreshFilters();
+        toast("Local review state reset.");
+      });
+      document.addEventListener("keydown", event => {
+        if (event.target.matches("input, select, textarea")) return;
+        if (event.key === "[") moveEvidence(-1);
+        if (event.key === "]") moveEvidence(1);
+      });
+      updateProgress();
+      refreshFilters();
+    }
+
+    initialize();
+  </script>
+</body>
+</html>

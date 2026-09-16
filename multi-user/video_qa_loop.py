@@ -22,11 +22,11 @@ from typing import Any, Callable, Sequence
 from .evidence import hydrate_deferred_gaze_summaries
 from .io_utils import append_jsonl, iter_jsonl, write_json, write_jsonl
 from .prompts import (
+    ARCHIVED_COMBINED_JUDGE_SCHEMA,
+    ARCHIVED_QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
     DEFAULT_QUALITY_QUOTA,
     GENERATION_MODES,
-    JUDGE_SCHEMA,
     JUDGE_OUTPUT_SCHEMA_MARKER,
-    QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
     build_answerability_condition_aggregation_prompt,
     build_answerability_fact_plan_prompt,
     build_answerability_prompt,
@@ -37,7 +37,6 @@ from .prompts import (
     build_evidence_groundedness_judge_prompt,
     build_judge_json_repair_prompt,
     build_qa_formality_judge_prompt,
-    build_sequential_direct_judge_prompt,
     build_video_generation_prompt,
     formality_participant_names,
     judge_schema_for_check,
@@ -193,6 +192,8 @@ def compact_answerability_for_checkpoint(value: Any) -> dict[str, Any]:
         "evaluations": evaluations,
         "gate": value.get("gate", {}),
     }
+    if value.get("condition_execution") is not None:
+        compact["condition_execution"] = value.get("condition_execution")
     if isinstance(value.get("fact_plan"), dict):
         compact["fact_plan"] = dict(value["fact_plan"])
     if isinstance(value.get("user_audits"), list):
@@ -671,9 +672,16 @@ def clip_video_path(clip: dict[str, Any], *, media_role: str = "generator") -> s
     return existing_path(clip.get("local_video"))
 
 
-def clip_image_paths(clip: dict[str, Any]) -> list[str]:
+def clip_image_paths(
+    clip: dict[str, Any],
+    *,
+    media_role: str = "generator",
+) -> list[str]:
+    frame_rows = clip.get("frames", [])
+    if media_role == "full" and isinstance(clip.get("full_frames"), list):
+        frame_rows = clip["full_frames"]
     paths = []
-    for frame in clip.get("frames", []):
+    for frame in frame_rows:
         path = existing_path(frame.get("path"))
         if path:
             paths.append(path)
@@ -695,7 +703,11 @@ def media_for_clips(
     media_role: str = "generator",
 ) -> tuple[list[str], list[str]]:
     videos = [path for clip in clips if (path := clip_video_path(clip, media_role=media_role))]
-    images = [path for clip in clips for path in clip_image_paths(clip)]
+    images = [
+        path
+        for clip in clips
+        for path in clip_image_paths(clip, media_role=media_role)
+    ]
     if media_role == "generator" and clips_require_frame_inputs(clips):
         return images, []
     if backend in {"openai-compatible-local", "openrouter"} and not allow_openai_video_input:
@@ -871,6 +883,7 @@ def video_evidence_for_packet(packet: dict[str, Any]) -> list[dict[str, Any]]:
                     }
                     for frame in clip.get("frames", [])
                 ],
+                "full_sampled_frame_count": len(clip.get("full_frames") or []),
             }
         )
     return rows
@@ -900,14 +913,35 @@ def six_user_role_metadata(
                 f"expected {expected_value!r}, got {actual_value!r}"
             )
 
-    expected_media_roles = {
-        required_users[0]: "speaker_full_unpruned_sampled_frames",
-        required_users[1]: "provider_full_unpruned_sampled_frames",
-        required_users[2]: "provider_full_unpruned_sampled_frames",
-        required_users[3]: "provider_full_unpruned_sampled_frames",
-        required_users[4]: "provider_full_unpruned_sampled_frames",
-        required_users[5]: "provider_full_unpruned_sampled_frames",
+    asker_relative_provider_pruning = (
+        packet.get("preprocessed_generator_media_mode")
+        == "asker_full_provider_pruned"
+        or packet.get("candidate_type")
+        == "six_user_rlhf_asker_conditioned_generation"
+    )
+    legacy_cluster_pruning_roles = {
+        required_users[0]: "speaker_all_clustering_frames",
+        **{
+            user: "provider_retained_cluster_frames"
+            for user in required_users[1:]
+        },
     }
+    legacy_cluster_provider_pruning = (
+        packet.get("media_roles") == legacy_cluster_pruning_roles
+    )
+    provider_media_role = (
+        "provider_asker_relative_pruned_sampled_frames"
+        if asker_relative_provider_pruning
+        else "provider_full_unpruned_sampled_frames"
+    )
+    expected_media_roles = (
+        legacy_cluster_pruning_roles
+        if legacy_cluster_provider_pruning
+        else {
+            required_users[0]: "speaker_full_unpruned_sampled_frames",
+            **{user: provider_media_role for user in required_users[1:]},
+        }
+    )
     media_roles = packet.get("media_roles")
     if media_roles != expected_media_roles:
         raise ValueError(
@@ -915,10 +949,65 @@ def six_user_role_metadata(
             f"roles: expected {expected_media_roles!r}, got {media_roles!r}"
         )
 
-    for clip in packet.get("clips") or []:
+    for clip_index, clip in enumerate(packet.get("clips") or []):
         frames = list(clip.get("frames") or [])
+        full_frames = list(clip.get("full_frames") or frames)
         context_sampling = clip.get("context_sampling") or {}
         temporal_pruning = clip.get("temporal_pruning") or {}
+        if legacy_cluster_provider_pruning:
+            is_asker = clip_index == 0
+            expected_mode = (
+                "all_clustering_frames_only"
+                if is_asker
+                else "retained_cluster_frames_only"
+            )
+            if clip.get("generator_media_mode") != expected_mode:
+                raise ValueError(
+                    "legacy six-user clip has the wrong asker/provider frame mode"
+                )
+            if clip.get("is_pruned") is not (not is_asker):
+                raise ValueError(
+                    "legacy six-user pruning flag disagrees with its asker/provider role"
+                )
+            continue
+        if asker_relative_provider_pruning:
+            is_asker = clip_index == 0
+            expected_mode = (
+                "all_clustering_frames_only"
+                if is_asker
+                else "retained_cluster_frames_only"
+            )
+            expected_policy = (
+                "complete_full_unpruned_sampled_frames"
+                if is_asker
+                else "asker_relative_provider_cluster_pruning"
+            )
+            if clip.get("generator_media_mode") != expected_mode:
+                raise ValueError(
+                    "RLHF six-user generator clip has the wrong asker/provider frame mode"
+                )
+            if clip.get("is_pruned") is not (not is_asker):
+                raise ValueError(
+                    "RLHF six-user generator pruning flag disagrees with its asker/provider role"
+                )
+            if context_sampling.get("policy") != expected_policy:
+                raise ValueError(
+                    "RLHF six-user generator context policy disagrees with its media role"
+                )
+            if int(context_sampling.get("source_frame_count") or 0) != len(full_frames):
+                raise ValueError("RLHF six-user full review frame count does not match inputs")
+            if int(context_sampling.get("model_input_frame_count") or 0) != len(frames):
+                raise ValueError("RLHF six-user generator frame count does not match inputs")
+            if is_asker and frames != full_frames:
+                raise ValueError("RLHF six-user asker input must remain fully unpruned")
+            if temporal_pruning.get("analysis_pruning_applied_to_generator") is not (
+                not is_asker
+            ):
+                raise ValueError(
+                    "RLHF analysis-pruning flag disagrees with its asker/provider role"
+                )
+            continue
+
         if clip.get("generator_media_mode") != "full_unpruned_sampled_frames_only":
             raise ValueError("six-user generator media must use full unpruned sampled frames")
         if clip.get("is_pruned") is not False:
@@ -932,7 +1021,15 @@ def six_user_role_metadata(
         if temporal_pruning.get("analysis_pruning_applied_to_generator") is not False:
             raise ValueError("analysis pruning must not remove six-user generator inputs")
 
-    return {**expected, "media_roles": dict(expected_media_roles)}
+    return {
+        **expected,
+        "media_roles": dict(expected_media_roles),
+        **(
+            {"generator_media_mode": "asker_full_provider_pruned"}
+            if asker_relative_provider_pruning
+            else {}
+        ),
+    }
 
 
 def human_audit_packet(packet: dict[str, Any]) -> dict[str, Any]:
@@ -1513,6 +1610,34 @@ def minimum_required_users_from_fact_audits(
     return list(required_users)
 
 
+def answerability_sufficiency_output_errors(value: dict[str, Any]) -> list[str]:
+    """Validate the legacy zero-shot answerability model-output contract."""
+
+    expected_fields = [
+        "answerable",
+        "reason",
+        "available_evidence",
+        "missing_evidence",
+    ]
+    errors = []
+    if list(value) != expected_fields:
+        errors.append(
+            "answerability fields must be exactly answerable, reason, "
+            "available_evidence, missing_evidence in that order"
+        )
+    if not isinstance(value.get("answerable"), bool):
+        errors.append("answerable must be a JSON boolean")
+    if not isinstance(value.get("reason"), str) or not value["reason"].strip():
+        errors.append("reason must be a non-empty, condition-specific string")
+    for field in ("available_evidence", "missing_evidence"):
+        items = value.get(field)
+        if not isinstance(items, list):
+            errors.append(f"{field} must be an array")
+        elif any(not isinstance(item, str) or not item.strip() for item in items):
+            errors.append(f"{field} entries must be non-empty strings")
+    return errors
+
+
 def answerability_gate(
     qa_item: dict[str, Any],
     evaluations: list[dict[str, Any]],
@@ -1554,6 +1679,9 @@ def answerability_gate(
             def parsed_direct_sufficiency(
                 row: dict[str, Any],
             ) -> tuple[bool | None, str | None]:
+                contract_error = row.get("answerability_contract_error")
+                if contract_error:
+                    return None, str(contract_error)
                 forbidden_fields = [
                     key
                     for key in ("choice", "answer", "answer_text", "option", "correct")
@@ -1908,12 +2036,11 @@ def judge_gate(
     *,
     required_checks: tuple[str, ...] = BLOCKING_JUDGE_CHECKS,
 ) -> dict[str, Any]:
-    """Deterministically gate structured judger output.
+    """Deterministically gate the code-normalized aggregate review record.
 
-    The model still proposes review_passed, but when structured checks are
-    present the checks are authoritative. Some VLM outputs mark every blocking
-    check PASS while leaving the top-level review_passed flag false; that flag
-    is treated as a diagnostic inconsistency rather than a veto.
+    Production model calls emit a flat first-verdict object. The merger converts
+    each verdict into ``checks.<judge>.status`` and computes ``review_passed``;
+    historical nested artifacts remain readable through the compatibility path.
     """
 
     checks = judge.get("checks")
@@ -2023,11 +2150,7 @@ def validate_first_verdict_sidecar_generation(
     prompt: str,
     check_name: str,
 ) -> dict[str, Any]:
-    """Validate a detailed sidecar judge whose first field is its real verdict.
-
-    The experiment is invalid unless lowercase pass/fail is the first generated
-    verdict and the later detailed check agrees with that authoritative field.
-    """
+    """Validate a first-verdict judge and its captured verdict-token logits."""
 
     raw_output = str(generation.get("text") or "")
     source_signal = generation.get("choice_logits")
@@ -2080,81 +2203,28 @@ def validate_first_verdict_sidecar_generation(
     if isinstance(expected_schema, dict) and isinstance(parsed, dict):
         require_schema_keys(expected_schema, parsed)
 
-    nested_status = None
+    nested_status = None  # Historical result field retained for artifact readers.
     if isinstance(parsed, dict) and parsed_verdict in FIRST_VERDICT_CHOICES:
-        checks = parsed.get("checks")
-        check = checks.get(check_name) if isinstance(checks, dict) else None
-        if not isinstance(check, dict):
-            output_contract_errors.append(f"checks.{check_name} must be an object")
+        if list(parsed) != ["verdict", "reason", "fix"]:
+            output_contract_errors.append(
+                "judge fields must be exactly verdict, reason, fix in that order"
+            )
+        reason = parsed.get("reason")
+        fix = parsed.get("fix")
+        if parsed_verdict == "pass":
+            if reason is not None:
+                output_contract_errors.append("pass verdict requires reason to be null")
+            if fix is not None:
+                output_contract_errors.append("pass verdict requires fix to be null")
         else:
-            reason = check.get("reason")
-            fix = check.get("fix")
             if not isinstance(reason, str) or not reason.strip():
                 output_contract_errors.append(
-                    f"checks.{check_name}.reason must be a non-empty string"
+                    "fail verdict requires a non-empty, instance-specific reason"
                 )
-            if not isinstance(fix, str):
-                output_contract_errors.append(f"checks.{check_name}.fix must be a string")
-            semantic_subchecks = check.get("semantic_subchecks")
-            if semantic_subchecks is not None:
-                if not isinstance(semantic_subchecks, dict):
-                    output_contract_errors.append(
-                        f"checks.{check_name}.semantic_subchecks must be an object"
-                    )
-                else:
-                    for subcheck_name, subcheck in semantic_subchecks.items():
-                        if not isinstance(subcheck, dict):
-                            output_contract_errors.append(
-                                f"checks.{check_name}.semantic_subchecks."
-                                f"{subcheck_name} must be an object"
-                            )
-                            continue
-                        subcheck_status = str(
-                            subcheck.get("status") or ""
-                        ).strip().upper()
-                        if subcheck_status not in {"PASS", "FAIL"}:
-                            output_contract_errors.append(
-                                f"checks.{check_name}.semantic_subchecks."
-                                f"{subcheck_name}.status must be PASS or FAIL"
-                            )
-                        subcheck_reason = subcheck.get("reason")
-                        if (
-                            not isinstance(subcheck_reason, str)
-                            or not subcheck_reason.strip()
-                        ):
-                            output_contract_errors.append(
-                                f"checks.{check_name}.semantic_subchecks."
-                                f"{subcheck_name}.reason must be a non-empty string"
-                            )
-        nested_status = (
-            str(check.get("status") or "").strip().upper()
-            if isinstance(check, dict)
-            else None
-        )
-        if nested_status not in {"PASS", "FAIL"}:
-            output_contract_errors.append(
-                f"checks.{check_name}.status must be PASS or FAIL"
-            )
-        if nested_status in {"PASS", "FAIL"} and nested_status != parsed_verdict.upper():
-            output_contract_errors.append(
-                "authoritative verdict disagrees with the later detailed check status"
-            )
-        blocking_failures = parsed.get("blocking_failures")
-        if not isinstance(blocking_failures, list):
-            output_contract_errors.append("blocking_failures must be an array")
-        else:
-            if parsed_verdict == "pass" and blocking_failures:
+            if not isinstance(fix, str) or not fix.strip():
                 output_contract_errors.append(
-                    "pass verdict must not list blocking_failures"
+                    "fail verdict requires a non-empty, failure-specific fix"
                 )
-            if parsed_verdict == "fail" and check_name not in blocking_failures:
-                output_contract_errors.append(
-                    "fail verdict must list the failed judge in blocking_failures"
-                )
-        if not isinstance(parsed.get("feedback_to_generator"), str):
-            output_contract_errors.append("feedback_to_generator must be a string")
-    else:
-        check = None
 
     field_name = str(signal.get("field_name") or "")
     if field_name != FIRST_VERDICT_FIELD:
@@ -2198,7 +2268,7 @@ def validate_first_verdict_sidecar_generation(
             "available": not errors,
             "reason": "; ".join(dict.fromkeys(errors)),
             "probe_version": FIRST_VERDICT_ENTROPY_VERSION,
-            "measurement_context": "authoritative_first_detailed_judge_verdict",
+            "measurement_context": "authoritative_first_judge_verdict",
             "field_name": FIRST_VERDICT_FIELD,
             "prior_generated_verdict": prior_verdict,
             "probe_output_contract_valid": not output_contract_errors,
@@ -2644,19 +2714,10 @@ def attach_decision_uncertainty(
 
 
 def failed_single_judge(check_name: str, reason: str, *, raw_output: str | None = None) -> dict[str, Any]:
-    failed_check = {
-        "status": "FAIL",
-        "reason": reason,
-        "fix": f"Repair the question-answer item so the {check_name} judge can pass.",
-    }
     judge = {
-        "review_passed": False,
-        "checks": {
-            check_name: failed_check
-        },
-        "blocking_failures": [check_name],
-        "why_generator_asked_this": "",
-        "feedback_to_generator": reason,
+        "verdict": "fail",
+        "reason": reason,
+        "fix": f"Retry the {check_name} judge with the required first-verdict JSON contract.",
     }
     if raw_output is not None:
         judge["raw_output"] = raw_output
@@ -2667,51 +2728,30 @@ def single_judge_output_errors(judge: dict[str, Any], check_name: str) -> list[s
     """Validate the production JSON contract before a judge result reaches the merger."""
 
     errors = []
-    if not isinstance(judge.get("review_passed"), bool):
-        errors.append("review_passed must be boolean")
-    checks = judge.get("checks")
-    check = checks.get(check_name) if isinstance(checks, dict) else None
-    if not isinstance(check, dict):
-        errors.append(f"checks.{check_name} must be an object")
+    if check_name not in {"qa_formality", "evidence_groundedness"}:
+        errors.append(f"unsupported production judge: {check_name}")
+    if not judge or list(judge) != ["verdict", "reason", "fix"]:
+        errors.append("judge fields must be exactly verdict, reason, fix in that order")
+    verdict = judge.get("verdict")
+    if verdict not in {"pass", "fail"}:
+        errors.append("verdict must be lowercase pass or fail")
+        return errors
+    reason = judge.get("reason")
+    fix = judge.get("fix")
+    if verdict == "pass":
+        if reason is not None:
+            errors.append("pass verdict requires reason to be null")
+        if fix is not None:
+            errors.append("pass verdict requires fix to be null")
     else:
-        status = str(check.get("status") or "").strip().upper()
-        if status not in {"PASS", "FAIL"}:
-            errors.append(f"checks.{check_name}.status must be PASS or FAIL")
-        reason = check.get("reason")
         if not isinstance(reason, str) or not reason.strip():
-            errors.append(f"checks.{check_name}.reason must be a non-empty string")
-        fix = check.get("fix")
-        if not isinstance(fix, str):
-            errors.append(f"checks.{check_name}.fix must be a string")
-        if check_name == "qa_formality":
-            semantic_subchecks = check.get("semantic_subchecks")
-            if not isinstance(semantic_subchecks, dict):
-                errors.append("checks.qa_formality.semantic_subchecks must be an object")
-            else:
-                for subcheck_name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES:
-                    subcheck = semantic_subchecks.get(subcheck_name)
-                    if not isinstance(subcheck, dict):
-                        errors.append(
-                            f"checks.qa_formality.semantic_subchecks.{subcheck_name} "
-                            "must be an object"
-                        )
-                        continue
-                    subcheck_status = str(subcheck.get("status") or "").strip().upper()
-                    if subcheck_status not in {"PASS", "FAIL"}:
-                        errors.append(
-                            f"checks.qa_formality.semantic_subchecks.{subcheck_name}.status "
-                            "must be PASS or FAIL"
-                        )
-                    subcheck_reason = subcheck.get("reason")
-                    if not isinstance(subcheck_reason, str) or not subcheck_reason.strip():
-                        errors.append(
-                            f"checks.qa_formality.semantic_subchecks.{subcheck_name}.reason "
-                            "must be a non-empty string"
-                        )
-    if not isinstance(judge.get("blocking_failures"), list):
-        errors.append("blocking_failures must be an array")
-    if not isinstance(judge.get("feedback_to_generator"), str):
-        errors.append("feedback_to_generator must be a string")
+            errors.append("fail verdict requires a non-empty, instance-specific reason")
+        elif reason.strip().casefold().rstrip(".") == (
+            "the decisive reason this candidate fails this judge"
+        ):
+            errors.append("fail verdict reason cannot be a generic placeholder")
+        if not isinstance(fix, str) or not fix.strip():
+            errors.append("fail verdict requires a non-empty, failure-specific fix")
     return errors
 
 
@@ -2897,11 +2937,47 @@ def run_model_judge_branch(
 
 
 def combined_direct_judge_output_errors(judge: dict[str, Any]) -> list[str]:
-    """Validate the one-call qa_formality + evidence_groundedness contract."""
+    """Validate the archived one-call combined contract for old artifacts only."""
 
     errors = []
+    if not isinstance(judge.get("review_passed"), bool):
+        errors.append("review_passed must be boolean")
+    checks = judge.get("checks")
     for check_name in ("qa_formality", "evidence_groundedness"):
-        errors.extend(single_judge_output_errors(judge, check_name))
+        check = checks.get(check_name) if isinstance(checks, dict) else None
+        if not isinstance(check, dict):
+            errors.append(f"checks.{check_name} must be an object")
+            continue
+        if str(check.get("status") or "").strip().upper() not in {"PASS", "FAIL"}:
+            errors.append(f"checks.{check_name}.status must be PASS or FAIL")
+        if not isinstance(check.get("reason"), str) or not check["reason"].strip():
+            errors.append(f"checks.{check_name}.reason must be a non-empty string")
+        if not isinstance(check.get("fix"), str):
+            errors.append(f"checks.{check_name}.fix must be a string")
+        if check_name == "qa_formality":
+            semantic = check.get("semantic_subchecks")
+            if not isinstance(semantic, dict):
+                errors.append("checks.qa_formality.semantic_subchecks must be an object")
+            else:
+                for name in ARCHIVED_QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES:
+                    value = semantic.get(name)
+                    if not isinstance(value, dict):
+                        errors.append(
+                            f"checks.qa_formality.semantic_subchecks.{name} must be an object"
+                        )
+                        continue
+                    if str(value.get("status") or "").strip().upper() not in {"PASS", "FAIL"}:
+                        errors.append(
+                            f"checks.qa_formality.semantic_subchecks.{name}.status must be PASS or FAIL"
+                        )
+                    if not isinstance(value.get("reason"), str) or not value["reason"].strip():
+                        errors.append(
+                            f"checks.qa_formality.semantic_subchecks.{name}.reason must be a non-empty string"
+                        )
+    if not isinstance(judge.get("blocking_failures"), list):
+        errors.append("blocking_failures must be an array")
+    if not isinstance(judge.get("feedback_to_generator"), str):
+        errors.append("feedback_to_generator must be a string")
     return list(dict.fromkeys(errors))
 
 
@@ -2919,7 +2995,7 @@ def parse_combined_direct_judge_output(raw: str) -> dict[str, Any]:
 def failed_combined_direct_judge(reason: str) -> dict[str, Any]:
     semantic_subchecks = {
         name: {"status": "FAIL", "reason": reason}
-        for name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
+        for name in ARCHIVED_QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
     }
     return {
         "review_passed": False,
@@ -2983,7 +3059,10 @@ def run_combined_direct_judge(
             "succeeded": False,
             "initial_error": f"{type(initial_exc).__name__}: {initial_exc}",
         }
-        repair_prompt = build_judge_json_repair_prompt(raw, JUDGE_SCHEMA)
+        repair_prompt = build_judge_json_repair_prompt(
+            raw,
+            ARCHIVED_COMBINED_JUDGE_SCHEMA,
+        )
         repair_start = time.time()
         print(
             "qa_format_repair_start "
@@ -3044,6 +3123,21 @@ def check_from_single_judge(
             emitted_status=emitted_status,
         )
 
+    verdict = judge.get("verdict")
+    if verdict in {"pass", "fail"}:
+        status = str(verdict).upper()
+        return finalize(
+            {
+                "status": status,
+                "reason": judge.get("reason"),
+                "fix": judge.get("fix"),
+            },
+            emitted_status=status,
+        )
+
+    # Historical artifacts used a nested checks.<judge>.status contract. Keep
+    # read compatibility so old samples remain auditable, but production parsing
+    # no longer accepts this shape from a live judge call.
     checks = judge.get("checks")
     if isinstance(checks, dict) and isinstance(checks.get(check_name), dict):
         check = dict(checks[check_name])
@@ -3052,8 +3146,8 @@ def check_from_single_judge(
             return finalize(
                 {
                     "status": "FAIL",
-                    "reason": f"{check_name} judge did not return status PASS or FAIL",
-                    "fix": f"Return checks.{check_name}.status as PASS or FAIL.",
+                    "reason": f"Archived {check_name} output did not contain status PASS or FAIL.",
+                    "fix": "Return verdict first as lowercase pass or fail, followed by reason and fix.",
                 }
             )
         check["status"] = status
@@ -3061,8 +3155,8 @@ def check_from_single_judge(
     return finalize(
         {
             "status": "FAIL",
-            "reason": f"{check_name} judge did not return checks.{check_name}",
-            "fix": f"Return a valid {check_name} check object.",
+            "reason": f"{check_name} judge did not return the verdict-first contract.",
+            "fix": "Return exactly verdict, reason, and fix in that order.",
         }
     )
 
@@ -3090,38 +3184,6 @@ def merge_parallel_judges(
         include_decision_uncertainty=include_decision_uncertainty,
     )
     model_qa_formality_check = dict(qa_formality_check)
-    semantic_subchecks = qa_formality_check.get("semantic_subchecks")
-    semantic_failures = []
-    for subcheck_name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES:
-        subcheck = (
-            semantic_subchecks.get(subcheck_name)
-            if isinstance(semantic_subchecks, dict)
-            else None
-        )
-        if not isinstance(subcheck, dict):
-            semantic_failures.append(f"{subcheck_name} missing")
-            continue
-        status = str(subcheck.get("status") or "").strip().upper()
-        if status != "PASS":
-            detail = str(subcheck.get("reason") or "").strip()
-            semantic_failures.append(
-                f"{subcheck_name} {status.lower() if status else 'invalid'}"
-                + (f": {detail}" if detail else "")
-            )
-    if semantic_failures:
-        qa_formality_check["status"] = "FAIL"
-        existing_reason = str(qa_formality_check.get("reason") or "").strip()
-        semantic_reason = "semantic subchecks failed: " + "; ".join(semantic_failures)
-        qa_formality_check["reason"] = (
-            f"{existing_reason}; {semantic_reason}" if existing_reason else semantic_reason
-        )
-        qa_formality_check["fix"] = (
-            "Repair every failed or missing formality subcheck: use natural first-person or "
-            "shared-memory wording, clarify references and options, replace any concurrent-activity "
-            "report with a concrete missing object, identity, state, location, outcome, consequence, "
-            "explanation, interaction result, or follow-up, and remove participant names and "
-            "timestamp citations."
-        )
     if schema_branch["status"] != "PASS":
         qa_formality_check["status"] = "FAIL"
         qa_formality_check["reason"] = (
@@ -3167,11 +3229,6 @@ def merge_parallel_judges(
             "answerability": answerability_check,
         },
         "blocking_failures": [],
-        "why_generator_asked_this": (
-            qa_formality_judge.get("why_generator_asked_this")
-            or evidence_groundedness_judge.get("why_generator_asked_this")
-            or ""
-        ),
         "feedback_to_generator": "",
         "branches": {
             "qa_formality": qa_formality_judge,
@@ -4269,8 +4326,11 @@ def run_answerability_eval(
             "gate": gate,
         }
 
-    evaluations = []
-    for condition in build_answerability_conditions(qa_item.get("required_users", [])):
+    conditions = build_answerability_conditions(qa_item.get("required_users", []))
+
+    def evaluate_direct_condition(
+        condition: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         clips = clips_for_users(packet, condition["users"])
         image_paths, video_paths = media_for_clips(
             clips,
@@ -4313,7 +4373,6 @@ def run_answerability_eval(
         raw = runner.generate(prompt, image_paths=image_paths, video_paths=video_paths)
         elapsed_seconds = round(time.time() - stage_start, 3)
         prompt_row["elapsed_seconds"] = elapsed_seconds
-        prompt_rows.append(compact_prompt_record(prompt_row))
         print(
             "qa_stage_done "
             f"stage=answerability qa_id={qa_item.get('qa_id')} "
@@ -4322,33 +4381,80 @@ def run_answerability_eval(
         )
         try:
             answer = extract_json_object(raw)
+            if (
+                len(required_users) == 6
+                and six_user_judge_mode == SIX_USER_JUDGE_MODE_LEGACY
+            ):
+                contract_errors = answerability_sufficiency_output_errors(answer)
+                if contract_errors:
+                    answer["answerability_contract_error"] = "; ".join(contract_errors)
         except Exception as exc:
-            answer = {
-                "choice": None,
-                "answer_text": "",
-                "evidence_used": f"parse_failed: {exc}",
-            }
-        evaluations.append(
-            {
-                **condition,
-                **answer,
-                "raw_output": raw,
-                "elapsed_seconds": elapsed_seconds,
-                "condition_media": condition_media_for_clips(
-                    condition=condition,
-                    clips=clips,
-                    image_paths=image_paths,
-                    video_paths=video_paths,
-                    media_role=judge_media_role,
-                ),
-            }
-        )
+            if (
+                len(required_users) == 6
+                and six_user_judge_mode == SIX_USER_JUDGE_MODE_LEGACY
+            ):
+                answer = {
+                    "answerable": None,
+                    "reason": f"parse_failed: {exc}",
+                    "available_evidence": [],
+                    "missing_evidence": [],
+                    "answerability_contract_error": f"parse_failed: {exc}",
+                }
+            else:
+                answer = {
+                    "choice": None,
+                    "answer_text": "",
+                    "evidence_used": f"parse_failed: {exc}",
+                }
+        evaluation = {
+            **condition,
+            **answer,
+            "raw_output": raw,
+            "elapsed_seconds": elapsed_seconds,
+            "condition_media": condition_media_for_clips(
+                condition=condition,
+                clips=clips,
+                image_paths=image_paths,
+                video_paths=video_paths,
+                media_role=judge_media_role,
+            ),
+        }
+        return evaluation, compact_prompt_record(prompt_row)
+
+    concurrent_two_pass = (
+        len(required_users) == 6
+        and six_user_judge_mode == SIX_USER_JUDGE_MODE_LEGACY
+        and len(conditions) == 2
+    )
+    if concurrent_two_pass:
+        # These judgments use independent media conditions. Submit them together
+        # so a local vLLM frontend can batch both long multimodal prefills.
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(evaluate_direct_condition, condition)
+                for condition in conditions
+            ]
+            results = [future.result() for future in futures]
+    else:
+        results = [evaluate_direct_condition(condition) for condition in conditions]
+    evaluations = []
+    for evaluation, prompt_row in results:
+        evaluations.append(evaluation)
+        prompt_rows.append(prompt_row)
     gate = answerability_gate(
         qa_item,
         evaluations,
         six_user_judge_mode=six_user_judge_mode,
     )
-    return {"evaluations": evaluations, "gate": gate}
+    return {
+        "evaluations": evaluations,
+        "gate": gate,
+        "condition_execution": (
+            "concurrent_asker_only_and_all_six"
+            if concurrent_two_pass
+            else "sequential"
+        ),
+    }
 
 
 def validated_evidence_segment_observation(
@@ -4603,17 +4709,9 @@ def run_sequential_separated_review_judges(
         )
 
     passing_evidence_placeholder = {
-        "review_passed": True,
-        "checks": {
-            "evidence_groundedness": {
-                "status": "PASS",
-                "reason": "placeholder used only to evaluate the preceding serial gate",
-                "fix": "",
-            }
-        },
-        "blocking_failures": [],
-        "why_generator_asked_this": "",
-        "feedback_to_generator": "",
+        "verdict": "pass",
+        "reason": None,
+        "fix": None,
     }
     passing_answerability_placeholder = {
         "evaluations": [],
@@ -4685,7 +4783,7 @@ def run_sequential_separated_review_judges(
                 "schema_branch": schema_formality_branch(schema_errors),
                 "generator_rationale_included": False,
                 "pass_fail_only": True,
-                "judge_contract": "legacy_review_passed",
+                "judge_contract": "first_verdict_reason_fix",
                 "authoritative_for_acceptance": True,
             }
         )
@@ -4779,7 +4877,7 @@ def run_sequential_separated_review_judges(
                 "model_id": getattr(runner, "model_id", None),
                 "generator_rationale_included": False,
                 "pass_fail_only": True,
-                "judge_contract": "legacy_review_passed",
+                "judge_contract": "first_verdict_reason_fix",
                 "authoritative_for_acceptance": True,
             }
         )
@@ -5075,7 +5173,7 @@ def run_parallel_review_judges(
             "schema_branch": schema_formality_branch(schema_errors),
             "generator_rationale_included": False,
             "pass_fail_only": True,
-            "judge_contract": "legacy_review_passed",
+            "judge_contract": "first_verdict_reason_fix",
             "decision_entropy_requested": False,
             "authoritative_for_acceptance": True,
             "entropy_probe_affects_acceptance": False,
@@ -5098,7 +5196,7 @@ def run_parallel_review_judges(
                 "model_id": getattr(runner, "model_id", None),
                 "generator_rationale_included": include_generator_rationale,
                 "pass_fail_only": True,
-                "judge_contract": "legacy_review_passed",
+                "judge_contract": "first_verdict_reason_fix",
                 "decision_entropy_requested": False,
                 "authoritative_for_acceptance": True,
                 "entropy_probe_affects_acceptance": False,
@@ -5325,9 +5423,9 @@ def run_parallel_review_judges(
         "judge_media_role": judge_media_role,
         "pass_fail_only": True,
         "judge_contract": (
-            "legacy_detailed_production_plus_independent_minimal_probe"
+            "first_verdict_reason_fix_plus_independent_minimal_probe"
             if record_decision_entropy
-            else "legacy_review_passed"
+            else "first_verdict_reason_fix"
         ),
         "pass_fail_entropy_logits": (
             "independent_minimal_probe_recorded"
@@ -5790,9 +5888,9 @@ def generate_video_qa_loop(
         )
     point_scoring_mode = "legacy_archived_not_active"
     judge_contract = (
-        "legacy_detailed_production_plus_independent_minimal_probe"
+        "first_verdict_reason_fix_plus_independent_minimal_probe"
         if record_judge_decision_entropy
-        else "binary_pass_fail"
+        else "first_verdict_reason_fix"
     )
     print(
         "qa_runner_config "
@@ -6006,18 +6104,10 @@ def generate_video_qa_loop(
                     observations=dry_observations,
                 )
                 if six_user_map_reduce_dry_run
-                else (
-                    build_sequential_direct_judge_prompt(
-                        qa_for_prompt,
-                        packet,
-                        schema_errors=schema_errors,
-                    )
-                    if sequential_dry_run
-                    else build_evidence_groundedness_judge_prompt(
-                        qa_for_prompt,
-                        packet,
-                        pass_fail_only=True,
-                    )
+                else build_evidence_groundedness_judge_prompt(
+                    qa_for_prompt,
+                    packet,
+                    pass_fail_only=True,
                 )
             )
             dry_trace = {

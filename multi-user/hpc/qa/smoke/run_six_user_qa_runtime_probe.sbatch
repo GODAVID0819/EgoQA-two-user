@@ -280,7 +280,7 @@ PY
 stage_start "validate_baseline_neutral_prompt_contract"
 "${PYTHON}" -P - <<'PY'
 from egolife_two_user_qa.prompts import (
-    QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
+    QA_FORMALITY_CRITERION_NAMES,
     build_answerability_condition_aggregation_prompt,
     build_answerability_fact_plan_prompt,
     build_answerability_user_fact_audit_prompt,
@@ -404,7 +404,7 @@ required_generation = (
 missing = [fragment for fragment in required_generation if fragment not in generation]
 if missing:
     raise SystemExit(f"baseline-neutral generation contract is incomplete: {missing}")
-if "other_person_activity_query" not in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES:
+if "other_person_activity_query" not in QA_FORMALITY_CRITERION_NAMES:
     raise SystemExit("qa_formality no longer blocks concurrent-activity questions")
 formality = rendered["qa_formality"]
 required_formality = (

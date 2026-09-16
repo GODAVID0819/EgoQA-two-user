@@ -685,7 +685,7 @@ IMPLICIT_HINT_EXAMPLE_EVIDENCE_IDS = {
 # Archived point-scoring schema retained for offline analysis only. The production
 # prompt builders below deliberately do not route to this schema, even when an old
 # caller still passes pass_fail_only=False.
-JUDGE_CHECK_SCHEMA = {
+ARCHIVED_SCORED_JUDGE_CHECK_SCHEMA = {
     "status": "PASS/FAIL",
     "reason": "one short explanation based only on this judge's assigned scope",
     "fix": "one specific repair instruction if FAIL; empty string if PASS",
@@ -697,27 +697,39 @@ JUDGE_CHECK_SCHEMA = {
 
 DEFAULT_QUALITY_QUOTA = 48
 
-PASS_FAIL_ONLY_CHECK_SCHEMA = {
-    "status": "PASS/FAIL",
-    "reason": "one short explanation based only on this judge's assigned scope",
-    "fix": "one specific repair instruction if FAIL; empty string if PASS",
+JUDGE_DECISION_SCHEMA = {
+    "verdict": "pass/fail",
+    "reason": (
+        "specific instance-level failure reason when verdict is fail; null when verdict is pass"
+    ),
+    "fix": "specific repair for that failure when verdict is fail; null when verdict is pass",
 }
+
+# Compatibility name for callers that still import the former check-schema symbol.
+# Production prompts use the flat first-verdict contract above; they do not emit a
+# nested checks.<judge>.status object.
+PASS_FAIL_ONLY_CHECK_SCHEMA = JUDGE_DECISION_SCHEMA
 
 PASS_FAIL_ONLY_INSTRUCTION = """Binary decision contract:
 - Return only the fields in the requested JSON schema.
 - Do not include reasoning, markdown, or code fences outside the JSON object.
-- Keep every reason and fix to one sentence and no more than 40 words.
+- The first JSON field must be verdict, with exactly one lowercase value: pass or fail.
+- Decide verdict before writing reason or fix.
+- If verdict is fail, reason must identify the concrete instance-level failure and fix must give a repair targeted to that failure.
+- If verdict is pass, reason and fix must both be JSON null.
+- Never use a generic placeholder sentence as reason or fix.
+- Keep a failure reason and fix to one sentence each and no more than 40 words each.
 - Do not assign a numerical score, quality label, rank, quota, or comparison against other candidates.
 """
 
 JUDGE_OUTPUT_SCHEMA_MARKER = "Return exactly one valid JSON object with this exact shape:"
 
 JUDGE_FIRST_VERDICT_INSTRUCTION = """Authoritative first-verdict contract:
-- Apply exactly the same judge criteria and return the same detailed checks and feedback requested below.
+- Apply every judge criterion silently, then return only verdict, reason, and fix in that order.
 - The first JSON field must be verdict, with exactly one lowercase value: pass or fail.
-- verdict is the authoritative overall decision for this model judge. Decide it before generating checks, subchecks, reasons, fixes, blocking_failures, or feedback.
-- Every later status and blocking_failures entry must be consistent with verdict, but those later fields do not override it.
-- Do not emit review_passed. The lowercase verdict field replaces that boolean.
+- verdict is the authoritative overall decision for this model judge. Decide it before generating reason and fix.
+- Do not emit review_passed, checks, status, subchecks, blocking_failures, feedback, or scores.
+- For pass, reason and fix must be JSON null. For fail, both must be concrete and instance-specific.
 - Return exactly one valid JSON object and no markdown, analysis, or text outside it.
 """
 
@@ -779,8 +791,8 @@ def quality_quota_prompt(
 """
 
 
-QA_FORMALITY_CHECK_SCHEMA = {
-    **JUDGE_CHECK_SCHEMA,
+ARCHIVED_QA_FORMALITY_CHECK_SCHEMA = {
+    **ARCHIVED_SCORED_JUDGE_CHECK_SCHEMA,
     "semantic_subchecks": {
         "first_person_perspective": {
             "status": "PASS/FAIL",
@@ -821,16 +833,31 @@ QA_FORMALITY_CHECK_SCHEMA = {
     },
 }
 
-QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES = tuple(
-    QA_FORMALITY_CHECK_SCHEMA["semantic_subchecks"]
+ARCHIVED_QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES = tuple(
+    ARCHIVED_QA_FORMALITY_CHECK_SCHEMA["semantic_subchecks"]
 )
 
+# These are prompt criteria, not fields in the active model output contract.
+QA_FORMALITY_CRITERION_NAMES = (
+    "first_person_perspective",
+    "naturalness_and_clarity",
+    "other_person_activity_query",
+    "direct_name_leakage",
+    "timestamp_citation",
+    "ambiguous_reference",
+)
 
-JUDGE_SCHEMA = {
+# Import compatibility for archived tests and artifact readers. Production prompt
+# builders and launchers use QA_FORMALITY_CRITERION_NAMES instead.
+QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES = (
+    ARCHIVED_QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
+)
+
+ARCHIVED_COMBINED_JUDGE_SCHEMA = {
     "review_passed": True,
     "checks": {
-        "qa_formality": QA_FORMALITY_CHECK_SCHEMA,
-        "evidence_groundedness": JUDGE_CHECK_SCHEMA,
+        "qa_formality": ARCHIVED_QA_FORMALITY_CHECK_SCHEMA,
+        "evidence_groundedness": ARCHIVED_SCORED_JUDGE_CHECK_SCHEMA,
     },
     "blocking_failures": ["names of failed checks that should block acceptance"],
     "why_generator_asked_this": "brief explanation of why the generator may have asked this",
@@ -932,67 +959,33 @@ def judge_schema_for_check(
     *,
     pass_fail_only: bool = True,
 ) -> dict[str, Any]:
-    # Production schema is unconditionally binary. Archived scored-schema routing:
-    # use_scored_schema = not pass_fail_only
-    # check_schema = QA_FORMALITY_CHECK_SCHEMA or JUDGE_CHECK_SCHEMA
-    if check_name == "qa_formality":
-        check_schema = {
-            **PASS_FAIL_ONLY_CHECK_SCHEMA,
-            "semantic_subchecks": QA_FORMALITY_CHECK_SCHEMA["semantic_subchecks"],
-        }
-    else:
-        check_schema = PASS_FAIL_ONLY_CHECK_SCHEMA
-    schema = {
-        "review_passed": True,
-        "checks": {
-            check_name: check_schema,
-        },
-        "blocking_failures": ["names of failed checks that should block acceptance"],
-        "feedback_to_generator": "specific revision instructions if review_passed is false; use an empty string if it passed",
-    }
-    # Archived scored-schema field:
-    # schema["why_generator_asked_this"] = "brief explanation ..."
-    return schema
+    if check_name not in {"qa_formality", "evidence_groundedness"}:
+        raise ValueError(f"unsupported production judge: {check_name}")
+    # ``pass_fail_only`` remains in the public signature for old callers, but the
+    # production contract is now always the same flat binary object.
+    return dict(JUDGE_DECISION_SCHEMA)
 
 
 def build_judge_first_verdict_prompt(
     review_prompt: str,
     check_name: str,
 ) -> str:
-    """Put the authoritative lowercase production verdict before judge details."""
+    """Return the production prompt, whose contract already starts with verdict."""
 
     if check_name not in {"qa_formality", "evidence_groundedness"}:
         raise ValueError(f"unsupported first-verdict judge: {check_name}")
     if JUDGE_OUTPUT_SCHEMA_MARKER not in review_prompt:
         raise ValueError("judge prompt does not contain the expected output-schema marker")
-    rubric_prompt, schema_text = review_prompt.rsplit(JUDGE_OUTPUT_SCHEMA_MARKER, 1)
+    _, schema_text = review_prompt.rsplit(JUDGE_OUTPUT_SCHEMA_MARKER, 1)
     try:
         detailed_schema = json.loads(schema_text.strip())
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         raise ValueError(f"judge prompt output schema is not valid JSON: {exc}") from exc
     if not isinstance(detailed_schema, dict):
         raise ValueError("judge prompt output schema must be a JSON object")
-    detailed_schema.pop("review_passed", None)
-    detailed_schema.pop("verdict", None)
-    feedback_contract = detailed_schema.get("feedback_to_generator")
-    if isinstance(feedback_contract, str):
-        detailed_schema["feedback_to_generator"] = feedback_contract.replace(
-            "review_passed is false",
-            "verdict is fail",
-        )
-    first_verdict_schema = {
-        "verdict": "pass/fail",
-        **detailed_schema,
-    }
-    return f"""{rubric_prompt}
-
-{JUDGE_FIRST_VERDICT_INSTRUCTION}
-
-Judge decision field: {check_name}
-
-{JUDGE_OUTPUT_SCHEMA_MARKER}
-{json.dumps(first_verdict_schema, ensure_ascii=False, indent=2)}
-"""
+    if detailed_schema != JUDGE_DECISION_SCHEMA:
+        raise ValueError("judge prompt does not use the production first-verdict schema")
+    return review_prompt
 
 
 def build_judge_first_verdict_sidecar_prompt(
@@ -1061,6 +1054,7 @@ def temporal_pruning_brief(temporal_pruning: dict[str, Any] | None) -> dict[str,
 
 
 SAMPLED_FRAME_GENERATOR_MEDIA_MODES = {
+    "asker_full_provider_pruned",
     "all_clustering_frames_only",
     "centroid_frames_only",
     "full_unpruned_sampled_frames_only",
@@ -1773,7 +1767,7 @@ def build_qa_formality_judge_prompt(
 
 Judge only the deterministic schema result and the user-facing question and options. Do not use hidden generator intent to rescue unclear wording.
 
-Run every semantic subcheck explicitly:
+Apply every criterion below before deciding the single overall verdict. Do not return per-criterion or subcheck fields:
 
 1. first_person_perspective
 - PASS only when the question sounds like a natural first-person or shared-memory question from someone in the situation and uses I, me, my, we, us, or our.
@@ -1819,9 +1813,9 @@ Deterministic structure rules:
 - The item must contain exactly five non-empty options in A-E order, one correct letter, and an answer that exactly matches the selected option. The option strings themselves do not need A./B./C./D./E. prefixes.
 
 Decision rules:
-- If any semantic subcheck is FAIL, set checks.qa_formality.status to FAIL, include "qa_formality" in blocking_failures, and provide one specific semantic repair.
-- PASS qa_formality only when the deterministic schema branch passes and every semantic subcheck passes.
-- Keep each reason and fix concise.
+- Set verdict to fail when the deterministic schema branch fails or any semantic criterion fails.
+- Set verdict to pass only when the deterministic schema branch and every semantic criterion pass.
+- On failure, reason must name the actual failed requirement in this candidate and fix must target that failure. Do not return a generic summary of the rubric.
 
 {binary_block}
 
@@ -1848,7 +1842,7 @@ def build_evidence_groundedness_judge_prompt(
     quality_quota: int = DEFAULT_QUALITY_QUOTA,
 ) -> str:
     rationale_rule = (
-        "- Use generator_rationale only to understand the intended relation; treat every claim in it as unverified until confirmed against the full original videos."
+        "- Use generator_rationale only to understand the intended relation; treat every claim in it as unverified until confirmed against the full unpruned judge media."
         if "generator_rationale" in qa_item
         else "- Infer no hidden generator interpretation; judge the question, declared answer, material option claims, and videos shown."
     )
@@ -1857,7 +1851,7 @@ def build_evidence_groundedness_judge_prompt(
     question_scope = "six-user" if six_user_mode else "two-user"
     role_grounding_rule = (
         "- Treat required_users[0] as the speaker and required_users[1] through "
-        "required_users[5] as providers. Verify that the full original speaker view grounds "
+        "required_users[5] as providers. Verify that the full unpruned speaker timeline grounds "
         "the specific experience, object, person, or interaction that makes the question "
         "natural, and that at least one external provider view or provider combination "
         "supplies the answer-bearing continuation or detail. Do not fail merely because an "
@@ -1874,7 +1868,7 @@ def build_evidence_groundedness_judge_prompt(
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
-You will see the full original videos for this evidence packet, which may be fuller than the sampled visual media shown to the generator. Judge only visual and temporal grounding. Do not fail for names, missing first-person wording, awkward phrasing, timestamp citations, or schema style. Do not decide whether a single-user condition is sufficient.
+You will see the full unpruned sampled visual timeline for every user. This is fuller than the generator input because provider redundancy pruning is not applied to judge media. Judge only visual and temporal grounding. Do not fail for names, missing first-person wording, awkward phrasing, timestamp citations, or schema style. Do not decide whether a single-user condition is sufficient.
 
 evidence_groundedness asks whether the material claims and declared answer are supported by the videos and metadata:
 {rationale_rule}
@@ -1883,7 +1877,7 @@ evidence_groundedness asks whether the material claims and declared answer are s
 - Incorrect distractors do not need to occur in the videos for an ordinary object, state, action, or location MCQ; they must simply not make the declared answer ambiguous.
 - For a comparison whose options make concrete claims about both operands, verify the declared complete relation and ensure no alternative option is also supported.
 - Treat every object, action, person, state, identity, and continuity description as unverified. The generator may hallucinate or misidentify them.
-- When the generator received sampled still frames, do not accept a claimed transition, continuous action, or intermediate event merely because it seems plausible between adjacent images; verify it directly in the full original videos.
+- Do not accept a claimed transition, continuous action, or intermediate event merely because it seems plausible between adjacent sampled images. Require direct support in the supplied unpruned samples; otherwise FAIL.
 - Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
 {role_grounding_rule}
 - For identity or role linkage, verify enough visible continuity or distinguishing evidence to establish same-person versus different-person rather than inferring identity from roles, timing, or option wording.
@@ -2107,12 +2101,10 @@ def build_sequential_direct_judge_prompt(
     *,
     schema_errors: list[str] | None = None,
 ) -> str:
-    """Build the original one-pass QA judge prompt for the sequential six-user mode.
+    """Build the archived one-pass QA judge prompt for old artifact reproduction.
 
-    Unlike the time-aware evidence map/reduce branch, this call sees the same
-    sampled generator media and returns both the text/formality and direct
-    evidence-groundedness checks in one response. Factual decomposition remains
-    exclusive to the downstream answerability audit.
+    Current legacy-zero-shot and sequential runs use separate flat binary judge
+    prompts. This builder remains only so historical prompts can be reproduced.
     """
 
     participant_names = formality_participant_names(packet, qa_item)
@@ -2165,7 +2157,7 @@ Generated question-answer item:
 {json.dumps(qa_item, ensure_ascii=False, indent=2)}
 
 Return exactly one valid JSON object with this exact shape:
-{json.dumps(JUDGE_SCHEMA, ensure_ascii=False, indent=2)}
+{json.dumps(ARCHIVED_COMBINED_JUDGE_SCHEMA, ensure_ascii=False, indent=2)}
 """
 
 
@@ -2179,14 +2171,15 @@ def build_answerability_prompt(qa_item: dict[str, Any], condition: dict[str, Any
     if six_user_mode:
         if condition_type == "speaker_only":
             media_rules = (
-                "- This condition contains only the full unpruned speaker video. Evaluate "
-                "only what that video visibly establishes; do not assume facts from omitted "
+                "- This condition contains only the full unpruned sampled speaker timeline. Evaluate "
+                "only what that timeline visibly establishes; do not assume facts from omitted "
                 "provider views."
             )
         elif condition_type == "combined_all_six_users":
             media_rules = (
-                "- This condition contains the full original speaker video and all five full "
-                "original provider videos. Combine visible evidence across them when needed. "
+                "- This condition contains the full unpruned sampled speaker timeline and all "
+                "five full unpruned sampled provider timelines. Combine visible evidence across "
+                "them when needed. "
                 "Some provider views may be irrelevant."
             )
         else:
@@ -2210,12 +2203,14 @@ Answer options (for judging whether the evidence resolves the question, not for 
 {options}
 
 Rules:
+- The first JSON field must be `answerable`; decide this boolean before generating the later explanation and evidence lists.
 - Return `answerable: true` only when the supplied videos directly contain the answer-relevant visual facts needed to distinguish one option from the alternatives.
 - Return `answerable: false` when a required subject, object, action, attribute, location, identity link, state change, or temporal relation is missing, occluded, too ambiguous, or would require guessing or outside knowledge.
 - Do not select an option. Do not output an A-E letter, the final answer, or the text of the option you think is correct.
 - Describe evidence availability at the level of needed facts, such as whether the relevant object and action are visible. Do not reveal the answer while explaining the judgment.
 - Judge only the visible videos and supplied condition metadata. Do not use the wording of the question or options as evidence.
 - Do not assume the speaker-only condition is unanswerable or the six-video condition is answerable. Decide each condition independently from its actual visual evidence.
+- Make `reason` specific to the supplied condition: identify the decisive visible support when answerable is true, or the concrete missing, occluded, ambiguous, or contradictory fact when answerable is false. Never use a generic placeholder sentence.
 - `answerable` must be a JSON boolean, not a quoted string. `available_evidence` and `missing_evidence` must be JSON arrays of short strings.
 {media_rules}
 
@@ -2259,7 +2254,7 @@ Return exactly one valid JSON object with this exact shape:
 def build_judge_json_repair_prompt(raw_response: str, expected_schema: dict[str, Any]) -> str:
     """Build a one-shot formatting repair prompt without asking the judge to reconsider."""
 
-    return f"""Your previous judge response was not valid JSON. Preserve the same decision and content, but return only one valid JSON object matching the schema below. Do not add markdown, code fences, analysis, or new reasoning. Keep every reason and fix to one sentence and no more than 40 words.
+    return f"""Your previous judge response was not valid JSON. Preserve the same decision and content, but return only one valid JSON object matching the schema below and keep the fields in the displayed order. Do not add markdown, code fences, analysis, or new reasoning. For the first-verdict contract, use JSON null for reason and fix when verdict is pass; when verdict is fail, keep the concrete failure reason and targeted repair to one sentence and no more than 40 words each.
 
 Previous response:
 {raw_response}

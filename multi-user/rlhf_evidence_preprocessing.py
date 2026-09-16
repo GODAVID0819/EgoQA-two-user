@@ -939,52 +939,191 @@ def load_asker_view(
     packet_id: str,
     asker: str | int,
 ) -> dict[str, Any]:
-    """Resolve one generation-ready view without decoding or reclustering media."""
+    """Resolve one generation-ready view without decoding or reclustering media.
 
-    packet_dir = Path(dataset_root) / "packets" / packet_id
+    ``frames`` is the media presented to the generator: every sampled asker
+    frame and only the asker-relative surviving provider frames. ``full_frames``
+    always contains the complete sampled timeline and is reserved for visual
+    review. Both lists point at the one shared packet frame store.
+    """
+
+    dataset_root = Path(dataset_root).resolve()
+    packet_dir = dataset_root / "packets" / packet_id
     packet = read_json(packet_dir / "packet.json")
     users = packet["users"]
     asker_index = _resolve_asker_index(users, asker)
     with np.load(packet_dir / "keep_masks.npz", allow_pickle=False) as mask_file:
         masks = mask_file["keep_masks"][asker_index]
+    view_rows = read_json(packet_dir / "asker_views.json").get("views") or []
+    matching_views = [
+        row
+        for row in view_rows
+        if int(row.get("asker_index", -1)) == asker_index
+    ]
+    if len(matching_views) > 1:
+        raise ValueError(
+            f"packet {packet_id} contains duplicate asker views for index "
+            f"{asker_index}; found {len(matching_views)}"
+        )
+    view_metadata = (
+        matching_views[0]
+        if matching_views
+        else {
+            "asker_index": asker_index,
+            "asker_agent_dir": users[asker_index].get("agent_dir"),
+            "generator_media_mode": GENERATOR_MEDIA_MODE,
+            "media": [],
+        }
+    )
+    retention_by_index = {
+        int(row["user_index"]): row
+        for row in view_metadata.get("media") or []
+    }
+    source_by_agent_dir = {
+        str(row.get("agent_dir")): row
+        for row in (packet.get("source") or {}).get("users") or []
+    }
     order = [asker_index] + [index for index in range(USER_COUNT) if index != asker_index]
     clips = []
     for user_index in order:
         user = users[user_index]
         role = "asker" if user_index == asker_index else "provider"
+        full_frames = [
+            {
+                **frame,
+                "path": str((packet_dir / Path(frame["path"])).resolve()),
+            }
+            for frame in user["frames"]
+        ]
         frames = []
-        for frame in user["frames"]:
+        for frame in full_frames:
             frame_index = int(frame["frame_index"])
             if role == "provider" and not bool(masks[user_index, frame_index]):
                 continue
-            frames.append(
-                {
-                    **frame,
-                    "path": str((packet_dir / Path(frame["path"])).resolve()),
-                }
-            )
+            frames.append(frame)
+        retention = retention_by_index.get(user_index) or {}
+        source_user = source_by_agent_dir.get(str(user.get("agent_dir"))) or {}
+        source_segments = list(source_user.get("segments") or [])
+        source_urls = [
+            str(row["video_url"])
+            for row in source_segments
+            if row.get("video_url")
+        ]
+        source_count = len(full_frames)
+        retained_count = len(frames)
         clips.append(
             {
                 "user_index": user_index,
                 "agent_dir": user["agent_dir"],
                 "agent_id": user.get("agent_id"),
                 "agent_name": user.get("agent_name"),
+                "day": packet.get("day"),
+                "time_token": packet.get("time_token"),
+                "clip_clock": packet.get("clip_clock"),
+                "duration_seconds": packet.get("duration_seconds"),
+                "segment_count": len(source_segments),
+                "source_video_urls": source_urls,
+                "video_url": source_urls[0] if source_urls else None,
                 "media_role": role,
                 "frame_mode": "full_sampled" if role == "asker" else "asker_pruned",
-                "original_frame_count": int(user["frame_count"]),
-                "retained_frame_count": len(frames),
+                "generator_media_mode": (
+                    "all_clustering_frames_only"
+                    if role == "asker"
+                    else "retained_cluster_frames_only"
+                ),
+                "force_frame_inputs": True,
+                "is_pruned": role == "provider",
+                "original_frame_count": source_count,
+                "retained_frame_count": retained_count,
                 "frames": frames,
+                "full_frames": full_frames,
+                "context_sampling": {
+                    "policy": (
+                        "complete_full_unpruned_sampled_frames"
+                        if role == "asker"
+                        else "asker_relative_provider_cluster_pruning"
+                    ),
+                    "analysis_sample_fps": (
+                        ((packet.get("preprocessing") or {}).get("sampling") or {}).get("fps")
+                    ),
+                    "source_frame_count": source_count,
+                    "model_input_frame_count": retained_count,
+                    "effective_model_input_fps": (
+                        retained_count / float(packet.get("duration_seconds") or 1.0)
+                    ),
+                },
+                "temporal_pruning": {
+                    "method": "asker_relative_provider_cluster_pruning",
+                    "comparison_scope": "provider_clusters_relative_to_current_asker",
+                    "asker_preserved": True,
+                    "pruned_side": None if role == "asker" else "provider",
+                    "analysis_pruning_applied_to_generator": role == "provider",
+                    "original_frame_count": source_count,
+                    "retained_frame_count": retained_count,
+                    "removed_frame_count": source_count - retained_count,
+                    "retained_percent": retention.get("retained_percent"),
+                    "marked_cluster_count": retention.get("marked_cluster_count"),
+                    "restored_cluster_count": retention.get("restored_cluster_count"),
+                },
             }
         )
+    required_users = [str(clip.get("agent_name")) for clip in clips]
+    per_user_source_counts = [int(clip["original_frame_count"]) for clip in clips]
+    per_user_input_counts = [int(clip["retained_frame_count"]) for clip in clips]
+    source_urls = {
+        str(clip.get("agent_name")): list(clip.get("source_video_urls") or [])
+        for clip in clips
+    }
+    media_roles = {
+        required_users[0]: "speaker_full_unpruned_sampled_frames",
+        **{
+            user: "provider_asker_relative_pruned_sampled_frames"
+            for user in required_users[1:]
+        },
+    }
+    evidence_id = f"{packet_id}__ASKER_{users[asker_index].get('agent_id') or asker_index}"
     return {
         "schema_version": SCHEMA_VERSION,
+        "candidate_type": "six_user_rlhf_asker_conditioned_generation",
+        "evidence_id": evidence_id,
+        "generation_group_id": evidence_id,
+        "source_packet_id": packet_id,
+        "dataset_root": str(dataset_root),
         "packet_id": packet_id,
         "day": packet.get("day"),
         "time_token": packet.get("time_token"),
+        "clip_clock": packet.get("clip_clock"),
         "duration_seconds": packet.get("duration_seconds"),
+        "selection": packet.get("selection"),
         "asker_index": asker_index,
         "asker_agent_dir": users[asker_index]["agent_dir"],
+        "asker_user": required_users[0],
+        "required_users": required_users,
+        "input_users": required_users,
+        "speaker_user": required_users[0],
+        "provider_users": required_users[1:],
+        "evidence_provider_user": required_users[1],
+        "evidence_provider_users": required_users[1:],
+        "media_roles": media_roles,
+        "source_urls": source_urls,
+        "requirement": (
+            "Generate one natural asker-perspective multiple-choice question whose answer "
+            "is not established by the asker's full sampled timeline but is established "
+            "by the combined six-user evidence."
+        ),
         "generator_media_mode": GENERATOR_MEDIA_MODE,
+        "preprocessed_generator_media_mode": GENERATOR_MEDIA_MODE,
+        "generator_context_budget": {
+            "policy": GENERATOR_MEDIA_MODE,
+            "analysis_sample_fps": (
+                ((packet.get("preprocessing") or {}).get("sampling") or {}).get("fps")
+            ),
+            "source_frame_count": sum(per_user_source_counts),
+            "model_input_frame_count": sum(per_user_input_counts),
+            "per_user_source_frame_counts": per_user_source_counts,
+            "per_user_model_input_frame_counts": per_user_input_counts,
+        },
+        "asker_view_metadata": view_metadata,
         "clips": clips,
     }
 

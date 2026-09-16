@@ -126,7 +126,7 @@ echo "point_scoring=legacy_archived_not_active"
 echo "generation_category_contract=absent"
 echo "generator_relation_design=private_broad_search_without_family_default"
 echo "concurrency_contract=either_view_anchor_or_complete_activity_pairs"
-echo "qa_formality_contract=deterministic_schema_plus_five_text_only_semantic_subchecks"
+echo "qa_formality_contract=deterministic_schema_plus_single_verdict_reason_fix"
 echo "timestamp_detection=qa_formality_model_judge_only_no_deterministic_parser"
 echo "judge_json_repair=one_text_only_attempt"
 python --version
@@ -139,7 +139,7 @@ from pathlib import Path
 import egolife_two_user_qa.prompts as prompts_module
 from egolife_two_user_qa.prompts import (
     POSITIVE_EXAMPLES_GUIDANCE,
-    QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
+    QA_FORMALITY_CRITERION_NAMES,
     VIDEO_GENERATION_SCHEMA,
     build_answerability_prompt,
     build_evidence_groundedness_judge_prompt,
@@ -281,17 +281,18 @@ for stage, prompt in (
         if forbidden in lowered:
             raise SystemExit(f"{stage} prompt retained category machinery: {forbidden}")
 
-expected_subchecks = {
+expected_criteria = {
     "first_person_perspective",
     "naturalness_and_clarity",
     "other_person_activity_query",
     "direct_name_leakage",
     "timestamp_citation",
+    "ambiguous_reference",
 }
-if set(QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES) != expected_subchecks:
+if set(QA_FORMALITY_CRITERION_NAMES) != expected_criteria:
     raise SystemExit(
-        "qa_formality semantic subcheck mismatch: "
-        + repr(QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES)
+        "qa_formality criterion mismatch: "
+        + repr(QA_FORMALITY_CRITERION_NAMES)
     )
 for required_formality_instruction in (
     "pure text-only semantic judge and do not see the videos",
@@ -300,7 +301,7 @@ for required_formality_instruction in (
     "a fixed provider-side event may ask which asker-side event was simultaneous",
     "Known participant names for leakage detection only:",
     "User-facing question-answer item:",
-    *expected_subchecks,
+    *expected_criteria,
 ):
     if required_formality_instruction not in formality_prompt:
         raise SystemExit(
@@ -370,25 +371,20 @@ if not user_facing_participant_name_errors(
 ):
     raise SystemExit("deterministic participant-name leakage check is inactive")
 
-missing_subchecks_payload = {
+flat_pass_payload = {"verdict": "pass", "reason": None, "fix": None}
+contract_errors = single_judge_output_errors(flat_pass_payload, "qa_formality")
+if contract_errors:
+    raise SystemExit("judge JSON contract rejected flat verdict/reason/fix: " + repr(contract_errors))
+legacy_nested_payload = {
     "review_passed": True,
-    "checks": {
-        "qa_formality": {
-            "status": "PASS",
-            "reason": "passed",
-            "fix": "",
-        }
-    },
-    "blocking_failures": [],
-    "feedback_to_generator": "",
+    "checks": {"qa_formality": {"status": "PASS", "reason": "passed", "fix": ""}},
 }
-contract_errors = single_judge_output_errors(missing_subchecks_payload, "qa_formality")
-if not any("semantic_subchecks" in error for error in contract_errors):
-    raise SystemExit("judge JSON contract does not require qa_formality semantic subchecks")
+if not single_judge_output_errors(legacy_nested_payload, "qa_formality"):
+    raise SystemExit("judge JSON contract still accepts the archived nested shape")
 for required_repair_instruction in (
     "Preserve the same decision and content",
     "return only one valid JSON object",
-    '"semantic_subchecks"',
+    '"verdict"',
 ):
     if required_repair_instruction not in repair_prompt:
         raise SystemExit(
@@ -401,7 +397,7 @@ print("generator_relation_design_preflight=ok")
 print("symmetric_concurrency_preflight=ok")
 print("pruned_to_original_temporal_mapping=ok")
 print("qa_formality_text_only_contract=ok")
-print("qa_formality_five_semantic_subchecks=ok")
+print("qa_formality_flat_verdict_contract=ok")
 print("timestamp_judge_only_contract=ok")
 print("participant_name_deterministic_check=ok")
 print("grounding_distractor_contract=ok")
@@ -547,7 +543,7 @@ from pathlib import Path
 
 from egolife_two_user_qa.prompts import (
     POSITIVE_EXAMPLES_GUIDANCE,
-    QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES,
+    QA_FORMALITY_CRITERION_NAMES,
 )
 
 evidence_path = Path(sys.argv[1])
@@ -656,15 +652,16 @@ for row in generation_prompts:
             )
     assert_category_free(prompt, stage="generation")
 
-expected_subchecks = set(QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES)
-if expected_subchecks != {
+expected_criteria = set(QA_FORMALITY_CRITERION_NAMES)
+if expected_criteria != {
     "first_person_perspective",
     "naturalness_and_clarity",
     "other_person_activity_query",
     "direct_name_leakage",
     "timestamp_citation",
+    "ambiguous_reference",
 }:
-    raise SystemExit(f"qa_formality semantic subcheck mismatch: {expected_subchecks}")
+    raise SystemExit(f"qa_formality criterion mismatch: {expected_criteria}")
 
 for row in formality_prompts:
     if row.get("generator_rationale_included") is not False:
@@ -684,7 +681,7 @@ for row in formality_prompts:
         "Judge only the deterministic schema result and the user-facing question and options.",
         "PASS a pair-matching form when every option states a complete cross-view activity pair.",
         "a fixed provider-side event may ask which asker-side event was simultaneous",
-        *expected_subchecks,
+        *expected_criteria,
     ):
         if required_formality_instruction not in prompt:
             raise SystemExit(
@@ -775,25 +772,8 @@ for row in [*accepted, *rejected]:
                 if archived_field in check:
                     raise SystemExit(f"{check_name} retained archived field {archived_field}")
         formality_check = (merged.get("checks") or {}).get("qa_formality") or {}
-        if str(formality_check.get("status") or "").upper() == "PASS":
-            semantic_subchecks = formality_check.get("semantic_subchecks") or {}
-            missing_subchecks = expected_subchecks - set(semantic_subchecks)
-            if missing_subchecks:
-                raise SystemExit(
-                    "passing qa_formality check omitted semantic subchecks: "
-                    + ",".join(sorted(missing_subchecks))
-                )
-            nonpassing_subchecks = [
-                name
-                for name in expected_subchecks
-                if str((semantic_subchecks.get(name) or {}).get("status") or "").upper()
-                != "PASS"
-            ]
-            if nonpassing_subchecks:
-                raise SystemExit(
-                    "passing qa_formality check retained non-PASS semantic subchecks: "
-                    + ",".join(sorted(nonpassing_subchecks))
-                )
+        if "semantic_subchecks" in formality_check:
+            raise SystemExit("merged qa_formality check retained archived semantic_subchecks")
         formality_trace = judge.get("qa_formality") or {}
         if formality_trace.get("generator_rationale_included") is not False:
             raise SystemExit("qa_formality trace unexpectedly includes generator rationale")

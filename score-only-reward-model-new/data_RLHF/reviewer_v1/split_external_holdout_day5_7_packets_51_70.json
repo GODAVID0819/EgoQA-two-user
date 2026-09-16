@@ -1,0 +1,113 @@
+{
+  "contract_version": "score_only_ordinal_reviewer_v1",
+  "supervision_type": "cumulative_ordinal_scores",
+  "ordinal_target_mapping": {
+    "1": [
+      0,
+      0
+    ],
+    "2": [
+      1,
+      0
+    ],
+    "3": [
+      1,
+      1
+    ]
+  },
+  "training_label_columns": [
+    "evidence_grounding_score",
+    "answerability_score",
+    "formality_score"
+  ],
+  "ignored_annotation_columns": [
+    "fea_total_score",
+    "aggregate_rank"
+  ],
+  "split_unit": "evidence_id",
+  "split_mode": "external_holdout",
+  "selection_strategy": "all_eligible_evidence_sorted",
+  "seed": null,
+  "selection_attempt": 0,
+  "csv_sha256": "D67ECA19BCD8F5A245F6CD603FE4D20AD0F7C76FFA499DA426401B867BFD7804",
+  "reserve_evidence_ids": [],
+  "train_evidence_ids": [],
+  "validation_evidence_ids": [],
+  "locked_test_evidence_ids": [
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10420000_A1_A2_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10423000_A2_A3_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10463000_A1_A2_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10483000_A3_A4_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10560000_A2_A4_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11000000_A5_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11043000_A1_A3_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11103000_A1_A3_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11130000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11413000_A4_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11430000_A3_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11463000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11510000_A3_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11540000_A1_A2_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_12353000_A4_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_12580000_A1_A3_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_14440000_A2_A3_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_15023000_A2_A3_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_15230000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_15333000_A2_A3_0-1"
+  ],
+  "label_support": {
+    "train": {
+      "evidence_quality": {
+        "1": 0,
+        "2": 0,
+        "3": 0
+      },
+      "answerability": {
+        "1": 0,
+        "2": 0,
+        "3": 0
+      },
+      "qa_formality": {
+        "1": 0,
+        "2": 0,
+        "3": 0
+      }
+    },
+    "validation": {
+      "evidence_quality": {
+        "1": 0,
+        "2": 0,
+        "3": 0
+      },
+      "answerability": {
+        "1": 0,
+        "2": 0,
+        "3": 0
+      },
+      "qa_formality": {
+        "1": 0,
+        "2": 0,
+        "3": 0
+      }
+    },
+    "locked_test": {
+      "evidence_quality": {
+        "1": 38,
+        "2": 20,
+        "3": 62
+      },
+      "answerability": {
+        "1": 45,
+        "2": 72,
+        "3": 3
+      },
+      "qa_formality": {
+        "1": 38,
+        "2": 39,
+        "3": 43
+      }
+    }
+  },
+  "full_class_support_required": false,
+  "all_eligible_evidence_selected": true
+}

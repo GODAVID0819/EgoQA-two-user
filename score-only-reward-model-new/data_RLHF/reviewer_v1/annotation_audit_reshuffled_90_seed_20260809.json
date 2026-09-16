@@ -1,0 +1,247 @@
+{
+  "contract_version": "score_only_ordinal_reviewer_v1",
+  "supervision_type": "cumulative_ordinal_scores",
+  "ordinal_target_mapping": {
+    "1": [
+      0,
+      0
+    ],
+    "2": [
+      1,
+      0
+    ],
+    "3": [
+      1,
+      1
+    ]
+  },
+  "csv_path": "C:\\Users\\haoya\\OneDrive\\Desktop\\Long context video understanding ARVR\\Long-video-understanding\\egolife_two_user_qa\\score-only-reward-model\\data_RLHF\\reviewer_v1\\rlhf_candidate_scores_reshuffled_90_packets_seed_20260809.csv",
+  "csv_sha256": "82E5493F9211B39DB8A0572D7AF0A1F78E1625ABCAFEE2BFC41FF5C3200D2F89",
+  "row_count": 540,
+  "evidence_count": 90,
+  "eligible_evidence_count": 90,
+  "eligible_candidate_count": 540,
+  "quarantined_scored_evidence_ids": [],
+  "unscored_evidence_ids": [],
+  "training_label_columns": [
+    "evidence_grounding_score",
+    "answerability_score",
+    "formality_score"
+  ],
+  "ignored_annotation_columns": [
+    "fea_total_score",
+    "aggregate_rank"
+  ],
+  "label_distribution": {
+    "evidence_quality": {
+      "1": 190,
+      "2": 101,
+      "3": 249
+    },
+    "answerability": {
+      "1": 271,
+      "2": 250,
+      "3": 19
+    },
+    "qa_formality": {
+      "1": 137,
+      "2": 243,
+      "3": 160
+    }
+  },
+  "formal_split_gate": {
+    "split_mode": "train_validation_test",
+    "train_evidence_count": 60,
+    "validation_evidence_count": 10,
+    "locked_test_evidence_count": 20,
+    "required_evidence_count": 90,
+    "eligible_evidence_count": 90,
+    "missing_evidence_count": 0,
+    "status": "passed"
+  },
+  "status": "passed",
+  "split_manifest": {
+    "contract_version": "score_only_ordinal_reviewer_v1",
+    "supervision_type": "cumulative_ordinal_scores",
+    "ordinal_target_mapping": {
+      "1": [
+        0,
+        0
+      ],
+      "2": [
+        1,
+        0
+      ],
+      "3": [
+        1,
+        1
+      ]
+    },
+    "training_label_columns": [
+      "evidence_grounding_score",
+      "answerability_score",
+      "formality_score"
+    ],
+    "ignored_annotation_columns": [
+      "fea_total_score",
+      "aggregate_rank"
+    ],
+    "split_unit": "evidence_id",
+    "split_mode": "train_validation_test",
+    "selection_strategy": "deterministic_seeded_full_support_search",
+    "seed": 20260809,
+    "selection_attempt": 0,
+    "csv_sha256": "82E5493F9211B39DB8A0572D7AF0A1F78E1625ABCAFEE2BFC41FF5C3200D2F89",
+    "reserve_evidence_ids": [],
+    "train_evidence_ids": [
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11153000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11240000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11293000_A4_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11363000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11390000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11423000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11500000_A5_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11503000_A3_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_13053000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_13313000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_13390000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_13483000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11090000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11110000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11133000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11173000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11183000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11200000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11203000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11223000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11260000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11313000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11330000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11333000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11383000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11410000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11450000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11463000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11543000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11573000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12400000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12433000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12453000_A4_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_14563000_A3_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15113000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15140000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15163000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15220000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15550000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_16020000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_16183000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10033000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10140000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10263000_A3_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10270000_A3_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10303000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10420000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10423000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10463000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10483000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10560000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11000000_A5_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11103000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11130000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11430000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_12353000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_14440000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_15023000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_15230000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_15333000_A2_A3_0-1"
+    ],
+    "validation_evidence_ids": [
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11440000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11073000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11153000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11250000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11310000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_14550000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10150000_A2_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11043000_A1_A3_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11463000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11510000_A3_A6_0-1"
+    ],
+    "locked_test_evidence_ids": [
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11333000_A5_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11383000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_11593000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_12193000_A3_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_12383000_A5_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_13110000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY1_14100000_A3_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11093000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11120000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11140000_A1_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11390000_A2_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11470000_A2_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11473000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12100000_A3_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12120000_A1_A4_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10113000_A1_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10210000_A2_A5_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11413000_A4_A6_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_11540000_A1_A2_0-1",
+      "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_12580000_A1_A3_0-1"
+    ],
+    "label_support": {
+      "train": {
+        "evidence_quality": {
+          "1": 130,
+          "2": 72,
+          "3": 158
+        },
+        "answerability": {
+          "1": 181,
+          "2": 167,
+          "3": 12
+        },
+        "qa_formality": {
+          "1": 94,
+          "2": 155,
+          "3": 111
+        }
+      },
+      "validation": {
+        "evidence_quality": {
+          "1": 21,
+          "2": 11,
+          "3": 28
+        },
+        "answerability": {
+          "1": 35,
+          "2": 23,
+          "3": 2
+        },
+        "qa_formality": {
+          "1": 16,
+          "2": 31,
+          "3": 13
+        }
+      },
+      "locked_test": {
+        "evidence_quality": {
+          "1": 39,
+          "2": 18,
+          "3": 63
+        },
+        "answerability": {
+          "1": 55,
+          "2": 60,
+          "3": 5
+        },
+        "qa_formality": {
+          "1": 27,
+          "2": 57,
+          "3": 36
+        }
+      }
+    },
+    "full_class_support_required": true
+  }
+}

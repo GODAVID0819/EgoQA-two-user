@@ -1,0 +1,143 @@
+{
+  "contract_version": "score_only_ordinal_reviewer_v1",
+  "supervision_type": "cumulative_ordinal_scores",
+  "ordinal_target_mapping": {
+    "1": [
+      0,
+      0
+    ],
+    "2": [
+      1,
+      0
+    ],
+    "3": [
+      1,
+      1
+    ]
+  },
+  "training_label_columns": [
+    "evidence_grounding_score",
+    "answerability_score",
+    "formality_score"
+  ],
+  "ignored_annotation_columns": [
+    "fea_total_score",
+    "aggregate_rank"
+  ],
+  "split_unit": "evidence_id",
+  "split_mode": "train_validation",
+  "selection_strategy": "deterministic_seeded_full_support_search",
+  "seed": 42,
+  "selection_attempt": 1,
+  "csv_sha256": "4D78A3BB104DDB064B2760F9F4AC1AFA1D83DFC01B1518F8376AC23FBA9CF80D",
+  "reserve_evidence_ids": [],
+  "train_evidence_ids": [
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11073000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11090000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11110000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11120000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11133000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11140000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11153000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11173000_A2_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11200000_A1_A2_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11203000_A2_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11223000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11250000_A2_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11260000_A2_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11310000_A1_A2_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11313000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11330000_A1_A2_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11383000_A2_A4_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11390000_A2_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11410000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11450000_A1_A3_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11463000_A2_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11470000_A2_A4_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11473000_A3_A4_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11543000_A1_A4_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11573000_A2_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12100000_A3_A4_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12400000_A1_A5_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12433000_A4_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12453000_A4_A5_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_14550000_A3_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_14563000_A3_A5_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15113000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15140000_A3_A4_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15163000_A4_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15220000_A1_A5_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_15550000_A1_A4_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_16020000_A3_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_16183000_A4_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10033000_A1_A2_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10113000_A1_A5_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10150000_A2_A3_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10210000_A2_A5_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10263000_A3_A5_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10270000_A3_A5_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10303000_A1_A5_0-1"
+  ],
+  "validation_evidence_ids": [
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11093000_A1_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11183000_A1_A2_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_11333000_A2_A6_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY5_12120000_A1_A4_0-1",
+    "EGOLIFE2U_RANDOM_PAIR_CLIP_PRUNED_DAY6_10140000_A1_A3_0-1"
+  ],
+  "locked_test_evidence_ids": [],
+  "label_support": {
+    "train": {
+      "evidence_quality": {
+        "1": 99,
+        "2": 57,
+        "3": 114
+      },
+      "answerability": {
+        "1": 134,
+        "2": 135,
+        "3": 1
+      },
+      "qa_formality": {
+        "1": 79,
+        "2": 114,
+        "3": 77
+      }
+    },
+    "validation": {
+      "evidence_quality": {
+        "1": 15,
+        "2": 2,
+        "3": 13
+      },
+      "answerability": {
+        "1": 17,
+        "2": 12,
+        "3": 1
+      },
+      "qa_formality": {
+        "1": 12,
+        "2": 13,
+        "3": 5
+      }
+    },
+    "locked_test": {
+      "evidence_quality": {
+        "1": 0,
+        "2": 0,
+        "3": 0
+      },
+      "answerability": {
+        "1": 0,
+        "2": 0,
+        "3": 0
+      },
+      "qa_formality": {
+        "1": 0,
+        "2": 0,
+        "3": 0
+      }
+    }
+  },
+  "full_class_support_required": true
+}

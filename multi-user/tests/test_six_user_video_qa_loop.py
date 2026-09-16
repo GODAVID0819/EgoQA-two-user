@@ -1489,34 +1489,17 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         self.assertFalse(result["gate"]["speaker_only_answerable"])
         self.assertTrue(result["gate"]["all_six_answerable"])
 
-    def test_concurrent_activity_subcheck_remains_blocking_for_six_users(self) -> None:
-        semantic_subchecks = {
-            name: {"status": "PASS", "reason": "passed"}
-            for name in QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES
-        }
-        semantic_subchecks["other_person_activity_query"] = {
-            "status": "FAIL",
-            "reason": "the answer is another person's concurrent activity",
-        }
+    def test_formality_fail_verdict_remains_blocking_for_six_users(self) -> None:
         merged = merge_parallel_judges(
             qa_formality_judge={
-                "checks": {
-                    "qa_formality": {
-                        "status": "PASS",
-                        "reason": "model overall pass",
-                        "fix": "",
-                        "semantic_subchecks": semantic_subchecks,
-                    }
-                }
+                "verdict": "fail",
+                "reason": "The answer asks for another person's concurrent activity rather than the requested information gap.",
+                "fix": "Ask about the missing cross-view fact instead of requesting an activity report.",
             },
             evidence_groundedness_judge={
-                "checks": {
-                    "evidence_groundedness": {
-                        "status": "PASS",
-                        "reason": "grounded",
-                        "fix": "",
-                    }
-                }
+                "verdict": "pass",
+                "reason": None,
+                "fix": None,
             },
             answerability={"gate": {"passed": True, "reason": "speaker chose wrong"}},
             schema_errors=[],
@@ -1526,11 +1509,11 @@ class SixUserAnswerabilityTests(unittest.TestCase):
         self.assertFalse(merged["review_passed"])
         self.assertIn("qa_formality", merged["blocking_failures"])
         self.assertIn(
-            "other_person_activity_query fail",
+            "another person's concurrent activity",
             merged["checks"]["qa_formality"]["reason"],
         )
         self.assertIn(
-            "replace any concurrent-activity report",
+            "Ask about the missing cross-view fact",
             merged["checks"]["qa_formality"]["fix"],
         )
 

@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EgoLife six-user binary labeling</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #09100f;
+      --panel: #111b19;
+      --panel-2: #172321;
+      --line: #2a3a36;
+      --text: #edf5f1;
+      --muted: #9eb0aa;
+      --mint: #73e2b5;
+      --amber: #f2bd6b;
+      --red: #ff887d;
+      --blue: #78b7ff;
+      --shadow: 0 18px 45px rgba(0,0,0,.28);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: radial-gradient(circle at 15% -10%, #17352e 0, transparent 34rem), var(--bg); color: var(--text); font: 15px/1.48 Inter, ui-sans-serif, system-ui, sans-serif; }
+    button, input, textarea, select { font: inherit; }
+    button, select, input, textarea { color: var(--text); background: #0d1715; border: 1px solid var(--line); border-radius: 9px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    button:hover { border-color: #53746b; }
+    button.primary { color: #062119; border-color: var(--mint); background: var(--mint); font-weight: 800; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    a { color: var(--blue); }
+    .topbar { position: sticky; top: 0; z-index: 20; display: grid; grid-template-columns: minmax(230px,1fr) auto; gap: 20px; align-items: center; padding: 14px 22px; border-bottom: 1px solid var(--line); background: rgba(9,16,15,.94); backdrop-filter: blur(15px); }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-mark { width: 38px; height: 38px; display: grid; place-items: center; color: #07241b; font-weight: 900; border-radius: 12px; background: var(--mint); }
+    .brand h1 { margin: 0; font-size: 1rem; letter-spacing: .01em; }
+    .brand p { margin: 1px 0 0; color: var(--muted); font-size: .78rem; }
+    .header-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
+    .header-actions input { width: 155px; padding: 8px 10px; }
+    .progress-line { grid-column: 1/-1; height: 3px; overflow: hidden; background: #192723; border-radius: 9px; }
+    .progress-line span { display: block; height: 100%; width: 0; background: linear-gradient(90deg,var(--mint),var(--blue)); transition: width .2s; }
+    main { max-width: 1680px; margin: 0 auto; padding: 18px; }
+    .nav { display: grid; grid-template-columns: auto minmax(240px, 1fr) auto auto; gap: 9px; align-items: center; margin-bottom: 14px; }
+    .nav select { min-width: 0; padding: 9px 10px; }
+    .task-meta { color: var(--muted); font-size: .84rem; text-align: right; }
+    .candidate-tabs { display: flex; gap: 8px; overflow-x: auto; padding: 4px 1px 12px; scrollbar-width: thin; }
+    .candidate-tab { flex: 0 0 auto; min-width: 132px; padding: 9px 11px; text-align: left; }
+    .candidate-tab strong, .candidate-tab span { display: block; }
+    .candidate-tab span { color: var(--muted); font-size: .68rem; }
+    .candidate-tab.active { border-color: var(--blue); background: rgba(120,183,255,.1); }
+    .candidate-tab.complete { border-color: rgba(115,226,181,.42); }
+    .candidate-tab.skipped { border-color: rgba(242,189,107,.5); }
+    .layout { display: grid; grid-template-columns: minmax(0,1.48fr) minmax(390px,.72fr); gap: 16px; align-items: start; }
+    .layout > * { min-width: 0; }
+    .layout > aside { container-type: inline-size; }
+    .stack { display: grid; gap: 16px; }
+    .panel { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: linear-gradient(155deg,rgba(24,36,33,.98),rgba(13,22,20,.98)); box-shadow: var(--shadow); }
+    .panel-head { display: flex; gap: 15px; justify-content: space-between; align-items: flex-start; padding: 15px 17px; border-bottom: 1px solid var(--line); }
+    .panel-head h2, .panel-head h3 { margin: 0; font-size: 1rem; }
+    .panel-head p { margin: 4px 0 0; color: var(--muted); font-size: .8rem; }
+    .badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); font-size: .72rem; white-space: nowrap; }
+    .badge.asker { color: var(--mint); border-color: rgba(115,226,181,.5); background: rgba(115,226,181,.08); }
+    .question-body { padding: 18px; }
+    .question { margin: 0 0 14px; font-size: 1.16rem; line-height: 1.5; }
+    .options { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; }
+    .option { display: grid; grid-template-columns: 28px 1fr; gap: 9px; align-items: start; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: rgba(0,0,0,.12); }
+    .option.correct { border-color: rgba(115,226,181,.47); background: rgba(115,226,181,.07); }
+    .letter { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 6px; color: var(--muted); background: #22312d; font-weight: 800; font-size: .76rem; }
+    .answer { margin: 14px 0 0; color: var(--mint); font-size: .88rem; }
+    .locations { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .locations h3 { margin: 0; font-size: .84rem; }
+    .locations > p { margin: 3px 0 9px; color: var(--muted); font-size: .72rem; }
+    .location-list { display: grid; gap: 7px; }
+    .location { display: grid; grid-template-columns: minmax(170px,auto) 1fr; gap: 9px; align-items: center; padding: 8px 10px; text-align: left; }
+    .location strong, .location span { display: block; }
+    .location span { color: var(--muted); font-size: .7rem; }
+    .location.unresolved { cursor: default; border-style: dashed; }
+    .evidence-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .seg-select { min-width: 260px; max-width: 100%; padding: 8px; }
+    .user-tabs { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 7px; padding: 13px 15px; border-bottom: 1px solid var(--line); }
+    .user-tab { min-width: 0; padding: 9px 7px; text-align: left; }
+    .user-tab strong, .user-tab span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .user-tab span { color: var(--muted); font-size: .69rem; }
+    .user-tab.active { border-color: var(--blue); background: rgba(120,183,255,.09); }
+    .user-tab.asker strong { color: var(--mint); }
+    .media-workspace { padding: 15px; }
+    .video-pane { max-width: 1120px; margin: 0 auto; }
+    video { display: block; width: 100%; max-height: 610px; aspect-ratio: 16/9; border-radius: 11px; background: #030504; }
+    .video-empty { display: grid; min-height: 360px; place-items: center; padding: 25px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; }
+    .video-copy { margin-top: 10px; color: var(--muted); font-size: .76rem; overflow-wrap: anywhere; }
+    .player-controls { display: grid; grid-template-columns: auto minmax(220px,1fr) auto auto; gap: 8px; align-items: center; margin-bottom: 11px; }
+    .timeline { margin-top: 13px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(0,0,0,.12); }
+    .timeline-summary { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: .78rem; margin-bottom: 8px; }
+    .timeline input[type="range"] { width: 100%; accent-color: var(--mint); }
+    .segments { display: grid; grid-template-columns: repeat(10,minmax(0,1fr)); gap: 5px; margin-top: 9px; }
+    .segment { padding: 6px 4px; color: var(--muted); font-size: .7rem; }
+    .segment.active { color: #06140f; border-color: var(--mint); background: var(--mint); font-weight: 800; }
+    .auto-advance { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: .76rem; white-space: nowrap; }
+    .auto-advance input { accent-color: var(--mint); }
+    .labels { padding: 14px; display: grid; gap: 12px; }
+    .judge { padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: rgba(0,0,0,.1); }
+    .judge-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-bottom: 9px; }
+    .judge-title h3 { margin: 0; font-size: .9rem; }
+    .judge-title span { color: var(--muted); font-size: .69rem; }
+    .binary { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .choice { position: relative; display: grid; place-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); cursor: pointer; }
+    .choice input { position: absolute; opacity: 0; }
+    .choice:has(input:checked) { color: var(--text); border-color: var(--blue); background: rgba(120,183,255,.1); }
+    .choice.fail:has(input:checked) { border-color: var(--red); background: rgba(255,136,125,.1); }
+    .choice.pass:has(input:checked) { border-color: var(--mint); background: rgba(115,226,181,.1); }
+    .field span { display: block; margin: 0 0 4px; color: var(--muted); font-size: .7rem; font-weight: 700; }
+    textarea { width: 100%; min-height: 58px; resize: vertical; padding: 8px 9px; }
+    textarea.tall { min-height: 78px; }
+    .condition-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+    .condition { padding: 10px; border: 1px solid var(--line); border-radius: 9px; }
+    .condition h4 { margin: 0 0 7px; font-size: .8rem; }
+    .derived { margin-top: 9px; padding: 8px 10px; border-radius: 8px; color: var(--muted); background: #0a1311; font-size: .76rem; }
+    .derived.pass { color: var(--mint); }
+    .derived.fail { color: var(--red); }
+    .failure-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .failure-mode { display: flex; gap: 8px; align-items: flex-start; padding: 8px 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: .72rem; }
+    .failure-mode input { margin-top: 2px; accent-color: var(--amber); }
+    .action { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 14px; border-top: 1px solid var(--line); }
+    .action p { margin: 0; color: var(--muted); font-size: .76rem; }
+    .action-buttons { display: flex; gap: 8px; }
+    .skip-box { padding: 0 14px 14px; }
+    .empty { padding: 50px 20px; color: var(--muted); text-align: center; }
+    .toast { position: fixed; right: 20px; bottom: 20px; z-index: 50; max-width: 420px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px; background: #172521; box-shadow: var(--shadow); opacity: 0; transform: translateY(12px); pointer-events: none; transition: .18s; }
+    .toast.show { opacity: 1; transform: none; }
+    .hidden { display: none !important; }
+    @container (max-width: 560px) { .condition-grid, .failure-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 1080px) { .layout { grid-template-columns: 1fr; } }
+    @media (max-width: 720px) { .topbar { grid-template-columns: 1fr; } .header-actions { justify-content: flex-start; } .nav { grid-template-columns: auto 1fr auto; } .task-meta { grid-column: 1/-1; text-align: left; } .user-tabs { grid-template-columns: repeat(3,1fr); } .condition-grid { grid-template-columns: 1fr; } .player-controls { grid-template-columns: auto 1fr auto; } .auto-advance { grid-column: 1/-1; } .segments { grid-template-columns: repeat(5,minmax(0,1fr)); } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark">6U</div><div><h1>Binary judge labeling</h1><p id="datasetCopy">Loading assignment…</p></div></div>
+    <div class="header-actions">
+      <input id="reviewerId" placeholder="Annotator ID" autocomplete="off">
+      <select id="statusFilter" aria-label="Filter packets"><option value="all">All packets</option><option value="pending">Has pending</option><option value="completed">All complete</option><option value="skipped">Has skipped</option></select>
+      <button id="nextPending">Next pending</button>
+      <button id="exportJsonl">Export JSONL</button>
+      <button id="exportCsv">Export CSV</button>
+      <button id="backupJson">Backup</button>
+      <label><input id="restoreJson" class="hidden" type="file" accept="application/json"><button type="button" id="restoreButton">Restore</button></label>
+    </div>
+    <div class="progress-line"><span id="progressFill"></span></div>
+  </header>
+  <main>
+    <div class="nav"><button id="previousPacket">← Previous packet</button><select id="packetSelect" aria-label="Packet"></select><button id="nextPacket">Next packet →</button><div id="taskMeta" class="task-meta"></div></div>
+    <div id="app"></div>
+  </main>
+  <div id="toast" class="toast"></div>
+  <script>
+    const DATA = __LABELING_DATA__;
+    const ASSIGNMENT_ID = DATA.assignment.assignment_id;
+    const STORAGE_KEY = `egolife-6u-binary:${DATA.dataset_fingerprint}:${ASSIGNMENT_ID}`;
+    const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+    const CSV_COLUMNS = ["schema_version","dataset_fingerprint","assignment_id","reviewer_id","annotation_status","packet_order","evidence_id","display_order","candidate_id","source_qa_id","source_evidence_id","generation_attempt","asker_user","formality_verdict","evidence_grounding_verdict","answerability_verdict","formality_score","evidence_grounding_score","answerability_score","asker_only_answerable","all_six_answerable","failure_modes","candidate_skipped","skip_reason","notes","started_at","completed_at","active_seconds","question","options","correct","answer","required_users","source_video_urls"];
+    const FAILURE_MODES = [
+      ["formality_unclear","Unclear or unnatural wording / question"],
+      ["formality_non_first_person","Non-first-person question"],
+      ["formality_asker_self_query","Asker asks about themselves"],
+      ["formality_bad_options","Malformed, overlapping, or weak options"],
+      ["formality_concurrent_activity","Prohibited concurrent-activity question"],
+      ["formality_name_leak","Participant name leakage"],
+      ["formality_timestamp_leak","Timestamp leakage"],
+      ["grounding_unsupported_premise","Question premise is not visibly supported"],
+      ["grounding_unsupported_answer","Proposed answer is not visibly supported"],
+      ["answerability_ambiguous","Visible evidence leaves multiple plausible answers"],
+      ["answerability_event_missing","Required event is missing or occluded"]
+    ];
+    const tasks = DATA.packets.flatMap(packet => packet.candidates.map(candidate => ({packet,candidate,key:candidate.candidate_id})));
+    const byKey = new Map(tasks.map(task => [task.key,task]));
+    const tasksByPacket = new Map(DATA.packets.map(packet => [packet.evidence_id,tasks.filter(task => task.packet.evidence_id===packet.evidence_id)]));
+    const els = Object.fromEntries(["app","reviewerId","statusFilter","nextPending","exportJsonl","exportCsv","backupJson","restoreJson","restoreButton","previousPacket","nextPacket","packetSelect","taskMeta","progressFill","datasetCopy","toast"].map(id => [id,document.getElementById(id)]));
+
+    const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));
+    const now = () => new Date().toISOString();
+    const blankCondition = () => ({answerable:""});
+    const blankAnnotation = () => ({qa_formality:{verdict:""},evidence_groundedness:{verdict:""},answerability:{speaker_only:blankCondition(),combined_all_six_users:blankCondition()},failure_modes:[],skipped:false,skip_reason:"",notes:"",started_at:"",completed_at:"",active_seconds:0});
+    let state = loadState();
+    let currentKey = tasks[0]?.key || "";
+    let activeStarted = performance.now();
+    let selectedUser = 0;
+    let selectedSegment = 0;
+    let selectedGlobalTime = 0;
+    let autoAdvance = true;
+    let playAfterRender = false;
+    let toastTimer;
+
+    function loadState() {
+      try {
+        const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+        return value && value.dataset_fingerprint === DATA.dataset_fingerprint ? value : {dataset_fingerprint:DATA.dataset_fingerprint,reviewer_id:"",annotations:{}};
+      } catch { return {dataset_fingerprint:DATA.dataset_fingerprint,reviewer_id:"",annotations:{}}; }
+    }
+    function saveState() { localStorage.setItem(STORAGE_KEY,JSON.stringify(state)); }
+    function annotation(key=currentKey) {
+      const base=blankAnnotation(), stored=state.annotations[key]||{};
+      return {...base,...stored,qa_formality:{...base.qa_formality,...(stored.qa_formality||{})},evidence_groundedness:{...base.evidence_groundedness,...(stored.evidence_groundedness||{})},answerability:{speaker_only:{...base.answerability.speaker_only,...(stored.answerability?.speaker_only||{})},combined_all_six_users:{...base.answerability.combined_all_six_users,...(stored.answerability?.combined_all_six_users||{})}}};
+    }
+    function setAnnotation(patch) {
+      const value={...annotation(),...patch};
+      if(!value.started_at)value.started_at=now();
+      state.annotations[currentKey]=value;saveState();updateProgress();
+    }
+    function flushTime() { if(!currentKey)return;const value=annotation();value.active_seconds=Math.round((Number(value.active_seconds)||0)+(performance.now()-activeStarted)/1000);state.annotations[currentKey]=value;activeStarted=performance.now();saveState(); }
+    function conditionComplete(value) { return typeof value.answerable === "boolean"; }
+    function judgeComplete(value) { return value.verdict==="pass" || value.verdict==="fail"; }
+    function complete(value) { return value.skipped ? Boolean(value.skip_reason.trim()) : judgeComplete(value.qa_formality)&&judgeComplete(value.evidence_groundedness)&&conditionComplete(value.answerability.speaker_only)&&conditionComplete(value.answerability.combined_all_six_users); }
+    function taskStatus(task) { const value=annotation(task.key); return value.skipped&&complete(value)?"skipped":complete(value)?"completed":"pending"; }
+    function answerabilityVerdict(value) { const a=value.answerability.speaker_only.answerable,b=value.answerability.combined_all_six_users.answerable;return typeof a==="boolean"&&typeof b==="boolean"?(a===false&&b===true?"pass":"fail"):""; }
+    function toast(message) { clearTimeout(toastTimer);els.toast.textContent=message;els.toast.classList.add("show");toastTimer=setTimeout(()=>els.toast.classList.remove("show"),2600); }
+    function packetStats(packet) { const packetTasks=tasksByPacket.get(packet.evidence_id)||[],done=packetTasks.filter(task=>complete(annotation(task.key))).length,skipped=packetTasks.filter(task=>taskStatus(task)==="skipped").length;return {done,skipped,total:packetTasks.length,pending:done<packetTasks.length}; }
+    function filteredPackets() { const filter=els.statusFilter.value;return DATA.packets.filter(packet=>{const stats=packetStats(packet);return filter==="all"||(filter==="pending"&&stats.pending)||(filter==="completed"&&!stats.pending)||(filter==="skipped"&&stats.skipped>0);}); }
+    function navigate(key,{resetTimeline=true}={}) { if(!byKey.has(key))return;flushTime();currentKey=key;activeStarted=performance.now();selectedUser=byKey.get(key).candidate.asker_index;if(resetTimeline){selectedSegment=0;selectedGlobalTime=0;}else{selectedSegment=Math.min(19,Math.floor(selectedGlobalTime/30));}render(); }
+    function defaultTask(packet,status="pending") { const packetTasks=tasksByPacket.get(packet.evidence_id)||[];return packetTasks.find(task=>taskStatus(task)===status)||packetTasks[0]; }
+    function movePacket(delta) { const visible=filteredPackets(),packet=byKey.get(currentKey)?.packet,index=visible.findIndex(row=>row.evidence_id===packet?.evidence_id);if(!visible.length)return;const next=visible[Math.max(0,Math.min(visible.length-1,(index<0?0:index)+delta))],task=defaultTask(next,els.statusFilter.value==="skipped"?"skipped":"pending");if(task)navigate(task.key); }
+    function nextPending() { const pending=tasks.find(task=>taskStatus(task)==="pending"&&task.key!==currentKey)||tasks.find(task=>taskStatus(task)==="pending");pending?navigate(pending.key):toast("No pending attempts remain."); }
+    function updatePacketSelect() { const visible=filteredPackets(),currentPacket=byKey.get(currentKey)?.packet;if(visible.length&&!visible.some(packet=>packet.evidence_id===currentPacket?.evidence_id)){const task=defaultTask(visible[0],els.statusFilter.value==="skipped"?"skipped":"pending");if(task)currentKey=task.key;}const selectedPacket=byKey.get(currentKey)?.packet;els.packetSelect.innerHTML=visible.map(packet=>{const stats=packetStats(packet);return `<option value="${esc(packet.evidence_id)}"${packet.evidence_id===selectedPacket?.evidence_id?" selected":""}>Packet ${packet.packet_order}/${DATA.summary.packet_count} · ${stats.done}/${stats.total} complete · ${esc(packet.day)} ${esc(packet.clip_clock)}</option>`;}).join(""); }
+
+    function judgeMarkup(key,title,description,value) {
+      const disabled=annotation().skipped?" disabled":"";
+      return `<section class="judge"><div class="judge-title"><h3>${esc(title)}</h3><span>${esc(description)}</span></div><div class="binary"><label class="choice fail"><input type="radio" data-judge-verdict="${key}" value="fail"${value.verdict==="fail"?" checked":""}${disabled}>FAIL</label><label class="choice pass"><input type="radio" data-judge-verdict="${key}" value="pass"${value.verdict==="pass"?" checked":""}${disabled}>PASS</label></div></section>`;
+    }
+    function conditionMarkup(key,title,description,value) {
+      const disabled=annotation().skipped?" disabled":"";
+      return `<div class="condition"><h4>${esc(title)}</h4><p style="color:var(--muted);font-size:.72rem;margin:0 0 8px">${esc(description)}</p><div class="binary"><label class="choice fail"><input type="radio" data-condition-answer="${key}" value="false"${value.answerable===false?" checked":""}${disabled}>answerable: false</label><label class="choice pass"><input type="radio" data-condition-answer="${key}" value="true"${value.answerable===true?" checked":""}${disabled}>answerable: true</label></div></div>`;
+    }
+    function failureModesMarkup(value) { const selected=new Set(value.failure_modes||[]),disabled=value.skipped?" disabled":"";return `<section class="judge"><div class="judge-title"><h3>Common failure modes</h3><span>Optional human tags; not judge subchecks</span></div><div class="failure-grid">${FAILURE_MODES.map(([key,label])=>`<label class="failure-mode"><input type="checkbox" data-failure-mode="${key}"${selected.has(key)?" checked":""}${disabled}><span>${esc(label)}</span></label>`).join("")}</div></section>`; }
+    function candidateTabs(packet) { return `<div class="candidate-tabs" role="tablist" aria-label="Questions in this packet">${(tasksByPacket.get(packet.evidence_id)||[]).map(task=>{const status=taskStatus(task);return `<button class="candidate-tab ${status}${task.key===currentKey?" active":""}" data-candidate-key="${esc(task.key)}" role="tab" aria-selected="${task.key===currentKey}"><strong>Q${task.candidate.display_order} · ${esc(task.candidate.asker_user)}</strong><span>${status}</span></button>`;}).join("")}</div>`; }
+    function formatTime(seconds) { const value=Math.max(0,Math.min(600,Number(seconds)||0)),minutes=Math.floor(value/60),rest=Math.floor(value%60);return `${String(minutes).padStart(2,"0")}:${String(rest).padStart(2,"0")}`; }
+    function userTab(user,candidate) { const active=user.user_index===selectedUser,asker=user.user_index===candidate.asker_index;return `<button class="user-tab${active?" active":""}${asker?" asker":""}" data-user="${user.user_index}"><strong>${esc(user.agent_name)}</strong><span>${asker?"ASKER · ":"provider · "}10 min source</span></button>`; }
+    function locationsMarkup(candidate) { const locations=candidate.evidence_locations||[];if(!locations.length)return `<div class="locations"><h3>Generator-reported evidence locations</h3><p>No usable user + timestamp references were recorded for this attempt.</p></div>`;return `<div class="locations"><h3>Generator-reported evidence locations</h3><p>Click a resolved location to open that user's relative source clip. These are generator claims, not human-verified evidence.</p><div class="location-list">${locations.map(location=>{const resolved=location.relative_seconds!==null&&location.user_index!==null,label=resolved?`${esc(location.user)} · ${esc(location.absolute_clock)} (+${esc(location.relative_time)})`:`${esc(location.user)} · raw ${esc(location.raw_timestamp)} (unresolved)`,detail=location.moment||location.sources.join(" + ");return resolved?`<button class="location" data-location-user="${location.user_index}" data-location-seconds="${location.relative_seconds}"><strong>${label}</strong><span>Clip ${Number(location.segment_index)+1} · ${esc(detail)}</span></button>`:`<div class="location unresolved"><strong>${label}</strong><span>${esc(detail)}</span></div>`;}).join("")}</div></div>`; }
+    function evidenceMarkup(packet,candidate) {
+      const user=packet.users.find(row=>row.user_index===selectedUser)||packet.users[0];selectedUser=user.user_index;
+      selectedSegment=Math.max(0,Math.min(user.source_segments.length-1,selectedSegment));
+      const segment=user.source_segments[selectedSegment],segmentOptions=user.source_segments.map(row=>`<option value="${row.segment_index}"${row.segment_index===selectedSegment?" selected":""}>${formatTime(row.start_seconds)}–${formatTime(row.end_seconds)} · ${esc(row.time_token||row.clip_id)}</option>`).join(""),segmentButtons=user.source_segments.map(row=>`<button class="segment${row.segment_index===selectedSegment?" active":""}" data-segment="${row.segment_index}" title="${esc(row.time_token||row.clip_id)}">${formatTime(row.start_seconds)}</button>`).join("");
+      const video=segment?.video_url?`<video id="sourceVideo" controls playsinline preload="metadata" src="${esc(segment.video_url)}"></video>`:'<div class="video-empty">This source segment has no playable Hugging Face URL.</div>';
+      return `<section class="panel"><div class="panel-head"><div><h2>Six-user source video</h2><p>Each tab is one synchronized 10-minute timeline assembled from 20 consecutive Hugging Face clips.</p></div><span class="badge">${formatTime(selectedGlobalTime)} / 10:00</span></div><div class="user-tabs">${packet.users.map(row=>userTab(row,candidate)).join("")}</div><div class="media-workspace"><div class="video-pane"><div class="player-controls"><button id="previousSegment"${selectedSegment===0?" disabled":""}>← 30s</button><select id="segmentSelect" class="seg-select" aria-label="Source video segment">${segmentOptions}</select><button id="nextSegment"${selectedSegment>=user.source_segments.length-1?" disabled":""}>30s →</button><label class="auto-advance"><input id="autoAdvance" type="checkbox"${autoAdvance?" checked":""}> Continue automatically</label></div><div id="videoSlot">${video}</div><div class="video-copy"><strong>${esc(user.agent_name)}</strong> · segment ${selectedSegment+1}/${user.source_segments.length} · <a href="${esc(segment?.video_url||"")}" target="_blank" rel="noopener">Open this source clip</a></div><div class="timeline"><div class="timeline-summary"><span>Shared synchronized position</span><span id="timelineTime">${formatTime(selectedGlobalTime)}</span></div><input id="timelineRange" type="range" min="0" max="599.9" step="0.1" value="${selectedGlobalTime}" aria-label="Ten-minute timeline position"><div class="segments">${segmentButtons}</div></div></div></div></section>`;
+    }
+    function render() {
+      updatePacketSelect();const task=byKey.get(currentKey);if(!task){els.app.innerHTML='<div class="empty">No attempts in this assignment.</div>';return;}
+      const {packet,candidate}=task,value=annotation(),verdict=answerabilityVerdict(value),options=candidate.options.length?candidate.options.map((option,index)=>{const label=LETTERS[index]||`#${index+1}`;return `<li class="option${label===candidate.correct?" correct":""}"><span class="letter">${label}</span><span>${esc(option)}</span></li>`;}).join(""):'<li class="option"><span>[No options were produced]</span></li>';
+      const stats=packetStats(packet);els.taskMeta.textContent=`Packet ${packet.packet_order}/${DATA.summary.packet_count} · ${stats.done}/${stats.total} complete · Q${candidate.display_order}`;
+      els.app.innerHTML=`${candidateTabs(packet)}<div class="layout"><div class="stack"><section class="panel"><div class="panel-head"><div><h2>Candidate question</h2><p>Packet ${packet.packet_order} · Question ${candidate.display_order}/${packet.candidate_count} · ${esc(packet.day)} ${esc(packet.clip_clock)}</p></div><span class="badge asker">Asker: ${esc(candidate.asker_user)}</span></div><div class="question-body"><p class="question">${esc(candidate.question)}</p><ol class="options">${options}</ol><p class="answer"><strong>Proposed answer:</strong> ${esc(candidate.correct)} / ${esc(candidate.answer)}</p>${locationsMarkup(candidate)}</div></section>${evidenceMarkup(packet,candidate)}</div><aside class="panel"><div class="panel-head"><div><h2>Human labels</h2><p>Binary labels; optional tags and one shared note.</p></div><span id="completionBadge" class="badge">${complete(value)?"complete":"incomplete"}</span></div><div class="labels">${judgeMarkup("qa_formality","QA formality","Language and MCQ construction only",value.qa_formality)}${judgeMarkup("evidence_groundedness","Evidence groundedness","Visible support in all six timelines",value.evidence_groundedness)}<section class="judge"><div class="judge-title"><h3>Answerability</h3><span>Preserved two-pass boolean logic</span></div><div class="condition-grid">${conditionMarkup("speaker_only","Asker only","Use only the full unpruned asker timeline.",value.answerability.speaker_only)}${conditionMarkup("combined_all_six_users","All six users","Combine all six full unpruned timelines.",value.answerability.combined_all_six_users)}</div><div class="derived ${verdict}">Derived answerability verdict: <strong>${verdict?verdict.toUpperCase():"waiting for both booleans"}</strong>${verdict==="pass"?" — asker-only is false and all-six is true.":verdict==="fail"?" — the required two-pass pattern is not satisfied.":""}</div></section>${failureModesMarkup(value)}<label class="field"><span>Manual notes for this question (optional)</span><textarea class="tall" id="notes" placeholder="Add any useful context, uncertainty, or adjudication note."${value.skipped?" disabled":""}>${esc(value.notes)}</textarea></label></div>${value.skipped?`<div class="skip-box"><label class="field"><span>Skip reason (required)</span><textarea id="skipReason" placeholder="Explain why this candidate cannot be labeled.">${esc(value.skip_reason)}</textarea></label></div>`:""}<div class="action"><p>Changes save locally as you type.</p><div class="action-buttons"><button id="skipTask">${value.skipped?"Resume":"Skip"}</button><button id="saveNext" class="primary">Save & next pending</button></div></div></aside></div>`;
+      bindRendered(task);updateProgress();
+    }
+    function bindRendered(task) {
+      document.querySelectorAll("[data-candidate-key]").forEach(button=>button.addEventListener("click",()=>navigate(button.dataset.candidateKey,{resetTimeline:false})));
+      document.querySelectorAll("[data-judge-verdict]").forEach(input=>input.addEventListener("change",()=>{const key=input.dataset.judgeVerdict,current=annotation();setAnnotation({[key]:{...current[key],verdict:input.value}});render();}));
+      document.querySelectorAll("[data-condition-answer]").forEach(input=>input.addEventListener("change",()=>{const current=annotation(),key=input.dataset.conditionAnswer;setAnnotation({answerability:{...current.answerability,[key]:{...current.answerability[key],answerable:input.value==="true"}}});render();}));
+      document.querySelectorAll("[data-failure-mode]").forEach(input=>input.addEventListener("change",()=>{const selected=new Set(annotation().failure_modes||[]);input.checked?selected.add(input.dataset.failureMode):selected.delete(input.dataset.failureMode);setAnnotation({failure_modes:Array.from(selected)});}));
+      document.querySelectorAll("[data-location-user]").forEach(button=>button.addEventListener("click",()=>{selectedUser=Number(button.dataset.locationUser);selectedGlobalTime=Number(button.dataset.locationSeconds);selectedSegment=Math.min(19,Math.floor(selectedGlobalTime/30));render();}));
+      document.querySelectorAll("[data-user]").forEach(button=>button.addEventListener("click",()=>{captureVideoTime();selectedUser=Number(button.dataset.user);render();}));
+      document.querySelectorAll("[data-segment]").forEach(button=>button.addEventListener("click",()=>loadSegment(Number(button.dataset.segment))));
+      document.getElementById("segmentSelect")?.addEventListener("change",event=>loadSegment(Number(event.target.value)));
+      document.getElementById("previousSegment")?.addEventListener("click",()=>loadSegment(selectedSegment-1));
+      document.getElementById("nextSegment")?.addEventListener("click",()=>loadSegment(selectedSegment+1));
+      document.getElementById("timelineRange")?.addEventListener("input",event=>{document.getElementById("timelineTime").textContent=formatTime(event.target.value);});
+      document.getElementById("timelineRange")?.addEventListener("change",event=>{const globalTime=Number(event.target.value);loadSegment(Math.floor(globalTime/30),false,globalTime);});
+      document.getElementById("autoAdvance")?.addEventListener("change",event=>{autoAdvance=event.target.checked;});
+      const video=document.getElementById("sourceVideo");
+      if(video){video.addEventListener("loadedmetadata",()=>{const local=Math.max(0,selectedGlobalTime-selectedSegment*30);if(local>0)video.currentTime=Math.min(local,Math.max(0,(video.duration||30)-.05));if(playAfterRender){playAfterRender=false;video.play().catch(()=>{});}});video.addEventListener("timeupdate",()=>{selectedGlobalTime=Math.min(599.9,selectedSegment*30+(Number(video.currentTime)||0));const range=document.getElementById("timelineRange"),label=document.getElementById("timelineTime");if(range)range.value=String(selectedGlobalTime);if(label)label.textContent=formatTime(selectedGlobalTime);});video.addEventListener("ended",()=>{if(autoAdvance&&selectedSegment<19)loadSegment(selectedSegment+1,true);});}
+      document.getElementById("notes")?.addEventListener("input",event=>setAnnotation({notes:event.target.value}));
+      document.getElementById("skipReason")?.addEventListener("input",event=>setAnnotation({skip_reason:event.target.value}));
+      document.getElementById("skipTask")?.addEventListener("click",()=>{const value=annotation();setAnnotation({skipped:!value.skipped,skip_reason:value.skipped?"":value.skip_reason});render();});
+      document.getElementById("saveNext")?.addEventListener("click",()=>{const value=annotation();if(!complete(value)){toast(value.skipped?"Enter a skip reason first.":"Complete both binary judges and both answerability conditions first.");return;}value.completed_at=value.completed_at||now();state.annotations[currentKey]=value;saveState();nextPending();});
+    }
+    function captureVideoTime() { const video=document.getElementById("sourceVideo");if(video)selectedGlobalTime=Math.min(599.9,selectedSegment*30+(Number(video.currentTime)||0)); }
+    function loadSegment(segmentIndex,autoplay=false,globalTime=null) { selectedSegment=Math.max(0,Math.min(19,Number(segmentIndex)||0));selectedGlobalTime=globalTime===null?selectedSegment*30:Number(globalTime);playAfterRender=autoplay;render(); }
+    function score(verdict) { return verdict==="fail"?1:verdict==="pass"?2:""; }
+    function flatRow(task) {
+      const {packet,candidate}=task,value=annotation(task.key),a=value.answerability.speaker_only,b=value.answerability.combined_all_six_users,av=answerabilityVerdict(value),urls=packet.users.flatMap(user=>user.source_segments.map(segment=>segment.video_url).filter(Boolean));
+      return {schema_version:DATA.schema_version,dataset_fingerprint:DATA.dataset_fingerprint,assignment_id:ASSIGNMENT_ID,reviewer_id:state.reviewer_id,annotation_status:value.skipped&&complete(value)?"skipped":complete(value)?"completed":"pending",packet_order:packet.packet_order,evidence_id:packet.evidence_id,display_order:candidate.display_order,candidate_id:candidate.candidate_id,source_qa_id:candidate.source_qa_id,source_evidence_id:candidate.source_evidence_id,generation_attempt:candidate.generation_attempt,asker_user:candidate.asker_user,formality_verdict:value.qa_formality.verdict,evidence_grounding_verdict:value.evidence_groundedness.verdict,answerability_verdict:av,formality_score:score(value.qa_formality.verdict),evidence_grounding_score:score(value.evidence_groundedness.verdict),answerability_score:score(av),asker_only_answerable:a.answerable,all_six_answerable:b.answerable,failure_modes:JSON.stringify(value.failure_modes||[]),candidate_skipped:value.skipped,skip_reason:value.skip_reason,notes:value.notes,started_at:value.started_at,completed_at:value.completed_at,active_seconds:value.active_seconds,question:candidate.question,options:JSON.stringify(candidate.options),correct:candidate.correct,answer:candidate.answer,required_users:JSON.stringify(candidate.required_users),source_video_urls:JSON.stringify(urls)};
+    }
+    function structuredRow(task) { const row=flatRow(task),value=annotation(task.key);return {...row,failure_modes:value.failure_modes||[],labels:{qa_formality:{verdict:row.formality_verdict},evidence_groundedness:{verdict:row.evidence_grounding_verdict},answerability:{verdict:row.answerability_verdict,speaker_only:{answerable:value.answerability.speaker_only.answerable},combined_all_six_users:{answerable:value.answerability.combined_all_six_users.answerable}}}}; }
+    function csvCell(value) { const text=String(value??"");return /[",\r\n]/.test(text)?`"${text.replace(/"/g,'""')}"`:text; }
+    function download(name,text,type) { const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),anchor=document.createElement("a");anchor.href=url;anchor.download=name;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),500); }
+    function requireReviewer() { if(!state.reviewer_id.trim()){toast("Enter an annotator ID before exporting.");return false;}return true; }
+    function exportJsonl() { if(!requireReviewer())return;flushTime();const rows=tasks.map(structuredRow);download(`six_user_binary_labels_${ASSIGNMENT_ID}_${state.reviewer_id}.jsonl`,rows.map(row=>JSON.stringify(row)).join("\n")+"\n","application/x-ndjson"); }
+    function exportCsv() { if(!requireReviewer())return;flushTime();const rows=tasks.map(flatRow),csv=[CSV_COLUMNS.join(","),...rows.map(row=>CSV_COLUMNS.map(key=>csvCell(row[key])).join(","))].join("\r\n");download(`six_user_binary_labels_${ASSIGNMENT_ID}_${state.reviewer_id}.csv`,`\ufeff${csv}`,"text/csv;charset=utf-8"); }
+    function backup() { flushTime();download(`six_user_binary_backup_${ASSIGNMENT_ID}_${state.reviewer_id||"unassigned"}.json`,JSON.stringify({...state,exported_at:now()},null,2),"application/json"); }
+    async function restore(file) { const value=JSON.parse(await file.text());if(value.dataset_fingerprint!==DATA.dataset_fingerprint)throw new Error("Backup fingerprint does not match this assignment.");state=value;saveState();els.reviewerId.value=state.reviewer_id||"";render();toast("Backup restored."); }
+    function updateProgress() { const done=tasks.filter(task=>complete(annotation(task.key))).length;els.progressFill.style.width=`${tasks.length?done/tasks.length*100:0}%`;els.datasetCopy.textContent=`${ASSIGNMENT_ID} · ${done}/${tasks.length} attempts complete · ${DATA.summary.packet_count} packets`;const task=byKey.get(currentKey);if(!task)return;const stats=packetStats(task.packet);els.taskMeta.textContent=`Packet ${task.packet.packet_order}/${DATA.summary.packet_count} · ${stats.done}/${stats.total} complete · Q${task.candidate.display_order}`;const option=Array.from(els.packetSelect.options).find(row=>row.value===task.packet.evidence_id);if(option)option.textContent=`Packet ${task.packet.packet_order}/${DATA.summary.packet_count} · ${stats.done}/${stats.total} complete · ${task.packet.day} ${task.packet.clip_clock}`;const badge=document.getElementById("completionBadge");if(badge)badge.textContent=complete(annotation())?"complete":"incomplete"; }
+    function initialize() {
+      els.reviewerId.value=state.reviewer_id||"";els.reviewerId.addEventListener("input",event=>{state.reviewer_id=event.target.value.trim();saveState();});els.statusFilter.addEventListener("change",()=>render());els.packetSelect.addEventListener("change",event=>{const packet=DATA.packets.find(row=>row.evidence_id===event.target.value),task=packet&&defaultTask(packet,els.statusFilter.value==="skipped"?"skipped":"pending");if(task)navigate(task.key);});els.previousPacket.addEventListener("click",()=>movePacket(-1));els.nextPacket.addEventListener("click",()=>movePacket(1));els.nextPending.addEventListener("click",nextPending);els.exportJsonl.addEventListener("click",exportJsonl);els.exportCsv.addEventListener("click",exportCsv);els.backupJson.addEventListener("click",backup);els.restoreButton.addEventListener("click",()=>els.restoreJson.click());els.restoreJson.addEventListener("change",async event=>{try{if(event.target.files[0])await restore(event.target.files[0]);}catch(error){toast(error.message);}event.target.value="";});window.addEventListener("beforeunload",flushTime);document.addEventListener("keydown",event=>{if(["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName))return;if(event.key.toLowerCase()==="n")nextPending();});render();
+    }
+    initialize();
+  </script>
+</body>
+</html>

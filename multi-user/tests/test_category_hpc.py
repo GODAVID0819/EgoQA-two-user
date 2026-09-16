@@ -61,7 +61,7 @@ def test_production_launcher_preflights_active_relation_and_judge_contracts() ->
     generation_index = script.index('echo "stage=generate_video_qa_loop"')
     assert preflight_index < generation_index
     assert "POSITIVE_EXAMPLES_GUIDANCE" in script
-    assert "QA_FORMALITY_SEMANTIC_SUBCHECK_NAMES" in script
+    assert "QA_FORMALITY_CRITERION_NAMES" in script
     assert "VIDEO_GENERATION_SCHEMA" in script
     assert "production generation schema still requests category fields" in script
     assert "actual_prompts_path" in script
@@ -72,7 +72,7 @@ def test_production_launcher_preflights_active_relation_and_judge_contracts() ->
     assert "symmetric_concurrency_preflight=ok" in script
     assert "pruned_to_original_temporal_mapping=ok" in script
     assert "qa_formality_text_only_contract=ok" in script
-    assert "qa_formality_five_semantic_subchecks=ok" in script
+    assert "qa_formality_flat_verdict_contract=ok" in script
     assert "timestamp_judge_only_contract=ok" in script
     assert "participant_name_deterministic_check=ok" in script
     assert "grounding_distractor_contract=ok" in script
@@ -106,7 +106,7 @@ def test_production_launcher_verifies_recorded_category_free_prompts() -> None:
     assert "qa_formality prompt leaked excluded context" in script
     assert "evidence_groundedness prompt omitted grounding contract" in script
     assert "answerability prompt omitted ambiguity or symmetry contract" in script
-    assert "passing qa_formality check omitted semantic subchecks" in script
+    assert "merged qa_formality check retained archived semantic_subchecks" in script
     assert "accepted_category_counts" not in script
 
 

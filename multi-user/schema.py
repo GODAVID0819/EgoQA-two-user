@@ -122,6 +122,21 @@ def validate_qa_item(
     elif len(set(required_users)) != len(required_users):
         errors.append("required_users must not contain duplicates")
 
+    supporting_claims = item.get("supporting_user_claims")
+    if isinstance(required_users, list) and len(required_users) == 6:
+        if not isinstance(supporting_claims, list):
+            errors.append("supporting_user_claims must be a list for six-user items")
+        else:
+            for index, claim in enumerate(supporting_claims):
+                if not isinstance(claim, dict):
+                    errors.append(f"supporting_user_claims[{index}] must be an object")
+                    continue
+                user = claim.get("user")
+                if user not in required_users:
+                    errors.append(
+                        f"supporting_user_claims[{index}].user must be in required_users"
+                    )
+
     single = item.get("single_user_answerability")
     if not isinstance(single, dict):
         errors.append("single_user_answerability must be an object")
