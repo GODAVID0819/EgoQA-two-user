@@ -1611,10 +1611,10 @@ def minimum_required_users_from_fact_audits(
 
 
 def answerability_sufficiency_output_errors(value: dict[str, Any]) -> list[str]:
-    """Validate the legacy zero-shot answerability model-output contract."""
+    """Validate the direct answerability verdict-first model-output contract."""
 
     expected_fields = [
-        "answerable",
+        "verdict",
         "reason",
         "available_evidence",
         "missing_evidence",
@@ -1622,11 +1622,11 @@ def answerability_sufficiency_output_errors(value: dict[str, Any]) -> list[str]:
     errors = []
     if list(value) != expected_fields:
         errors.append(
-            "answerability fields must be exactly answerable, reason, "
+            "answerability fields must be exactly verdict, reason, "
             "available_evidence, missing_evidence in that order"
         )
-    if not isinstance(value.get("answerable"), bool):
-        errors.append("answerable must be a JSON boolean")
+    if str(value.get("verdict") or "") not in {"pass", "fail"}:
+        errors.append("verdict must be exactly lowercase pass or fail")
     if not isinstance(value.get("reason"), str) or not value["reason"].strip():
         errors.append("reason must be a non-empty, condition-specific string")
     for field in ("available_evidence", "missing_evidence"):
@@ -1691,10 +1691,10 @@ def answerability_gate(
                     return None, "response included forbidden answer fields: " + ", ".join(
                         forbidden_fields
                     )
-                answerable = row.get("answerable")
-                if not isinstance(answerable, bool):
-                    return None, "answerable must be a JSON boolean"
-                return answerable, None
+                verdict = str(row.get("verdict") or "")
+                if verdict not in {"pass", "fail"}:
+                    return None, "verdict must be exactly lowercase pass or fail"
+                return verdict == "pass", None
 
             speaker_answerable, speaker_error = parsed_direct_sufficiency(
                 speaker_rows[-1]
@@ -4388,16 +4388,21 @@ def run_answerability_eval(
                 contract_errors = answerability_sufficiency_output_errors(answer)
                 if contract_errors:
                     answer["answerability_contract_error"] = "; ".join(contract_errors)
+                else:
+                    # Compatibility metric computed by code; it is not part of
+                    # the model's output contract or training target.
+                    answer["answerable"] = answer["verdict"] == "pass"
         except Exception as exc:
             if (
                 len(required_users) == 6
                 and six_user_judge_mode == SIX_USER_JUDGE_MODE_LEGACY
             ):
                 answer = {
-                    "answerable": None,
+                    "verdict": None,
                     "reason": f"parse_failed: {exc}",
                     "available_evidence": [],
                     "missing_evidence": [],
+                    "answerable": None,
                     "answerability_contract_error": f"parse_failed: {exc}",
                 }
             else:

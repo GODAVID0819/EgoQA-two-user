@@ -69,17 +69,23 @@ class JudgeOutputContractTests(unittest.TestCase):
         self.assertEqual(judge_schema_for_check("evidence_groundedness"), expected)
         self.assertEqual(list(expected), ["verdict", "reason", "fix"])
 
-    def test_formality_prompt_keeps_all_criteria_without_output_subchecks(self) -> None:
+    def test_formality_prompt_uses_short_rubric_without_output_subchecks(self) -> None:
         prompt = build_qa_formality_judge_prompt(qa_item(), packet(), schema_errors=[])
         for criterion in (
-            "first_person_perspective",
-            "naturalness_and_clarity",
-            "other_person_activity_query",
-            "direct_name_leakage",
-            "timestamp_citation",
-            "ambiguous_reference",
+            "1. Structure:",
+            "2. Perspective:",
+            "3. Information need:",
+            "4. Clarity:",
+            "5. Options:",
+            "6. Question target:",
+            "7. Leakage:",
         ):
             self.assertIn(criterion, prompt)
+        self.assertIn(
+            "The option strings themselves do not need A./B./C./D./E. prefixes.",
+            prompt,
+        )
+        self.assertIn("The options do not need first-person pronouns.", prompt)
         output_contract = prompt.rsplit(
             "Return exactly one valid JSON object with this exact shape:", 1
         )[1]
@@ -90,6 +96,9 @@ class JudgeOutputContractTests(unittest.TestCase):
 
     def test_grounding_prompt_uses_same_first_verdict_contract(self) -> None:
         prompt = build_evidence_groundedness_judge_prompt(qa_item(), packet())
+        self.assertIn("PASS only if all requirements hold", prompt)
+        self.assertIn("Do not infer missing transitions", prompt)
+        self.assertIn("timestamp citations in the question", prompt)
         output_contract = prompt.rsplit(
             "Return exactly one valid JSON object with this exact shape:", 1
         )[1]
@@ -158,14 +167,14 @@ class JudgeOutputContractTests(unittest.TestCase):
         self.assertIn("The claimed placement is not visible.", merged["feedback_to_generator"])
         self.assertNotIn("why_generator_asked_this", merged)
 
-    def test_legacy_zero_shot_answerability_contract_is_preserved(self) -> None:
+    def test_direct_answerability_uses_first_verdict_contract(self) -> None:
         self.assertEqual(
             ANSWERABILITY_SUFFICIENCY_SCHEMA["required"],
-            ["answerable", "reason", "available_evidence", "missing_evidence"],
+            ["verdict", "reason", "available_evidence", "missing_evidence"],
         )
         self.assertEqual(
             list(ANSWERABILITY_SUFFICIENCY_SCHEMA["properties"]),
-            ["answerable", "reason", "available_evidence", "missing_evidence"],
+            ["verdict", "reason", "available_evidence", "missing_evidence"],
         )
         prompt = build_answerability_prompt(
             qa_item(),
@@ -175,9 +184,18 @@ class JudgeOutputContractTests(unittest.TestCase):
                 "users": ["Speaker"],
             },
         )
-        self.assertIn("The first JSON field must be `answerable`", prompt)
+        self.assertIn("The first JSON field must be `verdict`", prompt)
+        self.assertNotIn("answerable must be the first field", prompt)
+        self.assertIn("Set verdict to pass only when", prompt)
+        self.assertIn("visible continuity or distinguishing evidence", prompt)
+        self.assertIn("visible evidence of the exchange", prompt)
+        self.assertIn(
+            "A visible difference does not prove an unseen cause or intervention.",
+            prompt,
+        )
+        self.assertIn("missing, occluded, ambiguous, or contradictory", prompt)
         value = {
-            "answerable": False,
+            "verdict": "fail",
             "reason": "The recipient's later action is not visible in the speaker video.",
             "available_evidence": ["The initial handoff is visible."],
             "missing_evidence": ["The recipient's later placement is not visible."],

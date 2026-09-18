@@ -24,16 +24,6 @@ from egolife_two_user_qa.prompts import (  # noqa: E402
     judge_schema_for_check,
 )
 
-REVIEWER_ROOT = PACKAGE_ROOT.parent / "score-only-reward-model"
-sys.path.insert(0, str(REVIEWER_ROOT))
-from training.grpo_v3.experiments.human_preference_reviewer.v1.data import (  # noqa: E402
-    CandidateRecord,
-)
-from training.grpo_v3.experiments.human_preference_reviewer.v1.prompting import (  # noqa: E402
-    build_messages as build_reviewer_training_messages,
-)
-
-
 OUTPUT_PATH = Path(__file__).with_name("LEGACY_ZERO_SHOT_JUDGE_PROMPTS_REVIEW.md")
 
 USERS = [
@@ -150,16 +140,28 @@ ARCHIVED_SCORED_CHECK: dict[str, Any] = {
 }
 
 BINARY_REVIEWER_TRAINING_CONTRACT: dict[str, Any] = {
-    "contract_version": "binary_reviewer_v2",
-    "supervision_type": "class_weighted_binary_decisions",
-    "human_score_to_binary_label": {"1": 0, "2": 1, "3": 1},
+    "contract_version": "verdict_token_bce_sampled_frames_v3",
+    "supervision_type": "next_token_pass_fail",
     "binary_label_names": {"0": "fail", "1": "pass"},
-    "head_type": "two_logit_binary_classifier",
-    "class_logit_order": ["fail", "pass"],
-    "loss_function": "cross_entropy",
+    "assistant_prefix": '{"verdict":"',
+    "head_type": "none; use the language-model vocabulary logits",
+    "binary_logit": "logit(pass) - logit(fail)",
+    "loss_function": "BCEWithLogits",
     "class_weighting": "balanced_inverse_frequency_from_training_split_only",
-    "class_weight_reduction": "sum_weighted_losses_divided_by_sample_count",
-    "head_loss_aggregation": "equal_mean",
+    "class_weight_reduction": "mean-one normalization independently per judge",
+    "task_loss_weights": {
+        "qa_formality": 0.2,
+        "evidence_groundedness": 0.4,
+        "answerability": 0.4,
+    },
+    "trainable_parameters": (
+        "language attention+MLP LoRA only: q/k/v/o/gate/up/down projections, "
+        "rank 8, alpha 16"
+    ),
+    "inference_generation": (
+        "constrain only the first generated token to the selected pass/fail token, "
+        "then continue the same generation through the complete JSON contract"
+    ),
 }
 
 CODE_COMPUTED_MERGED_RECORD: dict[str, Any] = {
@@ -185,31 +187,6 @@ CODE_COMPUTED_MERGED_RECORD: dict[str, Any] = {
     "feedback_to_generator": "string assembled by code from failed reasons and fixes",
 }
 
-REVIEWER_TRAINING_CANDIDATE = CandidateRecord(
-    candidate_id="CANDIDATE_PLACEHOLDER_001",
-    evidence_id="EVIDENCE_PLACEHOLDER_001",
-    display_order=1,
-    question=QA_ITEM["question"],
-    options=tuple(QA_ITEM["options"]),
-    correct=QA_ITEM["correct"],
-    answer=QA_ITEM["answer"],
-    evidence_quality=1,
-    answerability=2,
-    qa_formality=3,
-)
-
-
-def reviewer_training_instruction() -> str:
-    messages = build_reviewer_training_messages(
-        REVIEWER_TRAINING_CANDIDATE,
-        video_a_path="VIDEO_A_PLACEHOLDER.mp4",
-        video_b_path="VIDEO_B_PLACEHOLDER.mp4",
-        video_a_user="SpeakerUser",
-        video_b_user="ProviderUser",
-    )
-    return str(messages[0]["content"][-1]["text"])
-
-
 def json_block(value: Any) -> str:
     return "```json\n" + json.dumps(value, ensure_ascii=False, indent=2) + "\n```"
 
@@ -227,7 +204,7 @@ def render() -> str:
         "",
         "## Scope",
         "",
-        "The active six-user RLHF path makes four judgments: one qa_formality call, one evidence_groundedness call, one asker-only answerability call, and one all-six answerability call. The two answerability calls share the same schema and boolean semantics.",
+        "The direct six-user path makes four judgments: one qa_formality call, one evidence_groundedness call, one speaker-only answerability call, and one all-six answerability call. Every model decision starts with the same lowercase pass/fail verdict field.",
         "",
         "## New final-judge output contract",
         "",
@@ -255,23 +232,17 @@ def render() -> str:
         "",
         json_block(CODE_COMPUTED_MERGED_RECORD),
         "",
-        "## Preserved legacy-zero-shot answerability contract",
+        "## Direct answerability contract",
         "",
         json_block(ANSWERABILITY_SUFFICIENCY_SCHEMA),
         "",
-        "The meaning is unchanged: answerable is true exactly when the videos supplied for that condition are sufficient. The target pipeline behavior is asker-only=false and all-six=true. available_evidence and missing_evidence remain in the model output for structured audit.",
+        "For each answerability condition, verdict is pass exactly when the supplied videos are sufficient. The code gate passes only for speaker-only=fail and all-six=pass. available_evidence and missing_evidence remain in the model output for structured audit.",
         "",
         "## Judge-model training contract",
         "",
         json_block(BINARY_REVIEWER_TRAINING_CONTRACT),
         "",
-        "The original human columns stay 1-3 in the archived data. Training maps score 1 to fail and scores 2-3 to pass. For each judge head, class weights are computed only from its training-split fail/pass counts as N / (2 * N_c). Each head uses class-weighted cross-entropy; active head losses are averaged equally. The classification heads do not directly supervise reason/fix text tokens. They can influence deployment reasoning only through the shared LoRA parameters, while the deployment prompt separately enforces verdict-first generation.",
-        "",
-        "### Binary reviewer training input prompt",
-        "",
-        "This is the exact text instruction emitted by the active training prompt builder for the English placeholder candidate. Video content is attached separately as Video A and Video B.",
-        "",
-        prompt_block(reviewer_training_instruction()),
+        "Training supplies the fixed assistant prefix as input and applies BCE only to the next-token margin logit(pass)-logit(fail). It adds no classifier head and does not supervise archived numerical scores or later JSON fields. At inference, the first generated token is locked from those two logits and the same generation continues through the full JSON contract. Class weights are estimated from the training split independently per judge, then normalized to preserve the 0.2/0.4/0.4 task-loss scale.",
         "",
         "## Prompt 1 — qa_formality",
         "",

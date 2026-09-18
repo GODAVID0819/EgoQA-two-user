@@ -1,0 +1,713 @@
+{
+  "dataset_fingerprint": "3a13da63b122d39e2148",
+  "reviewer_id": "hm2991",
+  "annotations": {
+    "RLHF6U_DAY1_11110000_A1_A2_A3_A4_A5_A6__ASKER_A5::attempt_02": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T19:00:17.341Z",
+      "completed_at": "2026-09-16T19:00:24.376Z",
+      "active_seconds": 25
+    },
+    "RLHF6U_DAY1_11110000_A1_A2_A3_A4_A5_A6__ASKER_A6::attempt_03": {
+      "qa_formality": {
+        "verdict": "fail"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "formality_concurrent_activity"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T19:00:29.963Z",
+      "completed_at": "2026-09-16T19:00:59.705Z",
+      "active_seconds": 35
+    },
+    "RLHF6U_DAY1_11110000_A1_A2_A3_A4_A5_A6__ASKER_A6::attempt_02": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "fail"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "grounding_unsupported_answer"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T19:01:03.125Z",
+      "completed_at": "2026-09-16T19:04:02.069Z",
+      "active_seconds": 182
+    },
+    "RLHF6U_DAY1_11110000_A1_A2_A3_A4_A5_A6__ASKER_A6::attempt_01": {
+      "qa_formality": {
+        "verdict": "fail"
+      },
+      "evidence_groundedness": {
+        "verdict": "fail"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "grounding_unsupported_answer",
+        "formality_concurrent_activity"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T19:04:12.295Z",
+      "completed_at": "2026-09-16T19:04:38.454Z",
+      "active_seconds": 36
+    },
+    "RLHF6U_DAY1_11110000_A1_A2_A3_A4_A5_A6__ASKER_A5::attempt_03": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T19:04:44.323Z",
+      "completed_at": "2026-09-16T19:05:02.632Z",
+      "active_seconds": 24
+    },
+    "RLHF6U_DAY1_11200000_A1_A2_A3_A4_A5_A6__ASKER_A6::attempt_02": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T19:06:11.792Z",
+      "completed_at": "2026-09-16T19:06:21.446Z",
+      "active_seconds": 93
+    },
+    "RLHF6U_DAY1_11200000_A1_A2_A3_A4_A5_A6__ASKER_A1::attempt_01": {
+      "qa_formality": {
+        "verdict": "fail"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "formality_unclear"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "Here, unnatural question means the question is asked in a way that does not make sense to require multiple people--it is clearly answerable using \"my own\" stream because the question asked what \"I\" did explicitly",
+      "started_at": "2026-09-16T19:09:47.802Z",
+      "completed_at": "2026-09-16T19:10:51.924Z",
+      "active_seconds": 278
+    },
+    "RLHF6U_DAY1_11200000_A1_A2_A3_A4_A5_A6__ASKER_A1::attempt_02": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T19:40:33.559Z",
+      "completed_at": "2026-09-16T19:40:46.154Z",
+      "active_seconds": 1799
+    },
+    "RLHF6U_DAY1_11200000_A1_A2_A3_A4_A5_A6__ASKER_A6::attempt_01": {
+      "qa_formality": {
+        "verdict": "fail"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": false
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "formality_asker_self_query",
+        "answerability_ambiguous",
+        "formality_concurrent_activity"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T19:40:56.063Z",
+      "completed_at": "2026-09-16T19:59:19.722Z",
+      "active_seconds": 1152
+    },
+    "RLHF6U_DAY1_11200000_A1_A2_A3_A4_A5_A6__ASKER_A4::attempt_01": {
+      "qa_formality": {
+        "verdict": "fail"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "formality_concurrent_activity"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T20:00:04.602Z",
+      "completed_at": "2026-09-16T20:26:24.482Z",
+      "active_seconds": 1640
+    },
+    "RLHF6U_DAY1_11200000_A1_A2_A3_A4_A5_A6__ASKER_A6::attempt_03": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T20:27:07.506Z",
+      "completed_at": "2026-09-16T20:27:39.087Z",
+      "active_seconds": 79
+    },
+    "RLHF6U_DAY1_11300000_A1_A2_A3_A4_A5_A6__ASKER_A2::attempt_03": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T20:41:12.248Z",
+      "completed_at": "2026-09-16T20:47:56.133Z",
+      "active_seconds": 1132
+    },
+    "RLHF6U_DAY1_11300000_A1_A2_A3_A4_A5_A6__ASKER_A2::attempt_01": {
+      "qa_formality": {
+        "verdict": "fail"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "formality_unclear"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "Another question that already sounds easily answerable using asker's own video",
+      "started_at": "2026-09-16T20:48:18.999Z",
+      "completed_at": "2026-09-16T20:49:32.406Z",
+      "active_seconds": 96
+    },
+    "RLHF6U_DAY1_11300000_A1_A2_A3_A4_A5_A6__ASKER_A6::attempt_03": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": false
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T20:55:29.292Z",
+      "completed_at": "2026-09-16T20:55:35.943Z",
+      "active_seconds": 364
+    },
+    "RLHF6U_DAY1_11300000_A1_A2_A3_A4_A5_A6__ASKER_A6::attempt_02": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "fail"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": false
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "grounding_unsupported_answer",
+        "formality_asker_self_query",
+        "grounding_unsupported_premise"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T21:10:49.910Z",
+      "completed_at": "2026-09-16T21:11:36.619Z",
+      "active_seconds": 961
+    },
+    "RLHF6U_DAY1_11300000_A1_A2_A3_A4_A5_A6__ASKER_A6::attempt_01": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "fail"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": false
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "grounding_unsupported_answer"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T21:20:44.135Z",
+      "completed_at": "2026-09-16T21:21:02.583Z",
+      "active_seconds": 566
+    },
+    "RLHF6U_DAY1_11300000_A1_A2_A3_A4_A5_A6__ASKER_A2::attempt_02": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T21:21:28.727Z",
+      "completed_at": "2026-09-16T21:21:34.478Z",
+      "active_seconds": 32
+    },
+    "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6__ASKER_A3::attempt_01": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "fail"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": false
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "grounding_unsupported_answer"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T21:47:39.454Z",
+      "completed_at": "2026-09-16T21:47:56.400Z",
+      "active_seconds": 1582
+    },
+    "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6__ASKER_A5::attempt_01": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": false
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T21:49:34.491Z",
+      "completed_at": "2026-09-16T21:49:42.693Z",
+      "active_seconds": 106
+    },
+    "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6__ASKER_A6::attempt_01": {
+      "qa_formality": {
+        "verdict": "fail"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": false
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "formality_concurrent_activity"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T21:59:47.722Z",
+      "completed_at": "2026-09-16T22:00:35.220Z",
+      "active_seconds": 653
+    },
+    "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6__ASKER_A4::attempt_01": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": false
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T22:02:52.456Z",
+      "completed_at": "2026-09-16T22:02:57.752Z",
+      "active_seconds": 143
+    },
+    "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6__ASKER_A6::attempt_03": {
+      "qa_formality": {
+        "verdict": "fail"
+      },
+      "evidence_groundedness": {
+        "verdict": "fail"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "formality_concurrent_activity",
+        "grounding_unsupported_answer"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T22:03:05.479Z",
+      "completed_at": "2026-09-16T22:08:51.783Z",
+      "active_seconds": 354
+    },
+    "RLHF6U_DAY1_11500000_A1_A2_A3_A4_A5_A6__ASKER_A3::attempt_02": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": false
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T22:11:36.190Z",
+      "completed_at": "2026-09-16T22:11:41.042Z",
+      "active_seconds": 169
+    },
+    "RLHF6U_DAY1_11500000_A1_A2_A3_A4_A5_A6__ASKER_A5::attempt_01": {
+      "qa_formality": {
+        "verdict": "fail"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "formality_unclear"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "Again, an awkward question that already feels answerable using own video",
+      "started_at": "2026-09-16T22:11:58.452Z",
+      "completed_at": "2026-09-16T22:13:19.811Z",
+      "active_seconds": 99
+    },
+    "RLHF6U_DAY1_11500000_A1_A2_A3_A4_A5_A6__ASKER_A5::attempt_03": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": false
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T22:15:00.753Z",
+      "completed_at": "2026-09-16T22:15:05.473Z",
+      "active_seconds": 106
+    },
+    "RLHF6U_DAY1_11500000_A1_A2_A3_A4_A5_A6__ASKER_A3::attempt_01": {
+      "qa_formality": {
+        "verdict": "fail"
+      },
+      "evidence_groundedness": {
+        "verdict": "fail"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "formality_concurrent_activity",
+        "grounding_unsupported_premise",
+        "grounding_unsupported_answer"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T22:15:16.365Z",
+      "completed_at": "2026-09-16T22:18:00.648Z",
+      "active_seconds": 175
+    },
+    "RLHF6U_DAY1_11500000_A1_A2_A3_A4_A5_A6__ASKER_A5::attempt_02": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "pass"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": true
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T22:18:17.996Z",
+      "completed_at": "2026-09-16T22:19:59.775Z",
+      "active_seconds": 119
+    },
+    "RLHF6U_DAY1_11500000_A1_A2_A3_A4_A5_A6__ASKER_A3::attempt_03": {
+      "qa_formality": {
+        "verdict": "pass"
+      },
+      "evidence_groundedness": {
+        "verdict": "fail"
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": false
+        },
+        "combined_all_six_users": {
+          "answerable": true
+        }
+      },
+      "failure_modes": [
+        "grounding_unsupported_answer",
+        "grounding_unsupported_premise"
+      ],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "2026-09-16T22:21:48.148Z",
+      "completed_at": "2026-09-16T22:21:59.911Z",
+      "active_seconds": 120
+    },
+    "RLHF6U_DAY1_12000000_A1_A2_A3_A4_A5_A6__ASKER_A3::attempt_01": {
+      "qa_formality": {
+        "verdict": ""
+      },
+      "evidence_groundedness": {
+        "verdict": ""
+      },
+      "answerability": {
+        "speaker_only": {
+          "answerable": ""
+        },
+        "combined_all_six_users": {
+          "answerable": ""
+        }
+      },
+      "failure_modes": [],
+      "skipped": false,
+      "skip_reason": "",
+      "notes": "",
+      "started_at": "",
+      "completed_at": "",
+      "active_seconds": 6
+    }
+  },
+  "exported_at": "2026-09-16T22:22:05.880Z"
+}

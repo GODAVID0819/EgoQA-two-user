@@ -4,7 +4,7 @@
 
 ## Scope
 
-The active six-user RLHF path makes four judgments: one qa_formality call, one evidence_groundedness call, one asker-only answerability call, and one all-six answerability call. The two answerability calls share the same schema and boolean semantics.
+The direct six-user path makes four judgments: one qa_formality call, one evidence_groundedness call, one speaker-only answerability call, and one all-six answerability call. Every model decision starts with the same lowercase pass/fail verdict field.
 
 ## New final-judge output contract
 
@@ -67,21 +67,25 @@ The model no longer emits review_passed, checks, nested status, semantic_subchec
 }
 ```
 
-## Preserved legacy-zero-shot answerability contract
+## Direct answerability contract
 
 ```json
 {
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "answerable",
+    "verdict",
     "reason",
     "available_evidence",
     "missing_evidence"
   ],
   "properties": {
-    "answerable": {
-      "type": "boolean"
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail"
+      ]
     },
     "reason": {
       "type": "string",
@@ -105,56 +109,40 @@ The model no longer emits review_passed, checks, nested status, semantic_subchec
 }
 ```
 
-The meaning is unchanged: answerable is true exactly when the videos supplied for that condition are sufficient. The target pipeline behavior is asker-only=false and all-six=true. available_evidence and missing_evidence remain in the model output for structured audit.
+For each answerability condition, verdict is pass exactly when the supplied videos are sufficient. The code gate passes only for speaker-only=fail and all-six=pass. available_evidence and missing_evidence remain in the model output for structured audit.
 
 ## Judge-model training contract
 
 ```json
 {
-  "contract_version": "binary_reviewer_v2",
-  "supervision_type": "class_weighted_binary_decisions",
-  "human_score_to_binary_label": {
-    "1": 0,
-    "2": 1,
-    "3": 1
-  },
+  "contract_version": "verdict_token_bce_sampled_frames_v3",
+  "supervision_type": "next_token_pass_fail",
   "binary_label_names": {
     "0": "fail",
     "1": "pass"
   },
-  "head_type": "two_logit_binary_classifier",
-  "class_logit_order": [
-    "fail",
-    "pass"
-  ],
-  "loss_function": "cross_entropy",
+  "assistant_prefix": "{\"verdict\":\"",
+  "head_type": "none; use the language-model vocabulary logits",
+  "binary_logit": "logit(pass) - logit(fail)",
+  "loss_function": "BCEWithLogits",
   "class_weighting": "balanced_inverse_frequency_from_training_split_only",
-  "class_weight_reduction": "sum_weighted_losses_divided_by_sample_count",
-  "head_loss_aggregation": "equal_mean"
+  "class_weight_reduction": "mean-one normalization independently per judge",
+  "task_loss_weights": {
+    "qa_formality": 0.2,
+    "evidence_groundedness": 0.4,
+    "answerability": 0.4
+  },
+  "trainable_parameters": "language attention+MLP LoRA only: q/k/v/o/gate/up/down projections, rank 8, alpha 16",
+  "inference_generation": "constrain only the first generated token to the selected pass/fail token, then continue the same generation through the complete JSON contract"
 }
 ```
 
-The original human columns stay 1-3 in the archived data. Training maps score 1 to fail and scores 2-3 to pass. For each judge head, class weights are computed only from its training-split fail/pass counts as N / (2 * N_c). Each head uses class-weighted cross-entropy; active head losses are averaged equally. The classification heads do not directly supervise reason/fix text tokens. They can influence deployment reasoning only through the shared LoRA parameters, while the deployment prompt separately enforces verdict-first generation.
-
-### Binary reviewer training input prompt
-
-This is the exact text instruction emitted by the active training prompt builder for the English placeholder candidate. Video content is attached separately as Video A and Video B.
-
-```text
-You are reviewing one two-user multiple-choice QA candidate.
-Video A (speaker): SpeakerUser
-Video B (provider): ProviderUser
-Use both synchronized videos and the complete QA below.
-Judge visual evidence, which view or views are required, and instruction-following formality.
-Do not generate an explanation; return hidden states for the binary fail/pass heads.
-Candidate QA:
-{"question":"Where was the mug placed after I handed it over?","options":["On the wooden desk","Beside the kitchen sink","Near the front door","On the living-room sofa","Inside a dark backpack"],"correct":"B","answer":"Beside the kitchen sink"}
-```
+Training supplies the fixed assistant prefix as input and applies BCE only to the next-token margin logit(pass)-logit(fail). It adds no classifier head and does not supervise archived numerical scores or later JSON fields. At inference, the first generated token is locked from those two logits and the same generation continues through the full JSON contract. Class weights are estimated from the training split independently per judge, then normalized to preserve the 0.2/0.4/0.4 task-loss scale.
 
 ## Prompt 1 — qa_formality
 
 ```text
-You are the qa_formality judge for a six-user multiple-choice question. You are a pure text-only semantic judge and do not see the videos.
+You are the qa_formality judge for a six-user multiple-choice question. You are a text-only judge and do not see the videos.
 
 Output contract:
 - Return exactly one valid JSON object and nothing else.
@@ -162,64 +150,27 @@ Output contract:
 - Include every field shown in the requested JSON shape, even when a value is brief.
 
 
-Judge only the deterministic schema result and the user-facing question and options. Do not use hidden generator intent to rescue unclear wording.
+Judge only the deterministic schema result and the displayed question and options. Do not infer visual truth or use hidden generator intent to rescue unclear wording.
 
-Apply every criterion below before deciding the single overall verdict. Do not return per-criterion or subcheck fields:
+PASS only if all requirements hold:
 
-1. first_person_perspective
-- PASS only when the question sounds like a natural first-person or shared-memory question from someone in the situation and uses I, me, my, we, us, or our.
-- The options do not need first-person pronouns.
-- FAIL third-person wording or questions with no asker perspective.
+1. Structure: The deterministic schema branch is PASS. The item has exactly five non-empty A-E options, one valid correct letter, and an answer that exactly matches the selected option. The option strings themselves do not need A./B./C./D./E. prefixes.
 
-2. naturalness_and_clarity
-- PASS when the question is conversational, concrete, grammatical, and unambiguous, and the five options answer the same question in mutually exclusive, reasonably parallel forms.
-- FAIL vague references, incompatible option types, dataset language such as video/clip/frame/camera/evidence provider, or wording that would be unnatural for someone recalling their experience.
-- Judge semantic form only, not whether the described facts are true.
-- For a six-user item, PASS only when the question expresses a plausible information need the speaker would naturally have after their own visible experience. FAIL a contrived third-party quiz whose setup gives the speaker no reason to care or ask.
+2. Perspective: The question is a natural first-person or shared-memory question using I, me, my, we, us, or our. The options do not need first-person pronouns. FAIL third-person questions, questions without an asker perspective, and second-person questions such as "what were you doing?"
 
-3. other_person_activity_query
-- FAIL when the question asks what one person was doing while or when another person was doing something else, and the answer is that person's concurrent activity.
-- Apply this restriction in every direction: reject an asker-side event used to query a provider's activity, a provider-side event used to query the asker's activity, and one provider's event used to query another provider's activity.
-- FAIL pair-matching questions whose options encode two or more concurrent activities.
-- The question still FAILS when the anchor event is concrete, the wording is natural, or the temporal overlap can be verified from synchronized recordings.
-- PASS linked task outcomes, interactions, and post-handoff follow-ups only when the answer target is a concrete object, identity, state, location, placement, outcome, consequence, explanation, interaction result, or follow-up rather than a concurrent activity report.
-- Do not judge whether the described facts are visually grounded, whether media was cropped, or whether one view is sufficient.
+3. Information need: The speaker has a plausible reason to ask based on the described experience. FAIL a contrived third-party quiz with no natural information need.
 
-Long-horizon structural wording checks (apply when the item uses one of these optional relations):
-- Object trajectory: allow a natural question about where the same object came from, went, or was later found.
-- Cross-user before/after state: allow a natural comparison of an earlier and later state without requiring the question to explain an unseen cause.
-- Same-user revisit with a cross-user intervention: allow a natural before/leave/intervention/return structure when the provider interaction is the requested missing detail.
-- Last-seen or most-recent interaction: allow natural words such as "last" or "most recent" when the question clearly identifies the object, event, and reference point.
-- Cross-user temporal ordering: allow a natural first/before/after/between question about clearly identified related events; this is not a prohibited concurrent-activity query.
-- These five patterns are optional and equal-status. Do not fail an otherwise natural item merely because it uses one of them. Judge wording and semantic form only; leave visual identity, continuity, state, intervention, recency, and timing truth to the visual judges.
+4. Clarity: The question is conversational, concrete, grammatical, and locally unambiguous. References have enough local context to identify their intended referent; global uniqueness across the recording is unnecessary.
 
+5. Options: All five options answer the same question and are mutually exclusive and reasonably parallel. FAIL incompatible option types.
 
-4. direct_name_leakage
-- FAIL when the question or any option directly names a required user or another participant. PASS otherwise.
-- Natural descriptive references such as "the person in the dark jacket beside the television" are allowed.
-- Required-user names below are provided only for this text comparison.
+6. Question target: FAIL when the answer is merely one person's activity concurrent with another event, regardless of direction, natural wording, concrete anchoring, or verified overlap. Also FAIL options that encode pairs of concurrent activities. Allow concrete objects, identities, states, locations, placements, outcomes, consequences, explanations, interaction results, and follow-ups.
 
-5. timestamp_citation
-- FAIL when the question or any option cites a clock time, timestamp, timecode, frame number, seconds-from-start, minute mark, or similar dataset-like temporal coordinate.
-- Examples that FAIL include "around 12:53", "at 00:42", "at timestamp 35.2", "during the first 15 seconds", and "near frame 200".
-- Natural relative wording such as while, when, before, after, later, at the same time, or a few minutes later is allowed.
-- Internal evidence timeframes are outside this judge's scope and are not shown.
+7. Leakage: FAIL if the question or options directly name a participant; natural descriptive references are allowed. FAIL dataset-facing terms such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, evidence provider, embedding, similarity, or novelty. FAIL clock times, timestamps, timecodes, frame numbers, seconds-from-start, and minute marks. Natural relative wording such as before, after, while, later, last, and most recent is allowed.
 
-6. ambiguous_reference
-- Judge whether a reference is resolvable in its local sentence and described situation, not whether its wording would uniquely identify one entity across the entire recording.
-- PASS concise natural descriptions such as "the person beside the television" or "the mug I left by the sink" when the local wording makes the intended referent usable.
-- FAIL only when two or more equally plausible referents would materially change the meaning or answer, or when the wording supplies no usable identifying context.
-- FAIL when the question is asked in a second-person perspective, for example "what were you doing".
-- Bare phrases such as "the other room", "the other person", or "the cup" FAIL when the surrounding sentence does not resolve them; they are not automatic failures when local context does resolve them.
+Questions about object trajectories, before/after states, revisits and interventions, last-seen events, or cross-user ordering are allowed when naturally and unambiguously phrased. Do not verify their visual truth here, and do not confuse temporal ordering with a prohibited concurrent-activity question.
 
-Deterministic structure rules:
-- The deterministic schema branch must PASS.
-- The item must contain exactly five non-empty options in A-E order, one correct letter, and an answer that exactly matches the selected option. The option strings themselves do not need A./B./C./D./E. prefixes.
-
-Decision rules:
-- Set verdict to fail when the deterministic schema branch fails or any semantic criterion fails.
-- Set verdict to pass only when the deterministic schema branch and every semantic criterion pass.
-- On failure, reason must name the actual failed requirement in this candidate and fix must target that failure. Do not return a generic summary of the rubric.
+Set verdict to fail if any requirement fails; otherwise set verdict to pass.
 
 Binary decision contract:
 - Return only the fields in the requested JSON schema.
@@ -285,33 +236,29 @@ Output contract:
 - Include every field shown in the requested JSON shape, even when a value is brief.
 
 
-You will see the full unpruned sampled visual timeline for every user. This is fuller than the generator input because provider redundancy pruning is not applied to judge media. Judge only visual and temporal grounding. Do not fail for names, missing first-person wording, awkward phrasing, timestamp citations, or schema style. Do not decide whether a single-user condition is sufficient.
+Judge only whether the question and declared answer are visually and temporally grounded. Do not judge wording, first-person style, name leakage, timestamp citations in the question, schema form, or single-user answerability.
 
-evidence_groundedness asks whether the material claims and declared answer are supported by the videos and metadata:
-- Infer no hidden generator interpretation; judge the question, declared answer, material option claims, and videos shown.
-- Verify every material factual claim in the question stem and declared correct answer against concrete visible moments or supplied metadata.
-- Be very strict and verify every claim made in the question.
-- Incorrect distractors do not need to occur in the videos for an ordinary object, state, action, or location MCQ; they must simply not make the declared answer ambiguous.
-- For a comparison whose options make concrete claims about both operands, verify the declared complete relation and ensure no alternative option is also supported.
-- Treat every object, action, person, state, identity, and continuity description as unverified. The generator may hallucinate or misidentify them.
-- Do not accept a claimed transition, continuous action, or intermediate event merely because it seems plausible between adjacent sampled images. Require direct support in the supplied unpruned samples; otherwise FAIL.
-- Do not use outside knowledge, captions, transcripts, filenames alone, or assumptions not visible in the videos or metadata.
-- Treat required_users[0] as the speaker and required_users[1] through required_users[5] as providers. Verify that the full unpruned speaker timeline grounds the specific experience, object, person, or interaction that makes the question natural, and that at least one external provider view or provider combination supplies the answer-bearing continuation or detail. Do not fail merely because an input provider is unused.
-- For identity or role linkage, verify enough visible continuity or distinguishing evidence to establish same-person versus different-person rather than inferring identity from roles, timing, or option wording.
-- For a post-handoff follow-up, verify the initial exchange, same recipient, same object, and claimed later action/location/state. FAIL links based only on lookalikes, similar objects, or temporal proximity.
-- For state verification, verify the exact object and observed state. Accept a claimed change only when both earlier and later states are visible.
-- For any temporal claim, verify the claimed events and their relation on the original synchronized timeline. Do not compare equal playback positions in independently pruned videos; use original-video time or supplied pruned-to-original maps.
-- FAIL a temporal relation when it is false, vague, or inferred only from timestamp proximity instead of verified synchronized intervals.
-- PASS only when the question stem and declared correct answer are clearly supported and exactly one option remains correct.
+PASS only if all requirements hold:
 
-Long-horizon grounding checks (apply when the generated item uses one of these relations):
-- Object trajectory: verify that the observations concern the same physical object and that every claimed handoff, relocation, or endpoint is directly visible. Similar appearance or temporal proximity alone does not establish continuity.
-- Cross-user before/after state: verify the same object or place, both distinct visible states, and any claimed intervening action. Different visible states establish a difference, not an unseen cause.
-- Same-user revisit with a cross-user intervention: verify both speaker visits and the provider's claimed answer-bearing intervention. Do not infer that intervention merely from a difference between the two visits.
-- Last-seen or most-recent interaction: compare all qualifying visible events before the reference event. Accept "last" or "most recent" only when the available coverage rules out a later qualifying event in that interval.
-- Cross-user temporal ordering: verify each event and compare original synchronized timing. Never infer cross-user order from equal positions in separately pruned or context-thinned inputs.
-- Temporal distance does not compensate for a missing link. Reject a long-horizon claim when identity, continuity, state, intervention, or order is assumed rather than visibly supported.
+1. Every material object, action, person, identity, state, location, continuity, and temporal claim in the question and declared answer is directly supported by the supplied media or metadata.
 
+2. required_users[0] is the speaker and required_users[1] through required_users[5] are providers. The speaker media must establish the experience or reference that makes the question coherent, and at least one provider or compatible provider combination must establish the answer-bearing external detail. Unused providers are allowed.
+
+3. Same-person and same-object links require visible continuity or distinguishing evidence. Do not infer identity from roles, timing, option wording, lookalikes, similar clothing, or similar objects.
+
+4. State changes require the same object or place and both visible states. A visible difference does not prove an unseen cause or intervention.
+
+5. Handoffs and follow-ups require the exchange, same recipient, same object, and claimed later action, location, or state.
+
+6. Temporal relations must be verified using synchronized original timing or supplied mappings. Do not infer order from equal playback positions, separately sampled inputs, or timestamp proximity.
+
+7. For "last" or "most recent," check all qualifying covered events before the reference event. For object trajectories, revisits, and interventions, verify every required continuity link and claimed event.
+
+8. The declared answer must be supported and exactly one option must remain correct. Incorrect distractors need not appear, but no alternative option may also be supported.
+
+Do not infer missing transitions or actions from adjacent samples. Do not use captions, subtitles, transcripts, filenames, outside knowledge, hidden generator intent, option wording as evidence, or unsupported assumptions.
+
+Set verdict to fail if any required claim or link is missing, ambiguous, contradicted, or inferred. Otherwise set verdict to pass.
 
 Binary decision contract:
 - Return only the fields in the requested JSON schema.
@@ -433,7 +380,23 @@ Output contract:
 - Include every field shown in the requested JSON shape, even when a value is brief.
 
 
-Your task is to determine whether the videos supplied for this condition contain enough visible evidence to produce a grounded answer to the generated question. Do not answer the question yourself.
+Determine whether the media supplied for this condition directly contains all visual facts needed to distinguish exactly one option. Do not answer the question or reveal which option is correct.
+
+Set verdict to pass only when every required subject, object, action, attribute, location, identity or continuity link, state, and temporal relation is visible and sufficiently clear. Set verdict to fail when any required fact is absent, occluded, ambiguous, contradictory, or requires guessing, outside knowledge, option-wording clues, or omitted media.
+
+Rules:
+- The first JSON field must be `verdict`; decide it before generating the later explanation and evidence lists.
+- Judge this condition independently. Do not assume speaker_only is insufficient or combined_all_six_users is sufficient.
+- Use the question and options only to identify required facts, never as evidence.
+- Do not output an option letter, option text, declared answer, or inferred answer.
+- Describe evidence using short, answer-neutral fact descriptions.
+- Identity and continuity require visible continuity or distinguishing evidence, not roles, timing, lookalikes, similar clothing, or similar objects.
+- State changes require the same object or place and both visible states. A visible difference does not prove an unseen cause or intervention.
+- Handoffs and follow-ups require visible evidence of the exchange, the same recipient, the same object, and the claimed later action, location, or state.
+- Temporal relations require synchronized timing or supplied mappings, not equal playback positions or timestamp proximity.
+- "Last" or "most recent" requires checking all qualifying covered events before the reference event.
+- `verdict` must be exactly the lowercase string `pass` or `fail`. `reason` must identify the decisive visible support for pass or the first decisive missing, occluded, ambiguous, or contradictory fact for fail. `available_evidence` and `missing_evidence` must be JSON arrays of short strings.
+- This condition contains only the full unpruned sampled speaker timeline. Evaluate only what that timeline visibly establishes; do not assume facts from omitted provider views.
 
 Condition:
 {
@@ -447,47 +410,30 @@ Condition:
 Generated question:
 Where was the mug placed after I handed it over?
 
-Answer options (for judging whether the evidence resolves the question, not for selecting one):
+Answer options:
 A. On the wooden desk
 B. Beside the kitchen sink
 C. Near the front door
 D. On the living-room sofa
 E. Inside a dark backpack
 
-Rules:
-- The first JSON field must be `answerable`; decide this boolean before generating the later explanation and evidence lists.
-- Return `answerable: true` only when the supplied videos directly contain the answer-relevant visual facts needed to distinguish one option from the alternatives.
-- Return `answerable: false` when a required subject, object, action, attribute, location, identity link, state change, or temporal relation is missing, occluded, too ambiguous, or would require guessing or outside knowledge.
-- Do not select an option. Do not output an A-E letter, the final answer, or the text of the option you think is correct.
-- Describe evidence availability at the level of needed facts, such as whether the relevant object and action are visible. Do not reveal the answer while explaining the judgment.
-- Judge only the visible videos and supplied condition metadata. Do not use the wording of the question or options as evidence.
-- Do not assume the speaker-only condition is unanswerable or the six-video condition is answerable. Decide each condition independently from its actual visual evidence.
-- Make `reason` specific to the supplied condition: identify the decisive visible support when answerable is true, or the concrete missing, occluded, ambiguous, or contradictory fact when answerable is false. Never use a generic placeholder sentence.
-- `answerable` must be a JSON boolean, not a quoted string. `available_evidence` and `missing_evidence` must be JSON arrays of short strings.
-- This condition contains only the full unpruned sampled speaker timeline. Evaluate only what that timeline visibly establishes; do not assume facts from omitted provider views.
-
-Long-horizon grounding checks (apply when the generated item uses one of these relations):
-- Object trajectory: verify that the observations concern the same physical object and that every claimed handoff, relocation, or endpoint is directly visible. Similar appearance or temporal proximity alone does not establish continuity.
-- Cross-user before/after state: verify the same object or place, both distinct visible states, and any claimed intervening action. Different visible states establish a difference, not an unseen cause.
-- Same-user revisit with a cross-user intervention: verify both speaker visits and the provider's claimed answer-bearing intervention. Do not infer that intervention merely from a difference between the two visits.
-- Last-seen or most-recent interaction: compare all qualifying visible events before the reference event. Accept "last" or "most recent" only when the available coverage rules out a later qualifying event in that interval.
-- Cross-user temporal ordering: verify each event and compare original synchronized timing. Never infer cross-user order from equal positions in separately pruned or context-thinned inputs.
-- Temporal distance does not compensate for a missing link. Reject a long-horizon claim when identity, continuity, state, intervention, or order is assumed rather than visibly supported.
-
-
 Return exactly one JSON object that conforms to the JSON Schema below. Return a data instance, not the schema itself:
 {
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "answerable",
+    "verdict",
     "reason",
     "available_evidence",
     "missing_evidence"
   ],
   "properties": {
-    "answerable": {
-      "type": "boolean"
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail"
+      ]
     },
     "reason": {
       "type": "string",
@@ -522,7 +468,23 @@ Output contract:
 - Include every field shown in the requested JSON shape, even when a value is brief.
 
 
-Your task is to determine whether the videos supplied for this condition contain enough visible evidence to produce a grounded answer to the generated question. Do not answer the question yourself.
+Determine whether the media supplied for this condition directly contains all visual facts needed to distinguish exactly one option. Do not answer the question or reveal which option is correct.
+
+Set verdict to pass only when every required subject, object, action, attribute, location, identity or continuity link, state, and temporal relation is visible and sufficiently clear. Set verdict to fail when any required fact is absent, occluded, ambiguous, contradictory, or requires guessing, outside knowledge, option-wording clues, or omitted media.
+
+Rules:
+- The first JSON field must be `verdict`; decide it before generating the later explanation and evidence lists.
+- Judge this condition independently. Do not assume speaker_only is insufficient or combined_all_six_users is sufficient.
+- Use the question and options only to identify required facts, never as evidence.
+- Do not output an option letter, option text, declared answer, or inferred answer.
+- Describe evidence using short, answer-neutral fact descriptions.
+- Identity and continuity require visible continuity or distinguishing evidence, not roles, timing, lookalikes, similar clothing, or similar objects.
+- State changes require the same object or place and both visible states. A visible difference does not prove an unseen cause or intervention.
+- Handoffs and follow-ups require visible evidence of the exchange, the same recipient, the same object, and the claimed later action, location, or state.
+- Temporal relations require synchronized timing or supplied mappings, not equal playback positions or timestamp proximity.
+- "Last" or "most recent" requires checking all qualifying covered events before the reference event.
+- `verdict` must be exactly the lowercase string `pass` or `fail`. `reason` must identify the decisive visible support for pass or the first decisive missing, occluded, ambiguous, or contradictory fact for fail. `available_evidence` and `missing_evidence` must be JSON arrays of short strings.
+- This condition contains the full unpruned sampled speaker timeline and all five full unpruned sampled provider timelines. Combine visible evidence across them when needed. Some provider views may be irrelevant.
 
 Condition:
 {
@@ -541,47 +503,30 @@ Condition:
 Generated question:
 Where was the mug placed after I handed it over?
 
-Answer options (for judging whether the evidence resolves the question, not for selecting one):
+Answer options:
 A. On the wooden desk
 B. Beside the kitchen sink
 C. Near the front door
 D. On the living-room sofa
 E. Inside a dark backpack
 
-Rules:
-- The first JSON field must be `answerable`; decide this boolean before generating the later explanation and evidence lists.
-- Return `answerable: true` only when the supplied videos directly contain the answer-relevant visual facts needed to distinguish one option from the alternatives.
-- Return `answerable: false` when a required subject, object, action, attribute, location, identity link, state change, or temporal relation is missing, occluded, too ambiguous, or would require guessing or outside knowledge.
-- Do not select an option. Do not output an A-E letter, the final answer, or the text of the option you think is correct.
-- Describe evidence availability at the level of needed facts, such as whether the relevant object and action are visible. Do not reveal the answer while explaining the judgment.
-- Judge only the visible videos and supplied condition metadata. Do not use the wording of the question or options as evidence.
-- Do not assume the speaker-only condition is unanswerable or the six-video condition is answerable. Decide each condition independently from its actual visual evidence.
-- Make `reason` specific to the supplied condition: identify the decisive visible support when answerable is true, or the concrete missing, occluded, ambiguous, or contradictory fact when answerable is false. Never use a generic placeholder sentence.
-- `answerable` must be a JSON boolean, not a quoted string. `available_evidence` and `missing_evidence` must be JSON arrays of short strings.
-- This condition contains the full unpruned sampled speaker timeline and all five full unpruned sampled provider timelines. Combine visible evidence across them when needed. Some provider views may be irrelevant.
-
-Long-horizon grounding checks (apply when the generated item uses one of these relations):
-- Object trajectory: verify that the observations concern the same physical object and that every claimed handoff, relocation, or endpoint is directly visible. Similar appearance or temporal proximity alone does not establish continuity.
-- Cross-user before/after state: verify the same object or place, both distinct visible states, and any claimed intervening action. Different visible states establish a difference, not an unseen cause.
-- Same-user revisit with a cross-user intervention: verify both speaker visits and the provider's claimed answer-bearing intervention. Do not infer that intervention merely from a difference between the two visits.
-- Last-seen or most-recent interaction: compare all qualifying visible events before the reference event. Accept "last" or "most recent" only when the available coverage rules out a later qualifying event in that interval.
-- Cross-user temporal ordering: verify each event and compare original synchronized timing. Never infer cross-user order from equal positions in separately pruned or context-thinned inputs.
-- Temporal distance does not compensate for a missing link. Reject a long-horizon claim when identity, continuity, state, intervention, or order is assumed rather than visibly supported.
-
-
 Return exactly one JSON object that conforms to the JSON Schema below. Return a data instance, not the schema itself:
 {
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "answerable",
+    "verdict",
     "reason",
     "available_evidence",
     "missing_evidence"
   ],
   "properties": {
-    "answerable": {
-      "type": "boolean"
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail"
+      ]
     },
     "reason": {
       "type": "string",

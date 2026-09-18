@@ -123,13 +123,13 @@ ANSWERABILITY_SUFFICIENCY_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "required": [
-        "answerable",
+        "verdict",
         "reason",
         "available_evidence",
         "missing_evidence",
     ],
     "properties": {
-        "answerable": {"type": "boolean"},
+        "verdict": {"type": "string", "enum": ["pass", "fail"]},
         "reason": {"type": "string", "minLength": 1},
         "available_evidence": {
             "type": "array",
@@ -1761,6 +1761,48 @@ def build_qa_formality_judge_prompt(
         LONG_HORIZON_FORMALITY_GUIDANCE if six_user_mode else ""
     )
 
+    if six_user_mode:
+        return f"""You are the qa_formality judge for a six-user multiple-choice question. You are a text-only judge and do not see the videos.
+
+{STRICT_JSON_OUTPUT_CONTRACT}
+
+Judge only the deterministic schema result and the displayed question and options. Do not infer visual truth or use hidden generator intent to rescue unclear wording.
+
+PASS only if all requirements hold:
+
+1. Structure: The deterministic schema branch is PASS. The item has exactly five non-empty A-E options, one valid correct letter, and an answer that exactly matches the selected option. The option strings themselves do not need A./B./C./D./E. prefixes.
+
+2. Perspective: The question is a natural first-person or shared-memory question using I, me, my, we, us, or our. The options do not need first-person pronouns. FAIL third-person questions, questions without an asker perspective, and second-person questions such as "what were you doing?"
+
+3. Information need: The speaker has a plausible reason to ask based on the described experience. FAIL a contrived third-party quiz with no natural information need.
+
+4. Clarity: The question is conversational, concrete, grammatical, and locally unambiguous. References have enough local context to identify their intended referent; global uniqueness across the recording is unnecessary.
+
+5. Options: All five options answer the same question and are mutually exclusive and reasonably parallel. FAIL incompatible option types.
+
+6. Question target: FAIL when the answer is merely one person's activity concurrent with another event, regardless of direction, natural wording, concrete anchoring, or verified overlap. Also FAIL options that encode pairs of concurrent activities. Allow concrete objects, identities, states, locations, placements, outcomes, consequences, explanations, interaction results, and follow-ups.
+
+7. Leakage: FAIL if the question or options directly name a participant; natural descriptive references are allowed. FAIL dataset-facing terms such as video, footage, recording, frame, dataset, camera, clip, caption, subtitle, evidence provider, embedding, similarity, or novelty. FAIL clock times, timestamps, timecodes, frame numbers, seconds-from-start, and minute marks. Natural relative wording such as before, after, while, later, last, and most recent is allowed.
+
+Questions about object trajectories, before/after states, revisits and interventions, last-seen events, or cross-user ordering are allowed when naturally and unambiguously phrased. Do not verify their visual truth here, and do not confuse temporal ordering with a prohibited concurrent-activity question.
+
+Set verdict to fail if any requirement fails; otherwise set verdict to pass.
+
+{binary_block}
+
+Deterministic schema/formality branch:
+{json.dumps({"status": schema_status, "errors": schema_errors}, ensure_ascii=False, indent=2)}
+
+Known participant names for leakage detection only:
+{json.dumps(formality_context_brief(packet, qa_item), ensure_ascii=False, indent=2)}
+
+User-facing question-answer item:
+{json.dumps(formality_qa_item_brief(qa_item), ensure_ascii=False, indent=2)}
+
+Return exactly one valid JSON object with this exact shape:
+{json.dumps(judge_schema_for_check("qa_formality", pass_fail_only=True), ensure_ascii=False, indent=2)}
+"""
+
     return f"""You are the qa_formality judge for a {user_scope} multiple-choice question. You are a pure text-only semantic judge and do not see the videos.
 
 {STRICT_JSON_OUTPUT_CONTRACT}
@@ -1863,6 +1905,47 @@ def build_evidence_groundedness_judge_prompt(
             "anchor and provider-side answer-bearing detail."
         )
     )
+
+    if six_user_mode:
+        return f"""You are the evidence_groundedness judge for a six-user multiple-choice question generated from egocentric videos.
+
+{STRICT_JSON_OUTPUT_CONTRACT}
+
+Judge only whether the question and declared answer are visually and temporally grounded. Do not judge wording, first-person style, name leakage, timestamp citations in the question, schema form, or single-user answerability.
+
+PASS only if all requirements hold:
+
+1. Every material object, action, person, identity, state, location, continuity, and temporal claim in the question and declared answer is directly supported by the supplied media or metadata.
+
+2. required_users[0] is the speaker and required_users[1] through required_users[5] are providers. The speaker media must establish the experience or reference that makes the question coherent, and at least one provider or compatible provider combination must establish the answer-bearing external detail. Unused providers are allowed.
+
+3. Same-person and same-object links require visible continuity or distinguishing evidence. Do not infer identity from roles, timing, option wording, lookalikes, similar clothing, or similar objects.
+
+4. State changes require the same object or place and both visible states. A visible difference does not prove an unseen cause or intervention.
+
+5. Handoffs and follow-ups require the exchange, same recipient, same object, and claimed later action, location, or state.
+
+6. Temporal relations must be verified using synchronized original timing or supplied mappings. Do not infer order from equal playback positions, separately sampled inputs, or timestamp proximity.
+
+7. For "last" or "most recent," check all qualifying covered events before the reference event. For object trajectories, revisits, and interventions, verify every required continuity link and claimed event.
+
+8. The declared answer must be supported and exactly one option must remain correct. Incorrect distractors need not appear, but no alternative option may also be supported.
+
+Do not infer missing transitions or actions from adjacent samples. Do not use captions, subtitles, transcripts, filenames, outside knowledge, hidden generator intent, option wording as evidence, or unsupported assumptions.
+
+Set verdict to fail if any required claim or link is missing, ambiguous, contradicted, or inferred. Otherwise set verdict to pass.
+
+{binary_block}
+
+Video set metadata:
+{video_packet_brief(packet)}
+
+Generated question-answer item:
+{json.dumps(qa_item, ensure_ascii=False, indent=2)}
+
+Return exactly one valid JSON object with this exact shape:
+{json.dumps(judge_schema_for_check("evidence_groundedness", pass_fail_only=True), ensure_ascii=False, indent=2)}
+"""
 
     return f"""You are the evidence_groundedness judge for a {question_scope} multiple-choice question generated from egocentric videos.
 
@@ -2191,7 +2274,23 @@ def build_answerability_prompt(qa_item: dict[str, Any], condition: dict[str, Any
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
-Your task is to determine whether the videos supplied for this condition contain enough visible evidence to produce a grounded answer to the generated question. Do not answer the question yourself.
+Determine whether the media supplied for this condition directly contains all visual facts needed to distinguish exactly one option. Do not answer the question or reveal which option is correct.
+
+Set verdict to pass only when every required subject, object, action, attribute, location, identity or continuity link, state, and temporal relation is visible and sufficiently clear. Set verdict to fail when any required fact is absent, occluded, ambiguous, contradictory, or requires guessing, outside knowledge, option-wording clues, or omitted media.
+
+Rules:
+- The first JSON field must be `verdict`; decide it before generating the later explanation and evidence lists.
+- Judge this condition independently. Do not assume speaker_only is insufficient or combined_all_six_users is sufficient.
+- Use the question and options only to identify required facts, never as evidence.
+- Do not output an option letter, option text, declared answer, or inferred answer.
+- Describe evidence using short, answer-neutral fact descriptions.
+- Identity and continuity require visible continuity or distinguishing evidence, not roles, timing, lookalikes, similar clothing, or similar objects.
+- State changes require the same object or place and both visible states. A visible difference does not prove an unseen cause or intervention.
+- Handoffs and follow-ups require visible evidence of the exchange, the same recipient, the same object, and the claimed later action, location, or state.
+- Temporal relations require synchronized timing or supplied mappings, not equal playback positions or timestamp proximity.
+- "Last" or "most recent" requires checking all qualifying covered events before the reference event.
+- `verdict` must be exactly the lowercase string `pass` or `fail`. `reason` must identify the decisive visible support for pass or the first decisive missing, occluded, ambiguous, or contradictory fact for fail. `available_evidence` and `missing_evidence` must be JSON arrays of short strings.
+{media_rules}
 
 Condition:
 {json.dumps(condition, ensure_ascii=False, indent=2)}
@@ -2199,22 +2298,8 @@ Condition:
 Generated question:
 {qa_item.get("question")}
 
-Answer options (for judging whether the evidence resolves the question, not for selecting one):
+Answer options:
 {options}
-
-Rules:
-- The first JSON field must be `answerable`; decide this boolean before generating the later explanation and evidence lists.
-- Return `answerable: true` only when the supplied videos directly contain the answer-relevant visual facts needed to distinguish one option from the alternatives.
-- Return `answerable: false` when a required subject, object, action, attribute, location, identity link, state change, or temporal relation is missing, occluded, too ambiguous, or would require guessing or outside knowledge.
-- Do not select an option. Do not output an A-E letter, the final answer, or the text of the option you think is correct.
-- Describe evidence availability at the level of needed facts, such as whether the relevant object and action are visible. Do not reveal the answer while explaining the judgment.
-- Judge only the visible videos and supplied condition metadata. Do not use the wording of the question or options as evidence.
-- Do not assume the speaker-only condition is unanswerable or the six-video condition is answerable. Decide each condition independently from its actual visual evidence.
-- Make `reason` specific to the supplied condition: identify the decisive visible support when answerable is true, or the concrete missing, occluded, ambiguous, or contradictory fact when answerable is false. Never use a generic placeholder sentence.
-- `answerable` must be a JSON boolean, not a quoted string. `available_evidence` and `missing_evidence` must be JSON arrays of short strings.
-{media_rules}
-
-{LONG_HORIZON_GROUNDEDNESS_GUIDANCE}
 
 Return exactly one JSON object that conforms to the JSON Schema below. Return a data instance, not the schema itself:
 {json.dumps(ANSWERABILITY_SUFFICIENCY_SCHEMA, ensure_ascii=False, indent=2)}

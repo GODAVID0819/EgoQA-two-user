@@ -687,7 +687,7 @@ class SixUserAnswerabilityTests(unittest.TestCase):
                 speaker_only = '"condition_type": "speaker_only"' in prompt
                 return json.dumps(
                     {
-                        "answerable": not speaker_only,
+                        "verdict": "fail" if speaker_only else "pass",
                         "reason": "The needed visible facts are absent or present.",
                         "available_evidence": [] if speaker_only else ["answer fact"],
                         "missing_evidence": ["answer fact"] if speaker_only else [],

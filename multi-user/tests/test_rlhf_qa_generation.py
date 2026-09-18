@@ -56,7 +56,7 @@ class _ConcurrentAnswerabilityRunner:
         speaker_only = '"condition_type": "speaker_only"' in prompt
         return json.dumps(
             {
-                "answerable": not speaker_only,
+                "verdict": "fail" if speaker_only else "pass",
                 "reason": "visible evidence was evaluated directly",
                 "available_evidence": [],
                 "missing_evidence": [],
