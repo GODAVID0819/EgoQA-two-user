@@ -14,6 +14,8 @@ from .collator import (
     DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD,
     DEFAULT_IMAGE_TEXT_TOKEN_RESERVE,
     JudgeFrameCollator,
+    QWEN_VISION_TOKEN_PIXEL_AREA,
+    adaptive_image_max_pixels,
 )
 from .contracts import (
     DEFAULTS,
@@ -31,7 +33,7 @@ from .loss import (
     resolve_verdict_token_ids,
     task_sampling_scales,
 )
-from .trainer import build_verdict_trainer_class
+from .trainer import audit_rank_aligned_sampler, build_verdict_trainer_class
 
 
 VISION_MARKERS = ("visual", "vision_tower", "vision_model")
@@ -387,9 +389,55 @@ def main() -> None:
                 "train_example_id must match exactly one manifest row; "
                 f"id={args.train_example_id!r} matches={len(optimization_examples)}"
             )
+    launch_world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    sampler_audit = audit_rank_aligned_sampler(
+        JudgeDataset(optimization_examples),
+        world_size=launch_world_size,
+        seed=args.seed,
+    )
+    if int(os.environ.get("RANK", "0")) == 0:
+        print(
+            "rank_aligned_sampler_preflight="
+            + json.dumps(sampler_audit, sort_keys=True),
+            flush=True,
+        )
+        visual_budget_audit = {
+            "max_input_tokens": args.max_input_tokens,
+            "target_fraction": args.image_context_target_fraction,
+            "all_six_1800_frame_max_pixels": adaptive_image_max_pixels(
+                image_count=1_800,
+                configured_max_pixels=args.max_pixels,
+                min_pixels=args.min_pixels,
+                max_input_tokens=args.max_input_tokens,
+                target_fraction=args.image_context_target_fraction,
+                text_token_reserve=args.image_text_token_reserve,
+                item_token_overhead=args.image_item_token_overhead,
+                vision_token_pixel_area=QWEN_VISION_TOKEN_PIXEL_AREA,
+            ),
+            "speaker_300_frame_max_pixels": adaptive_image_max_pixels(
+                image_count=300,
+                configured_max_pixels=args.max_pixels,
+                min_pixels=args.min_pixels,
+                max_input_tokens=args.max_input_tokens,
+                target_fraction=args.image_context_target_fraction,
+                text_token_reserve=args.image_text_token_reserve,
+                item_token_overhead=args.image_item_token_overhead,
+                vision_token_pixel_area=QWEN_VISION_TOKEN_PIXEL_AREA,
+            ),
+        }
+        print(
+            "judge_visual_budget_preflight="
+            + json.dumps(visual_budget_audit, sort_keys=True),
+            flush=True,
+        )
     # Constructing TrainingArguments first activates Transformers' ZeRO-3 model
     # initialization path before the 27B checkpoint is loaded on every rank.
     hf_training_args = training_arguments(args)
+    if int(hf_training_args.world_size) != launch_world_size:
+        raise RuntimeError(
+            "TrainingArguments world size disagrees with torchrun: "
+            f"arguments={hf_training_args.world_size} launch={launch_world_size}"
+        )
     model, processor, parameter_counts = load_model_and_processor(args)
     tokenizer = getattr(processor, "tokenizer", processor)
     token_ids = resolve_verdict_token_ids(tokenizer)
@@ -406,11 +454,12 @@ def main() -> None:
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     run_contract = {
-        "contract_version": "verdict_token_bce_sampled_frames_v3",
+        "contract_version": "verdict_token_bce_sampled_frames_v4",
         "model_id": args.model_id,
         "media_contract": (
             "packet-owned 300-frame user timelines sampled at 0.5 FPS; "
-            "one speaker timeline or six complete timelines"
+            "each timeline is one pre-sampled Qwen video block; one speaker "
+            "block or six complete video blocks"
         ),
         "assistant_prefix": '{"verdict":"',
         "inference_generation_contract": (
@@ -419,6 +468,15 @@ def main() -> None:
         ),
         "verdict_token_ids": {key.value: value for key, value in token_ids.items()},
         "loss": "BCEWithLogits(logit_pass - logit_fail)",
+        "distributed_sampler_contract": {
+            "policy": "rank-aligned homogeneous model execution paths",
+            "signature": "(frame_set_count, frame_count)",
+            "world_size": int(hf_training_args.world_size),
+            "incomplete_global_microbatch": (
+                "repeat a same-signature example with zero loss weight"
+            ),
+            "preflight": sampler_audit,
+        },
         "task_weights": _jsonable_weights(task_weights),
         "class_weights": _jsonable_weights(class_weights),
         "task_sampling_scales": _jsonable_weights(task_scales),

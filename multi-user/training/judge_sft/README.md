@@ -20,12 +20,27 @@ The production generation run did not retain six monolithic training videos.
 Its durable judge input is in
 `/scratch/$USER/egolife_rlhf_evidence_v1/packets`: six ordered, packet-owned
 timelines of exactly 300 JPEGs each, already sampled from 600 seconds at 0.5
-FPS. Groundedness and all-six answerability see all 1,800 frames; speaker-only
-answerability sees the speaker's 300 frames; formality is text-only.
+FPS. Each timeline is supplied to Qwen as one video block containing its 300
+ordered frames—not as 300 separate image attachments. This matches the
+production six-video input structure and enables Qwen's temporal video
+patching without dropping frames or lowering spatial resolution. Groundedness
+and all-six answerability see six video blocks containing all 1,800 frames;
+speaker-only answerability sees one 300-frame video block; formality is
+text-only. Both
+answerability conditions receive only the generated question from the QA item.
+Options, the correct letter, answer text, rationale, and every other QA field
+are withheld; condition metadata still identifies which media is present.
 
-The collator mirrors the production Qwen runner's dynamic per-image resolution
-cap. With the defaults below, a 1,800-frame call is capped at 91,728 pixels per
-image, while a 300-frame call remains at the configured 262,144-pixel cap:
+The collator uses Qwen3.8's processor-declared vision geometry: a 16-pixel
+spatial patch, a 2-by-2 spatial merge, and a two-frame temporal patch. It passes
+`image_patch_size=16` explicitly to `qwen-vl-utils` and fails closed if the
+loaded processor reports different geometry. The resulting language-model
+spatial-token area is 32-by-32 pixels, not the older 28-by-28 assumption.
+
+The dynamic per-frame resolution cap deliberately budgets all 1,800 raw frames
+before Qwen's temporal packing, retaining training-memory headroom. With the
+defaults below, an all-six call is capped at 119,808 pixels per frame, while a
+300-frame call remains at the configured 262,144-pixel cap:
 
 ```text
 max_input_tokens=262144
@@ -35,6 +50,14 @@ item_token_overhead=2
 min_pixels=3136
 configured_max_pixels=262144
 ```
+
+For all-six rows, the cap is applied to every frame before the six timelines
+enter Qwen as video blocks. Qwen's native temporal video patching then combines
+adjacent frames through a learned Conv3D tubelet. Every sampled frame still
+contributes, but the language-model sequence is roughly half the length of the obsolete
+1,800-independent-image representation.
+The collator and runtime probe reject an all-six row above 140,000 input tokens;
+that threshold catches a missing temporal-video packing path before training.
 
 Manifests are compact. A visual row stores `frame_packet`, ordered
 `frame_user_indices`, and `frame_order`; the loader resolves and verifies all
@@ -91,10 +114,14 @@ formality prompt, only that impossible task row is excluded and recorded in
 
 Every usable row from all 40 supplied packets is written to `train.jsonl`; no
 internal validation manifest is created. `data_audit.json` records label and
-generation hashes, full-training counts, exclusions, and the media contract.
+generation hashes, full-training counts, exclusions, the media contract, and
+the question-only answerability prompt contract.
 `prompt_snapshots.json` contains one complete prompt per judge condition. A
 future, separately labeled standalone validation/test collection will select
-among the saved epoch checkpoints.
+among the saved epoch checkpoints. Because prompts are embedded in
+`train.jsonl`, manifests prepared before the question-only answerability
+contract must not be reused. Rerun `prepare_real_manifests.sbatch` after
+syncing this revision.
 
 ## Loss weighting and first run
 
@@ -122,6 +149,12 @@ microbatch one per GPU, gradient accumulation sixteen (effective batch 32),
 gradient checkpointing, clipping at 1.0, and ZeRO-3. There is no in-training
 evaluation or early stopping. Every epoch checkpoint is saved without a
 retention cap, and `final_adapter` stores the last epoch for convenience.
+Because ZeRO-3 gathers module parameters collectively, both ranks must traverse
+the same model branches in every microstep. The training sampler shuffles
+global microbatches while grouping them by exact media signature: text-only,
+one 300-frame timeline, or six 300-frame timelines. An incomplete two-rank
+group is padded with a same-signature zero-loss copy, so no labeled row is
+dropped and padding does not alter the task or class objective.
 The launcher preserves the 10% warmup across Transformers APIs: it uses
 `warmup_ratio=0.1` where supported and the Transformers v5.2+
 `warmup_steps=0.1` ratio form otherwise.
@@ -210,6 +243,11 @@ the ten-epoch job run. These gates establish data/runtime/training plumbing;
 they do not establish held-out judge quality. The full job writes
 `checkpoint_inventory.json` and fails if it cannot find a checkpoint for every
 configured epoch.
+
+The collator treats these manifests as image-only even though
+`qwen_vl_utils.process_vision_info` can return empty video metadata. It omits
+`videos` and video-only fields such as `fps=[]` unless actual video inputs are
+present, which is required by the strict Transformers v5 processor schema.
 
 Both GPU training launchers start the same utilization-aware CUDA keeper used
 by the production question-generation job. It is enabled by default, watches

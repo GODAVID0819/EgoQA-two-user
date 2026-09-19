@@ -32,6 +32,7 @@ DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${PACKAGE_ROOT}/training/judge_sft/deepspe
 MIN_PIXELS="${MIN_PIXELS:-3136}"
 MAX_PIXELS="${MAX_PIXELS:-262144}"
 MAX_INPUT_TOKENS="${MAX_INPUT_TOKENS:-262144}"
+IMAGE_CONTEXT_TARGET_FRACTION="${IMAGE_CONTEXT_TARGET_FRACTION:-0.85}"
 ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 ENABLE_CUDA_KEEPER="${ENABLE_CUDA_KEEPER:-1}"
 CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${HPC_ROOT}/shared/cuda_high_duty.py}"
@@ -144,7 +145,9 @@ on_error() {
 trap on_error ERR
 trap cleanup EXIT
 
-mkdir -p "${OUTPUT_DIR}" "${JOB_SCRATCH_ROOT}" "${TMPDIR}"
+mkdir -p \
+  "${OUTPUT_DIR}" "${JOB_SCRATCH_ROOT}" "${TMPDIR}" \
+  "${XDG_CACHE_HOME}/torch/kernels"
 cd "${PACKAGE_ROOT}"
 if [[ "${ENABLE_CUDA_KEEPER}" != "0" && "${ENABLE_CUDA_KEEPER}" != "1" ]]; then
   echo "error=invalid_enable_cuda_keeper value=${ENABLE_CUDA_KEEPER}" >&2
@@ -263,6 +266,7 @@ GPU_MONITOR_PID=$!
   --min-pixels "${MIN_PIXELS}" \
   --max-pixels "${MAX_PIXELS}" \
   --max-input-tokens "${MAX_INPUT_TOKENS}" \
+  --image-context-target-fraction "${IMAGE_CONTEXT_TARGET_FRACTION}" \
   --max-steps 1 \
   --gradient-accumulation-steps 1 \
   --deepspeed "${DEEPSPEED_CONFIG}"

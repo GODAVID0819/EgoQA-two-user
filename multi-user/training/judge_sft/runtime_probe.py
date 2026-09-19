@@ -8,7 +8,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .collator import JudgeFrameCollator, adaptive_image_max_pixels
+from .collator import (
+    DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION,
+    JudgeFrameCollator,
+    MAX_ALL_SIX_VIDEO_INPUT_TOKENS,
+    adaptive_image_max_pixels,
+)
 from .contracts import DEFAULT_TASK_WEIGHTS, JudgeTask, Verdict
 from .data import load_normalized_manifest
 from .loss import (
@@ -84,11 +89,12 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         min_pixels=args.min_pixels,
         max_pixels=args.max_pixels,
         max_input_tokens=args.max_input_tokens,
+        image_context_target_fraction=args.image_context_target_fraction,
     )
     batch = collator([example])
     input_tokens = int(batch["input_ids"].shape[-1])
     result = {
-        "schema_version": "judge_sft_sampled_frame_runtime_probe_v2",
+        "schema_version": "judge_sft_sampled_frame_runtime_probe_v3",
         "status": "passed",
         "model_id": args.model_id,
         "model_type": getattr(config, "model_type", None),
@@ -122,10 +128,13 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             ],
         },
         "frame_contract": {
+            "media_encoding": "one pre-sampled Qwen video block per user timeline",
+            "video_block_count": len(example.frame_sets),
             "user_timeline_count": len(example.frame_sets),
             "frames_per_user": [len(value.frames) for value in example.frame_sets],
             "frame_count": example.frame_count,
             "source_fps": 0.5,
+            "qwen_vision_geometry": dict(collator.vision_geometry),
             "min_pixels": args.min_pixels,
             "configured_max_pixels": args.max_pixels,
             "effective_max_pixels": adaptive_image_max_pixels(
@@ -133,8 +142,16 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 configured_max_pixels=args.max_pixels,
                 min_pixels=args.min_pixels,
                 max_input_tokens=args.max_input_tokens,
+                target_fraction=args.image_context_target_fraction,
+                vision_token_pixel_area=collator.vision_geometry[
+                    "merged_token_pixel_area"
+                ],
             ),
             "max_input_tokens": args.max_input_tokens,
+            "image_context_target_fraction": args.image_context_target_fraction,
+            "maximum_expected_video_packed_input_tokens": (
+                MAX_ALL_SIX_VIDEO_INPUT_TOKENS
+            ),
             "actual_input_tokens": input_tokens,
         },
         "verdict_token_ids": {
@@ -160,6 +177,11 @@ def main() -> None:
     parser.add_argument("--min-pixels", type=int, default=3_136)
     parser.add_argument("--max-pixels", type=int, default=262_144)
     parser.add_argument("--max-input-tokens", type=int, default=262_144)
+    parser.add_argument(
+        "--image-context-target-fraction",
+        type=float,
+        default=DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION,
+    )
     parser.add_argument("--local-files-only", action="store_true")
     args = parser.parse_args()
     result = run_probe(args)

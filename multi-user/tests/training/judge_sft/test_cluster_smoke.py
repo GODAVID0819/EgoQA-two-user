@@ -29,6 +29,8 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         self.assertEqual(parsed.lora_rank, 8)
         self.assertEqual(parsed.lora_alpha, 16)
         self.assertEqual(parsed.gradient_accumulation_steps, 16)
+        self.assertEqual(parsed.epochs, 10.0)
+        self.assertEqual(parsed.image_context_target_fraction, 0.85)
         self.assertEqual(parsed.attn_implementation, "sdpa")
         self.assertEqual(
             parsed.lora_target_modules,
@@ -83,6 +85,7 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
             "#SBATCH --constraint=h200",
             'MIN_PIXELS="${MIN_PIXELS:-3136}"',
             'MAX_PIXELS="${MAX_PIXELS:-262144}"',
+            'IMAGE_CONTEXT_TARGET_FRACTION="${IMAGE_CONTEXT_TARGET_FRACTION:-0.85}"',
             "training.torch_storage_preflight",
             "training.judge_sft.select_smoke_example",
             "processor_and_1800_frame_probe",
@@ -105,6 +108,7 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
             "#SBATCH --constraint=h200",
             "--nproc_per_node=2",
             "--max-steps 1",
+            '--image-context-target-fraction "${IMAGE_CONTEXT_TARGET_FRACTION}"',
             "--gradient-accumulation-steps 1",
             "training.judge_sft.select_smoke_example",
             "deepspeed_zero3.json",
@@ -128,13 +132,13 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
             text.index("training.torch_storage_preflight"),
             text.index("training.judge_sft.train"),
         )
-
     def test_full_train_is_ten_epoch_real_data_run(self) -> None:
         text = TRAIN_SBATCH.read_text(encoding="utf-8")
         for expected in (
             "#SBATCH --gres=gpu:2",
             "--nproc_per_node=2",
             'EPOCHS="${EPOCHS:-10}"',
+            'IMAGE_CONTEXT_TARGET_FRACTION="${IMAGE_CONTEXT_TARGET_FRACTION:-0.85}"',
             'GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-16}"',
             'LEARNING_RATE="${LEARNING_RATE:-2e-5}"',
             "--train-manifest",
@@ -150,13 +154,20 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
             'if attn_implementation == "flash_attention_2"',
             "chat_template_preflight",
             "_assert_thinking_disabled",
+            "processor_and_1800_frame_probe",
+            "training.judge_sft.runtime_probe",
         ):
             self.assertIn(expected, text)
         self.assertNotIn("--eval-manifest", text)
         self.assertNotIn("eval.jsonl", text)
         self.assertNotIn("latest_", text)
+        self.assertLess(
+            text.index("training.judge_sft.runtime_probe"),
+            text.index("training.judge_sft.train"),
+        )
         train_source = TRAIN_MODULE.read_text(encoding="utf-8")
         self.assertIn('"save_strategy": "steps" if args.max_steps > 0 else "epoch"', train_source)
+        self.assertIn("judge_visual_budget_preflight=", train_source)
         self.assertNotIn("save_total_limit", train_source)
         self.assertNotIn("EarlyStoppingCallback", train_source)
 
@@ -164,6 +175,7 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         config = json.loads(DEEPSPEED_CONFIG.read_text(encoding="utf-8"))
         self.assertTrue(config["bf16"]["enabled"])
         self.assertEqual(config["zero_optimization"]["stage"], 3)
+        self.assertNotIn("offload_param", config["zero_optimization"])
         self.assertTrue(
             config["zero_optimization"]["stage3_gather_16bit_weights_on_model_save"]
         )

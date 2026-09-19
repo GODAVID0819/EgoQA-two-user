@@ -4,12 +4,13 @@ Visual examples reference the packet-owned 0.5 FPS JPEG timelines produced by
 ``rlhf_evidence_preprocessing``. They never reconstruct or decode native video
 during training. A compact manifest stores the packet directory plus ordered
 user indices; this module resolves those references to the exact 300 frames per
-selected user when the manifest is loaded.
+selected user. The collator presents each timeline to Qwen as one video block
+built from those frames, matching the six-video inference contract.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 import json
 from pathlib import Path
@@ -38,6 +39,7 @@ class JudgeExample:
     verdict: Verdict
     frame_sets: tuple[FrameSet, ...] = ()
     condition_type: str | None = None
+    loss_weight_multiplier: float = 1.0
 
     @property
     def target(self) -> int:
@@ -68,7 +70,17 @@ class JudgeDataset:
         return len(self.examples)
 
     def __getitem__(self, index: int) -> JudgeExample:
-        return self.examples[index]
+        if not isinstance(index, int):
+            raise TypeError(f"judge dataset index must be int, got {type(index).__name__}")
+        if index >= 0:
+            return self.examples[index]
+        source_index = -index - 1
+        if not 0 <= source_index < len(self.examples):
+            raise IndexError(index)
+        return replace(
+            self.examples[source_index],
+            loss_weight_multiplier=0.0,
+        )
 
 
 def _nonempty_string(value: Any, *, field: str, location: str) -> str:

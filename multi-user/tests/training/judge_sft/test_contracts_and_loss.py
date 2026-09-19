@@ -10,7 +10,9 @@ from unittest.mock import patch
 import torch
 
 from training.judge_sft.collator import (
+    JudgeFrameCollator,
     QWEN_NO_THINK_ASSISTANT_SUFFIX,
+    QWEN_VISION_TOKEN_PIXEL_AREA,
     _assert_thinking_disabled,
     _apply_chat_template,
     adaptive_image_max_pixels,
@@ -26,13 +28,16 @@ from training.judge_sft.contracts import (
 )
 from training.judge_sft.data import (
     FrameSet,
+    JudgeDataset,
     JudgeExample,
     assert_group_disjoint,
     normalized_record_to_example,
 )
 from training.judge_sft.loss import (
+    BinaryClassWeights,
     balanced_binary_class_weights,
     resolve_verdict_token_ids,
+    sample_weight_for_example,
     task_sampling_scales,
     verdict_bce_from_pair_logits,
 )
@@ -40,7 +45,12 @@ from training.judge_sft.inference import (
     generate_complete_judge_output,
     select_verdict_from_next_token_logits,
 )
-from training.judge_sft.trainer import logits_to_keep_argument
+from training.judge_sft.trainer import (
+    RankAlignedExecutionSampler,
+    audit_rank_aligned_sampler,
+    logits_to_keep_argument,
+    model_execution_signature,
+)
 from training.judge_sft.train import audit_language_lora_targets
 
 
@@ -153,6 +163,64 @@ class VerdictContractsAndLossTests(unittest.TestCase):
         self.assertAlmostEqual(scales[JudgeTask.FORMALITY], 0.8)
         self.assertAlmostEqual(scales[JudgeTask.GROUNDEDNESS], 1.6)
         self.assertAlmostEqual(scales[JudgeTask.ANSWERABILITY], 0.8)
+
+    def test_rank_aligned_sampler_keeps_zero_one_and_six_view_paths_separate(self) -> None:
+        examples = [
+            *[
+                _example(index, JudgeTask.FORMALITY, Verdict.PASS)
+                for index in range(3)
+            ],
+            *[
+                _example(index + 3, JudgeTask.ANSWERABILITY, Verdict.FAIL)
+                for index in range(3)
+            ],
+            *[
+                _example(index + 6, JudgeTask.GROUNDEDNESS, Verdict.PASS)
+                for index in range(3)
+            ],
+        ]
+        dataset = JudgeDataset(examples)
+        sampler = RankAlignedExecutionSampler(dataset, world_size=2, seed=42)
+
+        indices = list(sampler)
+
+        self.assertEqual(len(indices), 12)
+        self.assertEqual({index for index in indices if index >= 0}, set(range(9)))
+        self.assertEqual(sum(index < 0 for index in indices), 3)
+        for offset in range(0, len(indices), 2):
+            pair = [dataset[index] for index in indices[offset : offset + 2]]
+            self.assertEqual(
+                model_execution_signature(pair[0]),
+                model_execution_signature(pair[1]),
+            )
+        for index in indices:
+            expected = 0.0 if index < 0 else 1.0
+            self.assertEqual(dataset[index].loss_weight_multiplier, expected)
+
+        unit_weights = BinaryClassWeights(
+            fail=1.0,
+            passed=1.0,
+            fail_count=1,
+            pass_count=1,
+        )
+        padding = next(dataset[index] for index in indices if index < 0)
+        self.assertEqual(
+            sample_weight_for_example(
+                padding,
+                class_weights={task: unit_weights for task in JudgeTask},
+                task_scales={task: 1.0 for task in JudgeTask},
+            ),
+            0.0,
+        )
+        audit = audit_rank_aligned_sampler(
+            dataset,
+            world_size=2,
+            seed=42,
+        )
+        self.assertEqual(audit["status"], "passed")
+        self.assertEqual(audit["real_examples_per_epoch"], 9)
+        self.assertEqual(audit["sampler_slots_per_epoch"], 12)
+        self.assertEqual(audit["zero_loss_padding_slots_per_epoch"], 3)
 
     def test_token_contract_uses_two_distinct_single_tokens(self) -> None:
         token_ids = resolve_verdict_token_ids(FakeTokenizer())
@@ -280,8 +348,8 @@ class VerdictContractsAndLossTests(unittest.TestCase):
         }
         example = normalized_record_to_example(row, require_frame_files=False)
         prompt = model_visible_prompt(example)
-        self.assertIn("block_1: speaker: A1; attachments 1-300", prompt)
-        self.assertIn("block_2: provider_1: A2; attachments 301-600", prompt)
+        self.assertIn("video_block_1: speaker: A1; 300 frames", prompt)
+        self.assertIn("video_block_2: provider_1: A2; 300 frames", prompt)
         self.assertEqual(example.frame_count, 1_800)
 
     def test_packet_relative_nested_frame_directories_are_resolved(self) -> None:
@@ -341,6 +409,7 @@ class VerdictContractsAndLossTests(unittest.TestCase):
         )
 
     def test_dynamic_resolution_cap_matches_production_1800_frame_call(self) -> None:
+        self.assertEqual(QWEN_VISION_TOKEN_PIXEL_AREA, 32 * 32)
         self.assertEqual(
             adaptive_image_max_pixels(
                 image_count=1_800,
@@ -348,7 +417,7 @@ class VerdictContractsAndLossTests(unittest.TestCase):
                 min_pixels=3_136,
                 max_input_tokens=262_144,
             ),
-            91_728,
+            119_808,
         )
         self.assertEqual(
             adaptive_image_max_pixels(
@@ -359,6 +428,140 @@ class VerdictContractsAndLossTests(unittest.TestCase):
             ),
             262_144,
         )
+
+    def test_collator_groups_each_sampled_timeline_as_one_video_block(self) -> None:
+        class Processor:
+            def __init__(self) -> None:
+                self.call_kwargs = None
+                self.image_processor = SimpleNamespace(
+                    patch_size=16,
+                    merge_size=2,
+                    temporal_patch_size=2,
+                )
+
+            def apply_chat_template(
+                self,
+                messages,
+                *,
+                tokenize,
+                add_generation_prompt,
+                enable_thinking,
+            ):
+                del messages, tokenize, add_generation_prompt, enable_thinking
+                return "assistant-start"
+
+            def __call__(self, **kwargs):
+                self.call_kwargs = kwargs
+                return {"input_ids": torch.tensor([[1, 2, 3]])}
+
+        observed_messages = []
+
+        def process_vision_info(
+            messages,
+            *,
+            return_video_kwargs,
+            return_video_metadata,
+            image_patch_size,
+        ):
+            self.assertTrue(return_video_kwargs)
+            self.assertTrue(return_video_metadata)
+            self.assertEqual(image_patch_size, 16)
+            observed_messages.extend(messages)
+            block_count = sum(
+                item.get("type") == "video" for item in messages[0]["content"]
+            )
+            videos = []
+            for index in range(block_count):
+                metadata = {
+                    "fps": 0.5,
+                    "frames_indices": list(range(300)),
+                    "total_num_frames": 300,
+                }
+                videos.append((f"decoded-video-{index}", metadata))
+            return None, videos, {
+                "do_sample_frames": False,
+                "fps": [0.5] * block_count,
+            }
+
+        processor = Processor()
+        unit_weights = BinaryClassWeights(
+            fail=1.0,
+            passed=1.0,
+            fail_count=1,
+            pass_count=1,
+        )
+        collator = JudgeFrameCollator(
+            processor=processor,
+            class_weights={task: unit_weights for task in JudgeTask},
+            task_scales={task: 1.0 for task in JudgeTask},
+            min_pixels=3_136,
+            max_pixels=262_144,
+            max_input_tokens=262_144,
+            process_vision_info=process_vision_info,
+        )
+
+        batch = collator([_example(0, JudgeTask.GROUNDEDNESS, Verdict.PASS)])
+
+        video_items = observed_messages[0]["content"][:6]
+        self.assertTrue(all(item["type"] == "video" for item in video_items))
+        self.assertTrue(all(len(item["video"]) == 300 for item in video_items))
+        self.assertTrue(all(item["sample_fps"] == 0.5 for item in video_items))
+        self.assertTrue(all(item["raw_fps"] == 0.5 for item in video_items))
+        self.assertNotIn("images", processor.call_kwargs)
+        self.assertEqual(
+            processor.call_kwargs["videos"],
+            [f"decoded-video-{index}" for index in range(6)],
+        )
+        self.assertEqual(processor.call_kwargs["fps"], 0.5)
+        self.assertEqual(len(processor.call_kwargs["video_metadata"]), 6)
+        self.assertTrue(processor.call_kwargs["return_metadata"])
+        self.assertEqual(batch["labels"].tolist(), [[1, 1]])
+
+    def test_collator_rejects_missing_all_six_temporal_packing(self) -> None:
+        class Processor:
+            image_processor = SimpleNamespace(
+                patch_size=16,
+                merge_size=2,
+                temporal_patch_size=2,
+            )
+
+            def apply_chat_template(
+                self,
+                messages,
+                *,
+                tokenize,
+                add_generation_prompt,
+                enable_thinking,
+            ):
+                del messages, tokenize, add_generation_prompt, enable_thinking
+                return "assistant-start"
+
+            def __call__(self, **kwargs):
+                del kwargs
+                return {"input_ids": torch.zeros((1, 140_001), dtype=torch.long)}
+
+        unit_weights = BinaryClassWeights(
+            fail=1.0,
+            passed=1.0,
+            fail_count=1,
+            pass_count=1,
+        )
+        collator = JudgeFrameCollator(
+            processor=Processor(),
+            class_weights={task: unit_weights for task in JudgeTask},
+            task_scales={task: 1.0 for task in JudgeTask},
+            min_pixels=3_136,
+            max_pixels=262_144,
+            max_input_tokens=262_144,
+            process_vision_info=lambda messages, **kwargs: (
+                None,
+                [f"video-{index}" for index in range(6)],
+                {"fps": [0.5] * 6},
+            ),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "temporal video packing"):
+            collator([_example(0, JudgeTask.GROUNDEDNESS, Verdict.PASS)])
 
     def test_native_video_manifest_is_rejected_as_obsolete(self) -> None:
         with self.assertRaisesRegex(ValueError, "obsolete"):

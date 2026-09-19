@@ -13,6 +13,7 @@ if "egolife_two_user_qa" not in sys.modules:
 
 from egolife_two_user_qa.prompts import (
     ANSWERABILITY_SUFFICIENCY_SCHEMA,
+    build_answerability_fact_plan_prompt,
     build_answerability_prompt,
     build_evidence_groundedness_judge_prompt,
     build_qa_formality_judge_prompt,
@@ -176,14 +177,27 @@ class JudgeOutputContractTests(unittest.TestCase):
             list(ANSWERABILITY_SUFFICIENCY_SCHEMA["properties"]),
             ["verdict", "reason", "available_evidence", "missing_evidence"],
         )
-        prompt = build_answerability_prompt(
-            qa_item(),
-            {
-                "condition_id": "speaker_only::Speaker",
-                "condition_type": "speaker_only",
-                "users": ["Speaker"],
-            },
-        )
+        prompts = [
+            build_answerability_prompt(
+                qa_item(),
+                {
+                    "condition_id": "speaker_only::Speaker",
+                    "condition_type": "speaker_only",
+                    "users": ["Speaker"],
+                    "options": ["DO_NOT_EXPOSE_CONDITION_OPTION"],
+                },
+            ),
+            build_answerability_prompt(
+                qa_item(),
+                {
+                    "condition_id": "combined_all_six_users",
+                    "condition_type": "combined_all_six_users",
+                    "users": qa_item()["required_users"],
+                    "options": ["DO_NOT_EXPOSE_CONDITION_OPTION"],
+                },
+            ),
+        ]
+        prompt = prompts[0]
         self.assertIn("The first JSON field must be `verdict`", prompt)
         self.assertNotIn("answerable must be the first field", prompt)
         self.assertIn("Set verdict to pass only when", prompt)
@@ -194,6 +208,19 @@ class JudgeOutputContractTests(unittest.TestCase):
             prompt,
         )
         self.assertIn("missing, occluded, ambiguous, or contradictory", prompt)
+        for condition_prompt in prompts:
+            self.assertIn(qa_item()["question"], condition_prompt)
+            self.assertIn(
+                "Use only the question to identify required facts",
+                condition_prompt,
+            )
+            self.assertNotIn("Answer options:", condition_prompt)
+            for option in qa_item()["options"]:
+                self.assertNotIn(option, condition_prompt)
+            self.assertNotIn(qa_item()["answer"], condition_prompt)
+            self.assertNotIn('"correct"', condition_prompt)
+            self.assertNotIn("DO_NOT_EXPOSE_CONDITION_OPTION", condition_prompt)
+            self.assertNotIn("option", condition_prompt.lower())
         value = {
             "verdict": "fail",
             "reason": "The recipient's later action is not visible in the speaker video.",
@@ -201,6 +228,31 @@ class JudgeOutputContractTests(unittest.TestCase):
             "missing_evidence": ["The recipient's later placement is not visible."],
         }
         self.assertEqual(answerability_sufficiency_output_errors(value), [])
+
+    def test_six_user_answerability_fact_plan_receives_only_question(self) -> None:
+        qa = qa_item()
+        qa.update(
+            {
+                "qa_id": "DO_NOT_EXPOSE_QA_ID",
+                "options": [f"DO_NOT_EXPOSE_OPTION_{index}" for index in range(5)],
+                "correct": "DO_NOT_EXPOSE_CORRECT",
+                "answer": "DO_NOT_EXPOSE_ANSWER",
+                "required_users": [
+                    f"DO_NOT_EXPOSE_USER_{index}" for index in range(6)
+                ],
+            }
+        )
+        prompt = build_answerability_fact_plan_prompt(qa)
+
+        self.assertIn(qa["question"], prompt)
+        for forbidden in (
+            qa["qa_id"],
+            *qa["options"],
+            qa["correct"],
+            qa["answer"],
+            *qa["required_users"],
+        ):
+            self.assertNotIn(forbidden, prompt)
 
 
 if __name__ == "__main__":

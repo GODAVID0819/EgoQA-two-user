@@ -32,6 +32,7 @@ DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${PACKAGE_ROOT}/training/judge_sft/deepspe
 MIN_PIXELS="${MIN_PIXELS:-3136}"
 MAX_PIXELS="${MAX_PIXELS:-262144}"
 MAX_INPUT_TOKENS="${MAX_INPUT_TOKENS:-262144}"
+IMAGE_CONTEXT_TARGET_FRACTION="${IMAGE_CONTEXT_TARGET_FRACTION:-0.85}"
 ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 EPOCHS="${EPOCHS:-10}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-16}"
@@ -148,7 +149,9 @@ on_error() {
 trap on_error ERR
 trap cleanup EXIT
 
-mkdir -p "${OUTPUT_DIR}" "${JOB_SCRATCH_ROOT}" "${TMPDIR}"
+mkdir -p \
+  "${OUTPUT_DIR}" "${JOB_SCRATCH_ROOT}" "${TMPDIR}" \
+  "${XDG_CACHE_HOME}/torch/kernels"
 cd "${PACKAGE_ROOT}"
 if [[ "${ENABLE_CUDA_KEEPER}" != "0" && "${ENABLE_CUDA_KEEPER}" != "1" ]]; then
   echo "error=invalid_enable_cuda_keeper value=${ENABLE_CUDA_KEEPER}" >&2
@@ -246,6 +249,17 @@ _assert_thinking_disabled(rendered)
 print(repr(rendered[-120:]))
 PY
 
+CURRENT_STAGE="processor_and_1800_frame_probe"
+CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -P -m training.judge_sft.runtime_probe \
+  --manifest "${TRAIN_MANIFEST}" \
+  --model-id "${MODEL_PATH}" \
+  --local-files-only \
+  --min-pixels "${MIN_PIXELS}" \
+  --max-pixels "${MAX_PIXELS}" \
+  --max-input-tokens "${MAX_INPUT_TOKENS}" \
+  --image-context-target-fraction "${IMAGE_CONTEXT_TARGET_FRACTION}" \
+  --output "${OUTPUT_DIR}/runtime_probe.json"
+
 start_cuda_keeper
 
 CURRENT_STAGE="train"
@@ -262,6 +276,7 @@ TRAIN_COMMAND=(
   --min-pixels "${MIN_PIXELS}"
   --max-pixels "${MAX_PIXELS}"
   --max-input-tokens "${MAX_INPUT_TOKENS}"
+  --image-context-target-fraction "${IMAGE_CONTEXT_TARGET_FRACTION}"
   --epochs "${EPOCHS}"
   --gradient-accumulation-steps "${GRADIENT_ACCUMULATION_STEPS}"
   --learning-rate "${LEARNING_RATE}"

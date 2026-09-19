@@ -1986,13 +1986,9 @@ Return exactly one valid JSON object with this exact shape:
 
 
 def answerability_qa_brief(qa_item: dict[str, Any]) -> dict[str, Any]:
-    """Return answer-neutral fields for six-user sufficiency planning."""
+    """Return only the question for six-user sufficiency planning."""
 
-    return {
-        key: qa_item.get(key)
-        for key in ("qa_id", "question", "options", "required_users")
-        if key in qa_item
-    }
+    return {"question": qa_item.get("question")}
 
 
 def build_answerability_fact_plan_prompt(qa_item: dict[str, Any]) -> str:
@@ -2009,11 +2005,11 @@ Stage marker: answerability_fact_plan
 Rules:
 - Use atomic facts that a later visual auditor can mark VISIBLE, NOT_VISIBLE, or AMBIGUOUS.
 - Include every necessary object, action, attribute, location, identity/continuity link, state, or temporal relation, but do not add merely helpful background.
-- Describe facts without revealing, selecting, or paraphrasing a preferred option as the answer.
+- Describe facts without answering the question or revealing or paraphrasing an answer.
 - Assign consecutive IDs F1, F2, ... in the order the facts are needed.
 - This exact frozen list will be reused for speaker-only and all-six audits. Do not create condition-specific facts.
 
-Answer-neutral question item:
+Question:
 {json.dumps(answerability_qa_brief(qa_item), ensure_ascii=False, indent=2)}
 
 Return exactly one JSON object conforming to this JSON Schema:
@@ -2073,7 +2069,7 @@ def build_answerability_condition_aggregation_prompt(
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
-Use only the supplied per-user visual audits. For each frozen fact ID, report whether the users included in this condition collectively establish the complete fact. Do not answer the multiple-choice question.
+Use only the supplied per-user visual audits. For each frozen fact ID, report whether the users included in this condition collectively establish the complete fact. Do not answer the question.
 
 Stage marker: answerability_condition_aggregation
 
@@ -2245,13 +2241,14 @@ Return exactly one valid JSON object with this exact shape:
 
 
 def build_answerability_prompt(qa_item: dict[str, Any], condition: dict[str, Any]) -> str:
-    options = "\n".join(
-        f"{letter}. {option}"
-        for letter, option in zip(["A", "B", "C", "D", "E"], qa_item.get("options", []))
-    )
     six_user_mode = len(qa_item.get("required_users") or []) == 6
     condition_type = str(condition.get("condition_type") or "")
     if six_user_mode:
+        condition_brief = {
+            key: condition.get(key)
+            for key in ("condition_id", "condition_type", "users")
+            if key in condition
+        }
         if condition_type == "speaker_only":
             media_rules = (
                 "- This condition contains only the full unpruned sampled speaker timeline. Evaluate "
@@ -2270,19 +2267,19 @@ def build_answerability_prompt(qa_item: dict[str, Any], condition: dict[str, Any
                 "- Evaluate only the videos explicitly listed in this condition. Do not assume "
                 "facts from omitted views."
             )
-        return f"""You are an evidence-sufficiency judge for an EgoLife multiple-choice question.
+        return f"""You are an evidence-sufficiency judge for an EgoLife question.
 
 {STRICT_JSON_OUTPUT_CONTRACT}
 
-Determine whether the media supplied for this condition directly contains all visual facts needed to distinguish exactly one option. Do not answer the question or reveal which option is correct.
+Determine whether the media supplied for this condition directly contains all visual facts needed to answer the question. Do not answer the question or state what the answer is.
 
-Set verdict to pass only when every required subject, object, action, attribute, location, identity or continuity link, state, and temporal relation is visible and sufficiently clear. Set verdict to fail when any required fact is absent, occluded, ambiguous, contradictory, or requires guessing, outside knowledge, option-wording clues, or omitted media.
+Set verdict to pass only when every required subject, object, action, attribute, location, identity or continuity link, state, and temporal relation is visible and sufficiently clear. Set verdict to fail when any required fact is absent, occluded, ambiguous, contradictory, or requires guessing, outside knowledge, or omitted media.
 
 Rules:
 - The first JSON field must be `verdict`; decide it before generating the later explanation and evidence lists.
 - Judge this condition independently. Do not assume speaker_only is insufficient or combined_all_six_users is sufficient.
-- Use the question and options only to identify required facts, never as evidence.
-- Do not output an option letter, option text, declared answer, or inferred answer.
+- Use only the question to identify required facts; the question itself is not visual evidence.
+- Do not state, infer, or reveal the answer.
 - Describe evidence using short, answer-neutral fact descriptions.
 - Identity and continuity require visible continuity or distinguishing evidence, not roles, timing, lookalikes, similar clothing, or similar objects.
 - State changes require the same object or place and both visible states. A visible difference does not prove an unseen cause or intervention.
@@ -2293,17 +2290,18 @@ Rules:
 {media_rules}
 
 Condition:
-{json.dumps(condition, ensure_ascii=False, indent=2)}
+{json.dumps(condition_brief, ensure_ascii=False, indent=2)}
 
 Generated question:
 {qa_item.get("question")}
 
-Answer options:
-{options}
-
 Return exactly one JSON object that conforms to the JSON Schema below. Return a data instance, not the schema itself:
 {json.dumps(ANSWERABILITY_SUFFICIENCY_SCHEMA, ensure_ascii=False, indent=2)}
 """
+    options = "\n".join(
+        f"{letter}. {option}"
+        for letter, option in zip(["A", "B", "C", "D", "E"], qa_item.get("options", []))
+    )
     dependency_rules = (
         "- When both users' videos are provided, answer-bearing facts may be split across "
         "them and need not coexist in either single view.\n"

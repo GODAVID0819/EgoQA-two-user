@@ -18,7 +18,7 @@ from .contracts import VERDICT_ASSISTANT_PREFIX, JudgeTask, Verdict, normalize_v
 
 
 LABEL_SCHEMA = "egolife_six_user_binary_labeling_v2"
-OUTPUT_SCHEMA = "egolife_judge_sft_real_data_v2"
+OUTPUT_SCHEMA = "egolife_judge_sft_real_data_v3"
 GENERATION_FILES = (
     "qa_mcq.jsonl",
     "qa_mcq.intermediate.jsonl",
@@ -754,6 +754,10 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "answerability_target_contract": (
             "two independent PASS/FAIL rows from asker_only_answerable and "
             "all_six_answerable; aggregate answerability_verdict is consistency-only"
+        ),
+        "answerability_prompt_contract": (
+            "question text only from the QA item; options, correct letter, answer, "
+            "rationale, and all other QA fields are withheld"
         ),
         "media_contract": {
             "dataset_root": str(args.dataset_root.resolve()),

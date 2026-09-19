@@ -132,7 +132,7 @@ def sample_weight_for_example(
     class_weights: Mapping[JudgeTask, BinaryClassWeights],
     task_scales: Mapping[JudgeTask, float],
 ) -> float:
-    return (
+    return float(example.loss_weight_multiplier) * (
         class_weights[example.task].for_target(example.target)
         * float(task_scales[example.task])
     )

@@ -30,6 +30,7 @@ JOB_SCRATCH_ROOT="${JOB_SCRATCH_ROOT:-/scratch/${USER}/job_scratch/judge38_frame
 MIN_PIXELS="${MIN_PIXELS:-3136}"
 MAX_PIXELS="${MAX_PIXELS:-262144}"
 MAX_INPUT_TOKENS="${MAX_INPUT_TOKENS:-262144}"
+IMAGE_CONTEXT_TARGET_FRACTION="${IMAGE_CONTEXT_TARGET_FRACTION:-0.85}"
 
 export HOME="${JOB_SCRATCH_ROOT}/home"
 export XDG_CACHE_HOME="${JOB_SCRATCH_ROOT}/xdg"
@@ -74,7 +75,9 @@ on_error() {
 }
 trap on_error ERR
 
-mkdir -p "${OUTPUT_DIR}" "${JOB_SCRATCH_ROOT}" "${TMPDIR}"
+mkdir -p \
+  "${OUTPUT_DIR}" "${JOB_SCRATCH_ROOT}" "${TMPDIR}" \
+  "${XDG_CACHE_HOME}/torch/kernels"
 cd "${PACKAGE_ROOT}"
 
 [[ -n "${MANIFEST_DIR}" ]] || {
@@ -141,6 +144,7 @@ CURRENT_STAGE="processor_and_1800_frame_probe"
   --min-pixels "${MIN_PIXELS}" \
   --max-pixels "${MAX_PIXELS}" \
   --max-input-tokens "${MAX_INPUT_TOKENS}" \
+  --image-context-target-fraction "${IMAGE_CONTEXT_TARGET_FRACTION}" \
   --output "${OUTPUT_DIR}/runtime_probe.json"
 
 CURRENT_STAGE="complete"

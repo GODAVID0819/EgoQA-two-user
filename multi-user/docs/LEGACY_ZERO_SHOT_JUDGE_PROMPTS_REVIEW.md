@@ -115,7 +115,7 @@ For each answerability condition, verdict is pass exactly when the supplied vide
 
 ```json
 {
-  "contract_version": "verdict_token_bce_sampled_frames_v3",
+  "contract_version": "verdict_token_bce_sampled_frames_v4",
   "supervision_type": "next_token_pass_fail",
   "binary_label_names": {
     "0": "fail",
@@ -133,6 +133,7 @@ For each answerability condition, verdict is pass exactly when the supplied vide
     "answerability": 0.4
   },
   "trainable_parameters": "language attention+MLP LoRA only: q/k/v/o/gate/up/down projections, rank 8, alpha 16",
+  "distributed_sampling": "ZeRO-3 ranks receive the same 0/1/6-view execution signature per microstep; incomplete rank groups use zero-loss padding",
   "inference_generation": "constrain only the first generated token to the selected pass/fail token, then continue the same generation through the complete JSON contract"
 }
 ```
@@ -372,7 +373,7 @@ Return exactly one valid JSON object with this exact shape:
 ## Prompt 3 — answerability / asker only
 
 ```text
-You are an evidence-sufficiency judge for an EgoLife multiple-choice question.
+You are an evidence-sufficiency judge for an EgoLife question.
 
 Output contract:
 - Return exactly one valid JSON object and nothing else.
@@ -380,15 +381,15 @@ Output contract:
 - Include every field shown in the requested JSON shape, even when a value is brief.
 
 
-Determine whether the media supplied for this condition directly contains all visual facts needed to distinguish exactly one option. Do not answer the question or reveal which option is correct.
+Determine whether the media supplied for this condition directly contains all visual facts needed to answer the question. Do not answer the question or state what the answer is.
 
-Set verdict to pass only when every required subject, object, action, attribute, location, identity or continuity link, state, and temporal relation is visible and sufficiently clear. Set verdict to fail when any required fact is absent, occluded, ambiguous, contradictory, or requires guessing, outside knowledge, option-wording clues, or omitted media.
+Set verdict to pass only when every required subject, object, action, attribute, location, identity or continuity link, state, and temporal relation is visible and sufficiently clear. Set verdict to fail when any required fact is absent, occluded, ambiguous, contradictory, or requires guessing, outside knowledge, or omitted media.
 
 Rules:
 - The first JSON field must be `verdict`; decide it before generating the later explanation and evidence lists.
 - Judge this condition independently. Do not assume speaker_only is insufficient or combined_all_six_users is sufficient.
-- Use the question and options only to identify required facts, never as evidence.
-- Do not output an option letter, option text, declared answer, or inferred answer.
+- Use only the question to identify required facts; the question itself is not visual evidence.
+- Do not state, infer, or reveal the answer.
 - Describe evidence using short, answer-neutral fact descriptions.
 - Identity and continuity require visible continuity or distinguishing evidence, not roles, timing, lookalikes, similar clothing, or similar objects.
 - State changes require the same object or place and both visible states. A visible difference does not prove an unseen cause or intervention.
@@ -409,13 +410,6 @@ Condition:
 
 Generated question:
 Where was the mug placed after I handed it over?
-
-Answer options:
-A. On the wooden desk
-B. Beside the kitchen sink
-C. Near the front door
-D. On the living-room sofa
-E. Inside a dark backpack
 
 Return exactly one JSON object that conforms to the JSON Schema below. Return a data instance, not the schema itself:
 {
@@ -460,7 +454,7 @@ Return exactly one JSON object that conforms to the JSON Schema below. Return a 
 ## Prompt 4 — answerability / all six
 
 ```text
-You are an evidence-sufficiency judge for an EgoLife multiple-choice question.
+You are an evidence-sufficiency judge for an EgoLife question.
 
 Output contract:
 - Return exactly one valid JSON object and nothing else.
@@ -468,15 +462,15 @@ Output contract:
 - Include every field shown in the requested JSON shape, even when a value is brief.
 
 
-Determine whether the media supplied for this condition directly contains all visual facts needed to distinguish exactly one option. Do not answer the question or reveal which option is correct.
+Determine whether the media supplied for this condition directly contains all visual facts needed to answer the question. Do not answer the question or state what the answer is.
 
-Set verdict to pass only when every required subject, object, action, attribute, location, identity or continuity link, state, and temporal relation is visible and sufficiently clear. Set verdict to fail when any required fact is absent, occluded, ambiguous, contradictory, or requires guessing, outside knowledge, option-wording clues, or omitted media.
+Set verdict to pass only when every required subject, object, action, attribute, location, identity or continuity link, state, and temporal relation is visible and sufficiently clear. Set verdict to fail when any required fact is absent, occluded, ambiguous, contradictory, or requires guessing, outside knowledge, or omitted media.
 
 Rules:
 - The first JSON field must be `verdict`; decide it before generating the later explanation and evidence lists.
 - Judge this condition independently. Do not assume speaker_only is insufficient or combined_all_six_users is sufficient.
-- Use the question and options only to identify required facts, never as evidence.
-- Do not output an option letter, option text, declared answer, or inferred answer.
+- Use only the question to identify required facts; the question itself is not visual evidence.
+- Do not state, infer, or reveal the answer.
 - Describe evidence using short, answer-neutral fact descriptions.
 - Identity and continuity require visible continuity or distinguishing evidence, not roles, timing, lookalikes, similar clothing, or similar objects.
 - State changes require the same object or place and both visible states. A visible difference does not prove an unseen cause or intervention.
@@ -502,13 +496,6 @@ Condition:
 
 Generated question:
 Where was the mug placed after I handed it over?
-
-Answer options:
-A. On the wooden desk
-B. Beside the kitchen sink
-C. Near the front door
-D. On the living-room sofa
-E. Inside a dark backpack
 
 Return exactly one JSON object that conforms to the JSON Schema below. Return a data instance, not the schema itself:
 {

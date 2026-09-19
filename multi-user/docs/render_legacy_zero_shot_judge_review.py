@@ -140,7 +140,7 @@ ARCHIVED_SCORED_CHECK: dict[str, Any] = {
 }
 
 BINARY_REVIEWER_TRAINING_CONTRACT: dict[str, Any] = {
-    "contract_version": "verdict_token_bce_sampled_frames_v3",
+    "contract_version": "verdict_token_bce_sampled_frames_v4",
     "supervision_type": "next_token_pass_fail",
     "binary_label_names": {"0": "fail", "1": "pass"},
     "assistant_prefix": '{"verdict":"',
@@ -157,6 +157,10 @@ BINARY_REVIEWER_TRAINING_CONTRACT: dict[str, Any] = {
     "trainable_parameters": (
         "language attention+MLP LoRA only: q/k/v/o/gate/up/down projections, "
         "rank 8, alpha 16"
+    ),
+    "distributed_sampling": (
+        "ZeRO-3 ranks receive the same 0/1/6-view execution signature per "
+        "microstep; incomplete rank groups use zero-loss padding"
     ),
     "inference_generation": (
         "constrain only the first generated token to the selected pass/fail token, "
