@@ -202,9 +202,10 @@ def load_model_and_processor(args: argparse.Namespace) -> tuple[Any, Any, dict[s
     return model, processor, counts
 
 
-def training_arguments(args: argparse.Namespace) -> Any:
-    from transformers import TrainingArguments
-
+def _training_argument_kwargs(
+    args: argparse.Namespace,
+    parameter_names: set[str],
+) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "output_dir": str(args.output_dir),
         "num_train_epochs": args.epochs,
@@ -216,7 +217,6 @@ def training_arguments(args: argparse.Namespace) -> Any:
         "adam_beta2": args.adam_beta2,
         "adam_epsilon": args.adam_epsilon,
         "max_grad_norm": args.max_grad_norm,
-        "warmup_ratio": args.warmup_ratio,
         "lr_scheduler_type": args.lr_scheduler_type,
         "bf16": True,
         "tf32": True,
@@ -235,11 +235,29 @@ def training_arguments(args: argparse.Namespace) -> Any:
         "optim": "adamw_torch_fused",
         "load_best_model_at_end": False,
     }
-    parameter_names = inspect.signature(TrainingArguments.__init__).parameters
+    if "warmup_ratio" in parameter_names:
+        kwargs["warmup_ratio"] = args.warmup_ratio
+    elif "warmup_steps" in parameter_names:
+        # Transformers v5.2+ removed warmup_ratio and accepts a float ratio
+        # directly through warmup_steps.
+        kwargs["warmup_steps"] = args.warmup_ratio
+    else:
+        raise RuntimeError(
+            "installed transformers TrainingArguments supports neither "
+            "warmup_ratio nor warmup_steps"
+        )
     eval_name = "eval_strategy" if "eval_strategy" in parameter_names else "evaluation_strategy"
     kwargs[eval_name] = "no"
     if args.deepspeed is not None:
         kwargs["deepspeed"] = str(args.deepspeed)
+    return kwargs
+
+
+def training_arguments(args: argparse.Namespace) -> Any:
+    from transformers import TrainingArguments
+
+    parameter_names = set(inspect.signature(TrainingArguments.__init__).parameters)
+    kwargs = _training_argument_kwargs(args, parameter_names)
     return TrainingArguments(**kwargs)
 
 
@@ -262,7 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model-id", default=DEFAULTS.model_id)
     parser.add_argument("--local-files-only", action="store_true")
-    parser.add_argument("--attn-implementation", default="flash_attention_2")
+    parser.add_argument("--attn-implementation", default="sdpa")
     parser.add_argument("--min-pixels", type=int, default=DEFAULTS.min_pixels)
     parser.add_argument("--max-pixels", type=int, default=DEFAULTS.max_pixels)
     parser.add_argument("--max-input-tokens", type=int, default=DEFAULTS.max_input_tokens)

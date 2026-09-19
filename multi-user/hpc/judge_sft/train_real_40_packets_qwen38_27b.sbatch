@@ -32,7 +32,7 @@ DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${PACKAGE_ROOT}/training/judge_sft/deepspe
 MIN_PIXELS="${MIN_PIXELS:-3136}"
 MAX_PIXELS="${MAX_PIXELS:-262144}"
 MAX_INPUT_TOKENS="${MAX_INPUT_TOKENS:-262144}"
-ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-flash_attention_2}"
+ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 EPOCHS="${EPOCHS:-10}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-16}"
 LEARNING_RATE="${LEARNING_RATE:-2e-5}"
@@ -71,7 +71,7 @@ export TEMP="${TMPDIR}"
 export VLLM_NO_USAGE_STATS=1
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export NCCL_ASYNC_ERROR_HANDLING=1
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export PYTHONPATH="${PACKAGE_ROOT}:${PROJECT_ROOT}:${PYTHONPATH:-}"
 export CUDA_KEEPER_PAUSE_FILE
 
@@ -193,7 +193,9 @@ cp "${MANIFEST_DIR}/data_audit.json" "${OUTPUT_DIR}/input_data_audit.json"
 "${PYTHON}" -P -m pip freeze > "${OUTPUT_DIR}/dependencies.txt"
 nvidia-smi --query-gpu=index,uuid,name,memory.total,driver_version --format=csv,noheader \
   > "${OUTPUT_DIR}/gpu_environment.csv"
-"${PYTHON}" -P - <<'PY' > "${OUTPUT_DIR}/python_environment.txt"
+"${PYTHON}" -P - "${ATTN_IMPLEMENTATION}" <<'PY' > "${OUTPUT_DIR}/python_environment.txt"
+import sys
+
 import torch
 import transformers
 import accelerate
@@ -207,6 +209,13 @@ assert torch.cuda.device_count() == 2, torch.cuda.device_count()
 assert all(torch.cuda.get_device_capability(i)[0] >= 9 for i in range(2))
 assert torch.cuda.is_bf16_supported(), "BF16 is unavailable"
 assert getattr(transformers, "AutoModelForMultimodalLM", None) is not None
+attn_implementation = sys.argv[1]
+if attn_implementation == "flash_attention_2":
+    import flash_attn
+
+    print("flash_attn=", flash_attn.__version__)
+else:
+    print("attention_implementation=", attn_implementation)
 print("torch=", torch.__version__)
 print("transformers=", transformers.__version__)
 print("accelerate=", accelerate.__version__)
@@ -215,6 +224,26 @@ print("safetensors=", safetensors.__version__)
 print("gpus=", [torch.cuda.get_device_name(i) for i in range(2)])
 print("peft=", LoraConfig.__module__)
 print("qwen_vl_utils=", process_vision_info.__module__)
+PY
+
+CURRENT_STAGE="chat_template_preflight"
+"${PYTHON}" -P - "${MODEL_PATH}" > "${OUTPUT_DIR}/chat_template_preflight.txt" <<'PY'
+import sys
+
+from transformers import AutoProcessor
+
+from training.judge_sft.collator import (
+    _apply_chat_template,
+    _assert_thinking_disabled,
+)
+
+processor = AutoProcessor.from_pretrained(
+    sys.argv[1], trust_remote_code=True, local_files_only=True
+)
+messages = [{"role": "user", "content": [{"type": "text", "text": "template probe"}]}]
+rendered = _apply_chat_template(processor, messages)
+_assert_thinking_disabled(rendered)
+print(repr(rendered[-120:]))
 PY
 
 start_cuda_keeper

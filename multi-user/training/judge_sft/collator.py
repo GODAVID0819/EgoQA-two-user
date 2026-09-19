@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Callable, Mapping
 
 from .contracts import JudgeTask, VERDICT_ASSISTANT_PREFIX
@@ -13,6 +14,7 @@ QWEN_VISION_TOKEN_PIXEL_AREA = 28 * 28
 DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION = 0.85
 DEFAULT_IMAGE_TEXT_TOKEN_RESERVE = 8_192
 DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD = 2
+QWEN_NO_THINK_ASSISTANT_SUFFIX = "<think>\n\n</think>\n\n"
 
 
 def adaptive_image_max_pixels(
@@ -84,15 +86,21 @@ def model_visible_prompt(example: JudgeExample) -> str:
     return render_frame_order(example) + example.prompt
 
 
+def _supports_structured_chat_template_kwargs(processor: Any) -> bool:
+    try:
+        parameter = inspect.signature(processor.apply_chat_template).parameters.get(
+            "kwargs"
+        )
+    except (TypeError, ValueError):
+        return False
+    return parameter is not None and "AllKwargsForChatTemplate" in str(
+        parameter.annotation
+    )
+
+
 def _apply_chat_template(processor: Any, messages: list[dict[str, Any]]) -> str:
     kwargs = {"tokenize": False, "add_generation_prompt": True}
-    try:
-        return processor.apply_chat_template(
-            messages,
-            **kwargs,
-            enable_thinking=False,
-        )
-    except TypeError:
+    if _supports_structured_chat_template_kwargs(processor):
         try:
             return processor.apply_chat_template(
                 messages,
@@ -100,7 +108,30 @@ def _apply_chat_template(processor: Any, messages: list[dict[str, Any]]) -> str:
                 template_kwargs={"enable_thinking": False},
             )
         except TypeError:
-            return processor.apply_chat_template(messages, **kwargs)
+            pass
+    try:
+        return processor.apply_chat_template(
+            messages,
+            **kwargs,
+            enable_thinking=False,
+        )
+    except TypeError:
+        return processor.apply_chat_template(messages, **kwargs)
+
+
+def _assert_thinking_disabled(rendered: str) -> None:
+    """Accept Qwen3.8's canonical closed empty no-thinking assistant block."""
+
+    if "<think>" not in rendered and "</think>" not in rendered:
+        return
+    if rendered.endswith(QWEN_NO_THINK_ASSISTANT_SUFFIX):
+        before_suffix = rendered[: -len(QWEN_NO_THINK_ASSISTANT_SUFFIX)]
+        if "<think>" not in before_suffix and "</think>" not in before_suffix:
+            return
+    raise RuntimeError(
+        "judge chat template left an active or non-empty thinking block before "
+        "the fixed verdict prefix"
+    )
 
 
 class JudgeFrameCollator:
@@ -173,10 +204,7 @@ class JudgeFrameCollator:
         content.append({"type": "text", "text": model_visible_prompt(example)})
         messages = [{"role": "user", "content": content}]
         rendered = _apply_chat_template(self.processor, messages)
-        if "<think>" in rendered or "</think>" in rendered:
-            raise RuntimeError(
-                "judge chat template unexpectedly enabled thinking before the fixed verdict prefix"
-            )
+        _assert_thinking_disabled(rendered)
         rendered += VERDICT_ASSISTANT_PREFIX
         try:
             image_inputs, video_inputs, vision_kwargs = self.process_vision_info(

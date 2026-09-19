@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .collator import _apply_chat_template, _assert_thinking_disabled
 from .contracts import (
     VERDICT_ASSISTANT_PREFIX,
     Verdict,
@@ -77,27 +78,8 @@ def reload_and_probe(args: argparse.Namespace) -> dict[str, Any]:
             ],
         }
     ]
-    template_kwargs = {
-        "tokenize": False,
-        "add_generation_prompt": True,
-    }
-    try:
-        rendered = processor.apply_chat_template(
-            messages,
-            **template_kwargs,
-            enable_thinking=False,
-        )
-    except TypeError:
-        try:
-            rendered = processor.apply_chat_template(
-                messages,
-                **template_kwargs,
-                template_kwargs={"enable_thinking": False},
-            )
-        except TypeError:
-            rendered = processor.apply_chat_template(messages, **template_kwargs)
-    if "<think>" in rendered or "</think>" in rendered:
-        raise RuntimeError("adapter reload probe unexpectedly enabled thinking")
+    rendered = _apply_chat_template(processor, messages)
+    _assert_thinking_disabled(rendered)
     rendered += VERDICT_ASSISTANT_PREFIX
     batch = processor(text=[rendered], return_tensors="pt")
     model_device = next(model.parameters()).device
@@ -154,7 +136,7 @@ def main() -> None:
     parser.add_argument("--model-id", required=True)
     parser.add_argument("--adapter-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--attn-implementation", default="flash_attention_2")
+    parser.add_argument("--attn-implementation", default="sdpa")
     parser.add_argument("--max-new-tokens", type=int, default=160)
     args = parser.parse_args()
     result = reload_and_probe(args)

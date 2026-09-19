@@ -10,6 +10,8 @@ from unittest.mock import patch
 import torch
 
 from training.judge_sft.collator import (
+    QWEN_NO_THINK_ASSISTANT_SUFFIX,
+    _assert_thinking_disabled,
     _apply_chat_template,
     adaptive_image_max_pixels,
     model_visible_prompt,
@@ -176,6 +178,41 @@ class VerdictContractsAndLossTests(unittest.TestCase):
         processor = Processor()
         self.assertEqual(_apply_chat_template(processor, []), "assistant-start")
         self.assertFalse(processor.enable_thinking)
+
+    def test_chat_template_uses_transformers_v5_structured_kwargs(self) -> None:
+        class Processor:
+            def __init__(self) -> None:
+                self.kwargs = None
+
+            def apply_chat_template(
+                self,
+                messages,
+                **kwargs: "Unpack[AllKwargsForChatTemplate]",
+            ):
+                del messages
+                self.kwargs = kwargs
+                if kwargs.get("template_kwargs") == {"enable_thinking": False}:
+                    return "assistant-start" + QWEN_NO_THINK_ASSISTANT_SUFFIX
+                return "assistant-start<think>\n"
+
+        processor = Processor()
+        rendered = _apply_chat_template(processor, [])
+        _assert_thinking_disabled(rendered)
+        self.assertEqual(
+            processor.kwargs["template_kwargs"], {"enable_thinking": False}
+        )
+
+    def test_thinking_guard_accepts_only_closed_empty_qwen_block(self) -> None:
+        _assert_thinking_disabled("assistant-start")
+        _assert_thinking_disabled(
+            "assistant-start" + QWEN_NO_THINK_ASSISTANT_SUFFIX
+        )
+        with self.assertRaisesRegex(RuntimeError, "active or non-empty"):
+            _assert_thinking_disabled("assistant-start<think>\n")
+        with self.assertRaisesRegex(RuntimeError, "active or non-empty"):
+            _assert_thinking_disabled(
+                "assistant-start<think>private reasoning</think>\n\n"
+            )
 
     def test_verdict_selection_ignores_an_off_label_unrestricted_top_token(self) -> None:
         logits = torch.zeros(20)

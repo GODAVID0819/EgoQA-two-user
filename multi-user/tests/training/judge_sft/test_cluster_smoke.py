@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from training.judge_sft.contracts import DEFAULTS
-from training.judge_sft.train import build_parser
+from training.judge_sft.train import _training_argument_kwargs, build_parser
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -29,6 +29,7 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         self.assertEqual(parsed.lora_rank, 8)
         self.assertEqual(parsed.lora_alpha, 16)
         self.assertEqual(parsed.gradient_accumulation_steps, 16)
+        self.assertEqual(parsed.attn_implementation, "sdpa")
         self.assertEqual(
             parsed.lora_target_modules,
             [
@@ -41,6 +42,22 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
                 "down_proj",
             ],
         )
+
+    def test_warmup_argument_supports_transformers_v4_and_v5(self) -> None:
+        parsed = build_parser().parse_args(
+            ["--train-manifest", "train.jsonl", "--output-dir", "out"]
+        )
+        v4 = _training_argument_kwargs(
+            parsed, {"warmup_ratio", "evaluation_strategy"}
+        )
+        self.assertEqual(v4["warmup_ratio"], 0.1)
+        self.assertNotIn("warmup_steps", v4)
+        self.assertEqual(v4["evaluation_strategy"], "no")
+
+        v5 = _training_argument_kwargs(parsed, {"warmup_steps", "eval_strategy"})
+        self.assertEqual(v5["warmup_steps"], 0.1)
+        self.assertNotIn("warmup_ratio", v5)
+        self.assertEqual(v5["eval_strategy"], "no")
 
     def test_prepare_sbatch_uses_exact_real_artifacts_and_counts(self) -> None:
         text = PREP_SBATCH.read_text(encoding="utf-8")
@@ -99,6 +116,10 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
             "start_cuda_keeper",
             "--max-prealloc",
             "CUDA_KEEPER_PID",
+            'ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"',
+            'if attn_implementation == "flash_attention_2"',
+            "chat_template_preflight",
+            "_assert_thinking_disabled",
         ):
             self.assertIn(expected, text)
         self.assertNotIn("VIDEO_LIST", text)
@@ -125,6 +146,10 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
             "start_cuda_keeper",
             "--max-prealloc",
             "CUDA_KEEPER_PID",
+            'ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"',
+            'if attn_implementation == "flash_attention_2"',
+            "chat_template_preflight",
+            "_assert_thinking_disabled",
         ):
             self.assertIn(expected, text)
         self.assertNotIn("--eval-manifest", text)

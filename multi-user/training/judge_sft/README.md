@@ -113,22 +113,33 @@ LoRA on `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, and
 `down_proj`, rank 8, alpha 16, dropout 0.05. The launcher audits that every
 requested family has trainable language-side LoRA parameters. The vision
 encoder, merger/aligner, embeddings, LM head, and all base weights remain
-frozen. The full launcher uses two H200s, fused AdamW, LR `2e-5`, betas
+frozen. Attention defaults to PyTorch native SDPA, avoiding an external
+`flash-attn` build while still allowing H200 fused SDPA kernels. Set
+`ATTN_IMPLEMENTATION=flash_attention_2` only in an environment with a compatible
+`flash_attn` installation. The full launcher uses two H200s, fused AdamW, LR `2e-5`, betas
 `(0.9, 0.95)`, weight decay `0.01`, 10% warmup, cosine decay, ten epochs,
 microbatch one per GPU, gradient accumulation sixteen (effective batch 32),
 gradient checkpointing, clipping at 1.0, and ZeRO-3. There is no in-training
 evaluation or early stopping. Every epoch checkpoint is saved without a
 retention cap, and `final_adapter` stores the last epoch for convenience.
+The launcher preserves the 10% warmup across Transformers APIs: it uses
+`warmup_ratio=0.1` where supported and the Transformers v5.2+
+`warmup_steps=0.1` ratio form otherwise.
 
 ## What the fixed assistant prefix actually does
 
 The prefix is part of the tokenized input context; it is not claimed as model
 output. The collator first asks Qwen's chat template to render the user message
-and open an assistant turn, then concatenates the literal text:
+and open an assistant turn with thinking disabled. Qwen3.8 represents this with
+a canonical closed empty thinking block. The collator then concatenates the
+literal verdict prefix:
 
 ```text
-<rendered user content and assistant-turn marker>{"verdict":"
+<rendered user content><assistant marker><think>\n\n</think>\n\n{"verdict":"
 ```
+
+The empty block is template control syntax, not generated reasoning. An open or
+non-empty thinking block is rejected before tokenization.
 
 Because a causal LM's logits at the final input position predict the next
 token, those logits answer: "what token follows the opening verdict quote?"
@@ -221,7 +232,7 @@ generation: /scratch/$USER/egolife_rlhf_qa_generation/qwen38_legacy_two_pass_sch
 
 They default to the generation environment at
 `/scratch/$USER/conda/envs/qwen38-vllm`. It must also contain PEFT, Accelerate,
-DeepSpeed, FlashAttention, `qwen-vl-utils`, and Safetensors. The launchers do
+DeepSpeed, `qwen-vl-utils`, and Safetensors. The launchers do
 not install or upgrade packages; if those training dependencies live in a
 separate environment, pass its exact directory as `TRAIN_ENV`.
 If the shared Hugging Face cache contains more than one Qwen3.8-27B snapshot,
