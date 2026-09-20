@@ -288,9 +288,17 @@ generation: /scratch/$USER/egolife_rlhf_qa_generation/qwen38_legacy_two_pass_sch
 
 They default to the generation environment at
 `/scratch/$USER/conda/envs/qwen38-vllm`. It must contain Transformers 5.4 or
-newer, Accelerate 1.12 or newer, a PEFT build with TP-aware LoRA,
+newer, Accelerate 1.12 or newer, PEFT 0.19.0 or newer with TP-aware LoRA,
 `qwen-vl-utils`, and Safetensors. The launchers do
 not install or upgrade packages; if those training dependencies live in a
 separate environment, pass its exact directory as `TRAIN_ENV`.
+Transformers 5.16 materializes TP correctly but omits its `model._tp_size`
+marker; the trainer validates the DTensor mesh and supplies that metadata
+before constructing `Trainer`, matching the upstream 5.17 behavior.
+Epoch and final adapter saves are collective under TP2: both ranks enter
+PEFT's state-dict gathering path, while only rank zero writes the adapter,
+processor, and training-argument files. This avoids a rank-zero-only DTensor
+gather deadlock at checkpoint time. The collective receives an adapter-only
+state dict so checkpointing never gathers the frozen 27B base model to CPU.
 If the shared Hugging Face cache contains more than one Qwen3.8-27B snapshot,
 set `MODEL_PATH` to one exact snapshot directory.

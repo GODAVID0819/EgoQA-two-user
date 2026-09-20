@@ -56,6 +56,7 @@ from training.judge_sft.train import (
     audit_trainable_lora_layers,
     audit_trainable_lora_dtypes,
     configure_safe_tensor_parallel_plan,
+    ensure_tensor_parallel_metadata,
     install_frozen_prefix_input_guard,
 )
 
@@ -673,6 +674,44 @@ class VerdictContractsAndLossTests(unittest.TestCase):
             audit["replicated_for_compatibility"],
             ["layers.*.linear_attn.in_proj_qkv"],
         )
+
+    def test_transformers_516_tp_metadata_is_repaired_after_mesh_audit(self) -> None:
+        class Mesh:
+            ndim = 1
+
+            @staticmethod
+            def size() -> int:
+                return 2
+
+        model = SimpleNamespace(
+            config=SimpleNamespace(
+                distributed_config=SimpleNamespace(tp_size=2),
+            ),
+            _device_mesh=Mesh(),
+            _tp_size=None,
+        )
+        audit = ensure_tensor_parallel_metadata(model, requested_tp_size=2)
+        self.assertEqual(model._tp_size, 2)
+        self.assertTrue(audit["metadata_repaired"])
+        self.assertEqual(audit["observed_tp_size"], 2)
+
+    def test_tp_metadata_repair_rejects_a_wrong_mesh_size(self) -> None:
+        class Mesh:
+            ndim = 1
+
+            @staticmethod
+            def size() -> int:
+                return 1
+
+        model = SimpleNamespace(
+            config=SimpleNamespace(
+                distributed_config=SimpleNamespace(tp_size=2),
+            ),
+            _device_mesh=Mesh(),
+            _tp_size=None,
+        )
+        with self.assertRaisesRegex(RuntimeError, "mesh disagrees"):
+            ensure_tensor_parallel_metadata(model, requested_tp_size=2)
 
 
 if __name__ == "__main__":

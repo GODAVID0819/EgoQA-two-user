@@ -214,7 +214,6 @@ import transformers
 import accelerate
 import peft
 import safetensors
-import peft.tuners.lora.model as peft_lora_model
 from packaging.version import Version
 from peft import LoraConfig, get_peft_model
 from transformers import AutoConfig, DistributedConfig
@@ -228,11 +227,12 @@ assert torch.cuda.is_bf16_supported(), "BF16 is unavailable"
 assert getattr(transformers, "AutoModelForMultimodalLM", None) is not None
 assert Version(transformers.__version__) >= Version("5.4.0"), transformers.__version__
 assert Version(accelerate.__version__) >= Version("1.12.0"), accelerate.__version__
+assert Version(peft.__version__) >= Version("0.19.0"), (
+    f"PEFT >= 0.19.0 is required for TP-aware LoRA; found {peft.__version__}"
+)
 assert "autocast_adapter_dtype" in inspect.signature(get_peft_model).parameters
 assert "layers_to_transform" in inspect.signature(LoraConfig).parameters
 assert "layers_pattern" in inspect.signature(LoraConfig).parameters
-peft_lora_source = inspect.getsource(peft_lora_model)
-assert "add_lora_tp_hooks" in peft_lora_source, "PEFT lacks TP-aware LoRA hooks"
 config = AutoConfig.from_pretrained(sys.argv[2], trust_remote_code=True, local_files_only=True)
 try:
     text_config = config.get_text_config(decoder=True)
@@ -260,7 +260,7 @@ print("peft=", LoraConfig.__module__)
 print("distributed_config=", DistributedConfig(tp_size=2))
 print("parallelism_config=", ParallelismConfig(tp_size=2))
 print("tp_plan_entries=", sorted(tp_plan))
-print("peft_tp_lora_hooks=available")
+print("peft_tp_lora_support=version_gate_passed_runtime_dtensor_audit_pending")
 print("qwen_vl_utils=", process_vision_info.__module__)
 PY
 

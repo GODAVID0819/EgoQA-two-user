@@ -13,6 +13,7 @@ RUNTIME_SBATCH = ROOT / "hpc" / "judge_sft" / "runtime_smoke_qwen38_27b.sbatch"
 STEP1_SBATCH = ROOT / "hpc" / "judge_sft" / "train_one_step_qwen38_27b.sbatch"
 TRAIN_SBATCH = ROOT / "hpc" / "judge_sft" / "train_real_40_packets_qwen38_27b.sbatch"
 TRAIN_MODULE = ROOT / "training" / "judge_sft" / "train.py"
+TRAINER_MODULE = ROOT / "training" / "judge_sft" / "trainer.py"
 
 
 class JudgeSftClusterSmokeTests(unittest.TestCase):
@@ -138,6 +139,7 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
             '--trainable-decoder-layers "${TRAINABLE_DECODER_LAYERS}"',
             'Version(transformers.__version__) >= Version("5.4.0")',
             'Version(accelerate.__version__) >= Version("1.12.0")',
+            'Version(peft.__version__) >= Version("0.19.0")',
             "autocast_adapter_dtype",
             "nvidia-smi topo -m",
             "training.judge_sft.adapter_reload",
@@ -177,6 +179,7 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
             '--trainable-decoder-layers "${TRAINABLE_DECODER_LAYERS}"',
             'Version(transformers.__version__) >= Version("5.4.0")',
             'Version(accelerate.__version__) >= Version("1.12.0")',
+            'Version(peft.__version__) >= Version("0.19.0")',
             "nvidia-smi topo -m",
             "--train-manifest",
             "checkpoint_inventory.json",
@@ -210,6 +213,18 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         self.assertIn("DistributedConfig(tp_size=args.tensor_parallel_size)", train_source)
         self.assertIn("autocast_adapter_dtype=False", train_source)
         self.assertIn("layers_to_transform=trainable_layer_indices", train_source)
+        self.assertIn("audit_lora_tensor_parallel_materialization", train_source)
+        self.assertIn("ensure_tensor_parallel_metadata", train_source)
+        self.assertIn("materialize_lora_tensor_parallelism", train_source)
+        self.assertIn("module._tp_info = TpInfo", train_source)
+        self.assertLess(
+            train_source.index('tp_plan_audit["materialization"]'),
+            train_source.index('tp_plan_audit["metadata"]'),
+        )
+        self.assertLess(
+            train_source.index("model = get_peft_model"),
+            train_source.index('tp_plan_audit["lora_materialization"]'),
+        )
         self.assertIn('layers_pattern="layers"', train_source)
         self.assertIn("disable_input_require_grads", train_source)
         self.assertNotIn("enable_input_require_grads", train_source)
@@ -218,6 +233,16 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         self.assertIn('"fused": False', train_source)
         self.assertNotIn("save_total_limit", train_source)
         self.assertNotIn("EarlyStoppingCallback", train_source)
+
+        trainer_source = TRAINER_MODULE.read_text(encoding="utf-8")
+        self.assertIn("def save_model(", trainer_source)
+        self.assertIn("is_main_process=is_writer", trainer_source)
+        self.assertIn("state_dict=adapter_state_dict", trainer_source)
+        self.assertIn("torch.distributed.barrier()", trainer_source)
+        self.assertIn(
+            "all ranks participate in DTensor.full_tensor() gathers",
+            trainer_source,
+        )
 
     def test_training_source_uses_pure_tp_and_independent_images(self) -> None:
         train_source = TRAIN_MODULE.read_text(encoding="utf-8")

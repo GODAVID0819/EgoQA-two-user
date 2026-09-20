@@ -152,6 +152,82 @@ def build_verdict_trainer_class() -> type:
             self.tensor_parallel_size = int(tensor_parallel_size)
             self._logits_to_keep_name = logits_to_keep_argument(self.model)
 
+        def save_model(
+            self,
+            output_dir: str | None = None,
+            _internal_call: bool = False,
+        ) -> None:
+            """Collectively gather TP LoRA shards and write them on rank zero.
+
+            Transformers 5.16 gates its normal ``_save`` call behind
+            ``args.should_save``. That is correct for replicated DDP weights,
+            but PEFT's TP adapter gathering calls DTensor collectives from
+            ``save_pretrained``. Every TP rank must therefore enter
+            ``save_pretrained`` even though only rank zero writes files.
+            """
+
+            if self.tensor_parallel_size <= 1:
+                return super().save_model(output_dir, _internal_call)
+
+            import os
+
+            import torch
+            from peft import PeftModel
+            from transformers.trainer import TRAINING_ARGS_NAME
+
+            if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+                raise RuntimeError("TP adapter saving requires an initialized process group")
+            world_size = torch.distributed.get_world_size()
+            if world_size != self.tensor_parallel_size:
+                raise RuntimeError(
+                    "TP adapter saving requires WORLD_SIZE == tensor_parallel_size: "
+                    f"world_size={world_size} tp_size={self.tensor_parallel_size}"
+                )
+            if not isinstance(self.model, PeftModel):
+                raise TypeError("TP adapter saving requires a PeftModel")
+
+            output_dir = output_dir or self.args.output_dir
+            is_writer = bool(self.args.should_save)
+            if is_writer:
+                os.makedirs(output_dir, exist_ok=True)
+            torch.distributed.barrier()
+
+            adapter_state_dict = {
+                name: parameter
+                for name, parameter in self.model.named_parameters()
+                if "lora_" in name.lower()
+            }
+            if not adapter_state_dict:
+                raise RuntimeError("TP adapter save found no LoRA parameters")
+            # get_peft_model_state_dict runs before PEFT's is_main_process write
+            # gate, so all ranks participate in DTensor.full_tensor() gathers.
+            # Supplying an adapter-only state dict also prevents PEFT 0.21 from
+            # gathering the frozen 27B base model to CPU at every checkpoint.
+            self.model.save_pretrained(
+                output_dir,
+                state_dict=adapter_state_dict,
+                safe_serialization=bool(
+                    getattr(self.args, "save_safetensors", True)
+                ),
+                is_main_process=is_writer,
+            )
+            if is_writer:
+                if self.processing_class is not None:
+                    self.processing_class.save_pretrained(output_dir)
+                elif (
+                    self.data_collator is not None
+                    and hasattr(self.data_collator, "tokenizer")
+                    and self.data_collator.tokenizer is not None
+                ):
+                    self.data_collator.tokenizer.save_pretrained(output_dir)
+                torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
+            torch.distributed.barrier()
+
+            if self.args.push_to_hub and not _internal_call and is_writer:
+                raise RuntimeError(
+                    "push_to_hub is disabled for the custom collective TP save path"
+                )
+
         def _get_train_sampler(self, train_dataset: Any | None = None) -> Any:
             dataset = self.train_dataset if train_dataset is None else train_dataset
             if not isinstance(dataset, JudgeDataset):

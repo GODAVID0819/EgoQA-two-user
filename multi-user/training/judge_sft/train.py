@@ -40,6 +40,21 @@ from .trainer import audit_tensor_parallel_sampler, build_verdict_trainer_class
 VISION_MARKERS = ("visual", "vision_tower", "vision_model")
 ALIGNER_MARKERS = ("aligner", "projector", "merger")
 DECODER_LAYER_PATTERN = re.compile(r"(?:^|\.)layers\.(?P<index>\d+)(?:\.|$)")
+LORA_TP_FACTOR_BY_TARGET = {
+    # Colwise base projections shard their output dimension, hence LoRA-B.
+    "q_proj": "lora_B",
+    "k_proj": "lora_B",
+    "v_proj": "lora_B",
+    "gate_proj": "lora_B",
+    "up_proj": "lora_B",
+    # Rowwise base projections shard their input dimension, hence LoRA-A.
+    "o_proj": "lora_A",
+    "down_proj": "lora_A",
+}
+LORA_TP_STYLE_BY_TARGET = {
+    target: "colwise" if factor == "lora_B" else "rowwise"
+    for target, factor in LORA_TP_FACTOR_BY_TARGET.items()
+}
 
 
 def _matches_any(name: str, markers: tuple[str, ...]) -> bool:
@@ -210,6 +225,36 @@ def audit_trainable_lora_layers(
     }
 
 
+def audit_lora_tensor_parallel_materialization(model: Any) -> dict[str, Any]:
+    """Require TP-sharded LoRA factors on every selected projection family."""
+
+    from torch.distributed.tensor import DTensor
+
+    sharded_counts = {target: 0 for target in LORA_TP_FACTOR_BY_TARGET}
+    unsharded: list[str] = []
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        for target, factor in LORA_TP_FACTOR_BY_TARGET.items():
+            if f".{target}." not in name or f".{factor}." not in name:
+                continue
+            if isinstance(parameter, DTensor):
+                sharded_counts[target] += _parameter_count(parameter)
+            else:
+                unsharded.append(name)
+    missing = [target for target, count in sharded_counts.items() if count <= 0]
+    if missing or unsharded:
+        raise RuntimeError(
+            "PEFT did not materialize TP-aware LoRA factors: "
+            f"missing_targets={missing} unsharded={unsharded[:20]}. "
+            "The local PEFT/Transformers TP compatibility sharder did not apply."
+        )
+    return {
+        "policy": "colwise LoRA-B and rowwise LoRA-A factors are DTensors",
+        "sharded_parameter_counts_by_target": sharded_counts,
+    }
+
+
 def install_frozen_prefix_input_guard(
     model: Any,
     *,
@@ -335,6 +380,184 @@ def audit_tensor_parallel_materialization(
     }
 
 
+def ensure_tensor_parallel_metadata(
+    model: Any,
+    *,
+    requested_tp_size: int,
+) -> dict[str, Any]:
+    """Validate TP metadata and backport the Transformers 5.16 size marker.
+
+    Transformers 5.16 materializes the device mesh and DTensor parameters but
+    does not assign ``model._tp_size``. Trainer uses that marker to distinguish
+    TP from DDP. This helper is deliberately called only after the DTensor
+    materialization audit succeeds.
+    """
+
+    observed = getattr(model, "tp_size", None)
+    if observed is None:
+        observed = getattr(model, "_tp_size", None)
+    if observed is not None:
+        observed = int(observed)
+        if observed != requested_tp_size:
+            raise RuntimeError(
+                "loaded model tensor-parallel metadata disagrees with the request: "
+                f"requested={requested_tp_size} observed={observed}"
+            )
+        return {
+            "requested_tp_size": requested_tp_size,
+            "observed_tp_size": observed,
+            "metadata_repaired": False,
+        }
+
+    distributed_config = getattr(
+        getattr(model, "config", None),
+        "distributed_config",
+        None,
+    )
+    configured_tp_size = getattr(distributed_config, "tp_size", None)
+    device_mesh = getattr(model, "_device_mesh", None)
+    if device_mesh is None:
+        raise RuntimeError(
+            "TP-sharded parameters exist but the loaded model has no device mesh"
+        )
+    tp_mesh = tensor_parallel_mesh(device_mesh)
+    mesh_tp_size = int(tp_mesh.size())
+    if (
+        int(configured_tp_size or 0) != requested_tp_size
+        or mesh_tp_size != requested_tp_size
+    ):
+        raise RuntimeError(
+            "loaded model tensor-parallel mesh disagrees with the request: "
+            f"requested={requested_tp_size} configured={configured_tp_size} "
+            f"mesh={mesh_tp_size}"
+        )
+
+    # Compatibility backport of the assignment added by Transformers 5.17.
+    # Without it, Trainer treats this already-sharded model as DDP.
+    model._tp_size = requested_tp_size
+    return {
+        "requested_tp_size": requested_tp_size,
+        "observed_tp_size": requested_tp_size,
+        "metadata_repaired": True,
+    }
+
+
+def tensor_parallel_mesh(device_mesh: Any) -> Any:
+    """Return the TP dimension from a Transformers device mesh."""
+
+    tp_mesh = device_mesh
+    if int(getattr(device_mesh, "ndim", 1)) > 1:
+        try:
+            tp_mesh = device_mesh["tp"]
+        except Exception as error:
+            raise RuntimeError(
+                "loaded multidimensional device mesh has no 'tp' dimension"
+            ) from error
+    return tp_mesh
+
+
+def materialize_lora_tensor_parallelism(
+    model: Any,
+    *,
+    tp_mesh: Any,
+    tp_size: int,
+    requested_targets: list[str] | tuple[str, ...],
+) -> dict[str, Any]:
+    """Shard LoRA factors for the Transformers 5.16 DTensor TP backend.
+
+    Released PEFT 0.21 only discovers the older per-layer Transformers TP
+    markers. This applies the same factor sharding used by newer PEFT and also
+    supplies PEFT's checkpoint-gathering metadata.
+    """
+
+    from peft.tuners.lora.layer import LoraLayer
+    from peft.utils.integrations import TpInfo
+    from torch.distributed.tensor import DTensor
+    from transformers.distributed.tensor_parallel import ALL_PARALLEL_STYLES
+
+    get_base_model = getattr(model, "get_base_model", None)
+    base_model = get_base_model() if callable(get_base_model) else model
+    base_tp_plan = getattr(base_model, "tp_plan", None) or getattr(
+        base_model,
+        "_tp_plan",
+        None,
+    )
+    if not base_tp_plan:
+        raise RuntimeError("PEFT-wrapped model no longer exposes the active TP plan")
+    # Trainer and PEFT's checkpoint gatherer inspect the outer model.
+    model._tp_size = tp_size
+    model._device_mesh = tp_mesh
+    model._tp_plan = base_tp_plan
+
+    requested = set(requested_targets)
+    unsupported = requested - set(LORA_TP_FACTOR_BY_TARGET)
+    if unsupported:
+        raise RuntimeError(
+            "no TP-aware LoRA factor policy for targets: "
+            + ",".join(sorted(unsupported))
+        )
+    applied = {target: 0 for target in requested}
+    already_sharded = {target: 0 for target in requested}
+    seen = {target: 0 for target in requested}
+    for name, module in model.named_modules():
+        if not isinstance(module, LoraLayer):
+            continue
+        target = name.rsplit(".", 1)[-1]
+        if target not in requested:
+            continue
+        seen[target] += 1
+        factor_name = LORA_TP_FACTOR_BY_TARGET[target]
+        style_name = LORA_TP_STYLE_BY_TARGET[target]
+        factor_modules = getattr(module, factor_name)
+        module_tp_plan: dict[str, str] = {}
+        normalized_name = name.removeprefix("base_model.model.")
+        generic_name = re.sub(
+            r"\.\d+(\.|$)",
+            lambda match: ".*" + match.group(1),
+            normalized_name,
+        )
+        for adapter_name, factor_module in factor_modules.items():
+            module_name = f"{normalized_name}.{factor_name}.{adapter_name}"
+            parameters = list(factor_module.named_parameters(recurse=False))
+            if not parameters:
+                raise RuntimeError(f"LoRA factor has no parameters: {module_name}")
+            if all(isinstance(parameter, DTensor) for _, parameter in parameters):
+                already_sharded[target] += 1
+            elif any(isinstance(parameter, DTensor) for _, parameter in parameters):
+                raise RuntimeError(f"partially sharded LoRA factor: {module_name}")
+            else:
+                style = ALL_PARALLEL_STYLES[style_name]
+                for parameter_name, _ in parameters:
+                    style.validate_param(
+                        factor_module,
+                        parameter_name,
+                        tp_mesh,
+                        parameter_name=f"{module_name}.{parameter_name}",
+                    )
+                    style.shard_param(factor_module, parameter_name, tp_mesh)
+                style.install_forward(factor_module, tp_mesh)
+                applied[target] += 1
+            module_tp_plan[
+                f"{generic_name}.{factor_name}.{adapter_name}.weight"
+            ] = style_name
+        module._tp_info = TpInfo(
+            tp_plan=module_tp_plan,
+            device_mesh=tp_mesh,
+            tp_size=tp_size,
+        )
+    missing = [target for target, count in seen.items() if count <= 0]
+    if missing:
+        raise RuntimeError(
+            "LoRA injection omitted requested TP targets: " + ",".join(missing)
+        )
+    return {
+        "policy": "DTensor-shard colwise LoRA-B and rowwise LoRA-A",
+        "applied_module_counts_by_target": applied,
+        "already_sharded_module_counts_by_target": already_sharded,
+        "seen_module_counts_by_target": seen,
+    }
+
+
 def load_model_and_processor(
     args: argparse.Namespace,
 ) -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
@@ -395,18 +618,16 @@ def load_model_and_processor(
     else:
         load_kwargs["torch_dtype"] = dtype
     model = model_class.from_pretrained(args.model_id, **load_kwargs)
-    observed_tp_size = int(
-        getattr(model, "tp_size", None) or getattr(model, "_tp_size", None) or 1
-    )
-    if observed_tp_size != args.tensor_parallel_size:
-        raise RuntimeError(
-            "loaded model did not activate requested tensor parallelism: "
-            f"requested={args.tensor_parallel_size} observed={observed_tp_size}"
-        )
     tp_plan_audit["materialization"] = audit_tensor_parallel_materialization(
         model,
         args.lora_target_modules,
     )
+    tp_plan_audit["metadata"] = ensure_tensor_parallel_metadata(
+        model,
+        requested_tp_size=args.tensor_parallel_size,
+    )
+    observed_tp_size = int(tp_plan_audit["metadata"]["observed_tp_size"])
+    tp_mesh = tensor_parallel_mesh(model._device_mesh)
     model.config.use_cache = False
     model = get_peft_model(
         model,
@@ -424,6 +645,12 @@ def load_model_and_processor(
         # that doubles the full LoRA-B output activation and caused the
         # observed 5.51 GiB up_proj allocation failure.
         autocast_adapter_dtype=False,
+    )
+    tp_plan_audit["lora_materialization"] = materialize_lora_tensor_parallelism(
+        model,
+        tp_mesh=tp_mesh,
+        tp_size=observed_tp_size,
+        requested_targets=args.lora_target_modules,
     )
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable(
@@ -444,6 +671,9 @@ def load_model_and_processor(
     counts["language_lora_by_layer"] = audit_trainable_lora_layers(
         model,
         trainable_layer_indices,
+    )
+    counts["lora_tensor_parallel_audit"] = (
+        audit_lora_tensor_parallel_materialization(model)
     )
     counts["lora_dtype_audit"] = audit_trainable_lora_dtypes(model, dtype)
     counts["decoder_layer_selection"] = {
@@ -734,7 +964,7 @@ def main() -> None:
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     run_contract = {
-        "contract_version": "verdict_token_bce_independent_images_tp2_upper16_v6",
+        "contract_version": "verdict_token_bce_independent_images_tp2_upper16_v7",
         "model_id": args.model_id,
         "media_contract": (
             "packet-owned 300-frame user timelines sampled at 0.5 FPS; every "
