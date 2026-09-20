@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import unittest
 from pathlib import Path
 
@@ -13,7 +12,6 @@ PREP_SBATCH = ROOT / "hpc" / "judge_sft" / "prepare_real_manifests.sbatch"
 RUNTIME_SBATCH = ROOT / "hpc" / "judge_sft" / "runtime_smoke_qwen38_27b.sbatch"
 STEP1_SBATCH = ROOT / "hpc" / "judge_sft" / "train_one_step_qwen38_27b.sbatch"
 TRAIN_SBATCH = ROOT / "hpc" / "judge_sft" / "train_real_40_packets_qwen38_27b.sbatch"
-DEEPSPEED_CONFIG = ROOT / "training" / "judge_sft" / "deepspeed_zero3.json"
 TRAIN_MODULE = ROOT / "training" / "judge_sft" / "train.py"
 
 
@@ -28,7 +26,11 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         self.assertFalse(hasattr(parsed, "eval_manifest"))
         self.assertEqual(parsed.lora_rank, 8)
         self.assertEqual(parsed.lora_alpha, 16)
-        self.assertEqual(parsed.gradient_accumulation_steps, 16)
+        self.assertEqual(parsed.trainable_decoder_layers, 16)
+        self.assertEqual(parsed.gradient_accumulation_steps, 32)
+        self.assertEqual(parsed.tensor_parallel_size, 2)
+        self.assertFalse(hasattr(parsed, "deepspeed"))
+        self.assertFalse(hasattr(parsed, "resume_from_checkpoint"))
         self.assertEqual(parsed.epochs, 10.0)
         self.assertEqual(parsed.image_context_target_fraction, 0.85)
         self.assertEqual(parsed.attn_implementation, "sdpa")
@@ -50,13 +52,31 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
             ["--train-manifest", "train.jsonl", "--output-dir", "out"]
         )
         v4 = _training_argument_kwargs(
-            parsed, {"warmup_ratio", "evaluation_strategy"}
+            parsed,
+            {
+                "warmup_ratio",
+                "evaluation_strategy",
+                "parallelism_config",
+                "save_only_model",
+            },
+            parallelism_config="tp2",
         )
         self.assertEqual(v4["warmup_ratio"], 0.1)
         self.assertNotIn("warmup_steps", v4)
         self.assertEqual(v4["evaluation_strategy"], "no")
+        self.assertEqual(v4["parallelism_config"], "tp2")
+        self.assertTrue(v4["save_only_model"])
 
-        v5 = _training_argument_kwargs(parsed, {"warmup_steps", "eval_strategy"})
+        v5 = _training_argument_kwargs(
+            parsed,
+            {
+                "warmup_steps",
+                "eval_strategy",
+                "parallelism_config",
+                "save_only_model",
+            },
+            parallelism_config="tp2",
+        )
         self.assertEqual(v5["warmup_steps"], 0.1)
         self.assertNotIn("warmup_ratio", v5)
         self.assertEqual(v5["eval_strategy"], "no")
@@ -106,12 +126,20 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         for expected in (
             "#SBATCH --gres=gpu:2",
             "#SBATCH --constraint=h200",
+            'MAX_PIXELS="${MAX_PIXELS:-262144}"',
             "--nproc_per_node=2",
             "--max-steps 1",
             '--image-context-target-fraction "${IMAGE_CONTEXT_TARGET_FRACTION}"',
             "--gradient-accumulation-steps 1",
             "training.judge_sft.select_smoke_example",
-            "deepspeed_zero3.json",
+            '--tensor-parallel-size "${TENSOR_PARALLEL_SIZE}"',
+            'TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"',
+            'TRAINABLE_DECODER_LAYERS="${TRAINABLE_DECODER_LAYERS:-16}"',
+            '--trainable-decoder-layers "${TRAINABLE_DECODER_LAYERS}"',
+            'Version(transformers.__version__) >= Version("5.4.0")',
+            'Version(accelerate.__version__) >= Version("1.12.0")',
+            "autocast_adapter_dtype",
+            "nvidia-smi topo -m",
             "training.judge_sft.adapter_reload",
             "training.judge_sft.smoke_validate",
             "--expected-example-id",
@@ -127,6 +155,7 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         ):
             self.assertIn(expected, text)
         self.assertNotIn("VIDEO_LIST", text)
+        self.assertNotIn("--deepspeed", text)
         self.assertNotIn("latest_", text)
         self.assertLess(
             text.index("training.torch_storage_preflight"),
@@ -136,11 +165,19 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         text = TRAIN_SBATCH.read_text(encoding="utf-8")
         for expected in (
             "#SBATCH --gres=gpu:2",
+            'MAX_PIXELS="${MAX_PIXELS:-262144}"',
             "--nproc_per_node=2",
             'EPOCHS="${EPOCHS:-10}"',
             'IMAGE_CONTEXT_TARGET_FRACTION="${IMAGE_CONTEXT_TARGET_FRACTION:-0.85}"',
-            'GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-16}"',
+            'GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-32}"',
             'LEARNING_RATE="${LEARNING_RATE:-2e-5}"',
+            '--tensor-parallel-size "${TENSOR_PARALLEL_SIZE}"',
+            'TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"',
+            'TRAINABLE_DECODER_LAYERS="${TRAINABLE_DECODER_LAYERS:-16}"',
+            '--trainable-decoder-layers "${TRAINABLE_DECODER_LAYERS}"',
+            'Version(transformers.__version__) >= Version("5.4.0")',
+            'Version(accelerate.__version__) >= Version("1.12.0")',
+            "nvidia-smi topo -m",
             "--train-manifest",
             "checkpoint_inventory.json",
             "expected_epoch_checkpoints",
@@ -159,6 +196,8 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         ):
             self.assertIn(expected, text)
         self.assertNotIn("--eval-manifest", text)
+        self.assertNotIn("--deepspeed", text)
+        self.assertNotIn("RESUME_FROM_CHECKPOINT", text)
         self.assertNotIn("eval.jsonl", text)
         self.assertNotIn("latest_", text)
         self.assertLess(
@@ -168,17 +207,23 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         train_source = TRAIN_MODULE.read_text(encoding="utf-8")
         self.assertIn('"save_strategy": "steps" if args.max_steps > 0 else "epoch"', train_source)
         self.assertIn("judge_visual_budget_preflight=", train_source)
+        self.assertIn("DistributedConfig(tp_size=args.tensor_parallel_size)", train_source)
+        self.assertIn("autocast_adapter_dtype=False", train_source)
+        self.assertIn("layers_to_transform=trainable_layer_indices", train_source)
+        self.assertIn('layers_pattern="layers"', train_source)
+        self.assertIn("disable_input_require_grads", train_source)
+        self.assertNotIn("enable_input_require_grads", train_source)
+        self.assertIn('"save_only_model"] = True', train_source)
+        self.assertIn('"foreach": False', train_source)
+        self.assertIn('"fused": False', train_source)
         self.assertNotIn("save_total_limit", train_source)
         self.assertNotIn("EarlyStoppingCallback", train_source)
 
-    def test_deepspeed_config_is_zero3_bf16_and_gathers_for_save(self) -> None:
-        config = json.loads(DEEPSPEED_CONFIG.read_text(encoding="utf-8"))
-        self.assertTrue(config["bf16"]["enabled"])
-        self.assertEqual(config["zero_optimization"]["stage"], 3)
-        self.assertNotIn("offload_param", config["zero_optimization"])
-        self.assertTrue(
-            config["zero_optimization"]["stage3_gather_16bit_weights_on_model_save"]
-        )
+    def test_training_source_uses_pure_tp_and_independent_images(self) -> None:
+        train_source = TRAIN_MODULE.read_text(encoding="utf-8")
+        self.assertIn("pure tensor parallelism", train_source)
+        self.assertIn("independent Qwen image item", train_source)
+        self.assertNotIn('kwargs["deepspeed"]', train_source)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import argparse
 import inspect
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -33,11 +34,12 @@ from .loss import (
     resolve_verdict_token_ids,
     task_sampling_scales,
 )
-from .trainer import audit_rank_aligned_sampler, build_verdict_trainer_class
+from .trainer import audit_tensor_parallel_sampler, build_verdict_trainer_class
 
 
 VISION_MARKERS = ("visual", "vision_tower", "vision_model")
 ALIGNER_MARKERS = ("aligner", "projector", "merger")
+DECODER_LAYER_PATTERN = re.compile(r"(?:^|\.)layers\.(?P<index>\d+)(?:\.|$)")
 
 
 def _matches_any(name: str, markers: tuple[str, ...]) -> bool:
@@ -46,7 +48,7 @@ def _matches_any(name: str, markers: tuple[str, ...]) -> bool:
 
 
 def _parameter_count(parameter: Any) -> int:
-    """Count full ZeRO-3 parameters even when the local tensor is partitioned."""
+    """Count logical parameters, including distributed tensor parameters."""
 
     return int(getattr(parameter, "ds_numel", parameter.numel()))
 
@@ -141,22 +143,242 @@ def audit_language_lora_targets(
     return counts
 
 
-def load_model_and_processor(args: argparse.Namespace) -> tuple[Any, Any, dict[str, Any]]:
+def audit_trainable_lora_dtypes(model: Any, expected_dtype: Any) -> dict[str, Any]:
+    """Require every trainable adapter parameter to remain in the model dtype."""
+
+    dtype_counts: dict[str, int] = {}
+    mismatches: list[str] = []
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad or "lora_" not in name.lower():
+            continue
+        label = str(parameter.dtype)
+        dtype_counts[label] = dtype_counts.get(label, 0) + _parameter_count(parameter)
+        if parameter.dtype != expected_dtype:
+            mismatches.append(f"{name}:{parameter.dtype}")
+    if not dtype_counts:
+        raise RuntimeError("LoRA dtype audit found no trainable adapter parameters")
+    if mismatches:
+        raise RuntimeError(
+            "trainable LoRA parameters were promoted away from BF16: "
+            + ",".join(mismatches[:20])
+        )
+    return {
+        "expected": str(expected_dtype),
+        "parameter_counts_by_dtype": dtype_counts,
+        "autocast_adapter_dtype": False,
+    }
+
+
+def audit_trainable_lora_layers(
+    model: Any,
+    expected_layer_indices: list[int] | tuple[int, ...],
+) -> dict[str, Any]:
+    """Require language LoRA parameters on exactly the selected decoder layers."""
+
+    expected = set(int(index) for index in expected_layer_indices)
+    observed_counts: dict[int, int] = {}
+    unclassified: list[str] = []
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad or "lora_" not in name.lower():
+            continue
+        if _matches_any(name, VISION_MARKERS) or _matches_any(name, ALIGNER_MARKERS):
+            continue
+        matches = {int(value) for value in DECODER_LAYER_PATTERN.findall(name)}
+        if len(matches) != 1:
+            unclassified.append(name)
+            continue
+        index = next(iter(matches))
+        observed_counts[index] = observed_counts.get(index, 0) + _parameter_count(
+            parameter
+        )
+    observed = set(observed_counts)
+    if unclassified:
+        raise RuntimeError(
+            "could not assign trainable language LoRA parameters to one decoder layer: "
+            + ",".join(unclassified[:20])
+        )
+    if observed != expected:
+        raise RuntimeError(
+            "trainable LoRA decoder layers differ from the requested selection: "
+            f"expected={sorted(expected)} observed={sorted(observed)}"
+        )
+    return {
+        "layer_indices": sorted(observed),
+        "parameter_counts_by_layer": {
+            str(index): observed_counts[index] for index in sorted(observed_counts)
+        },
+    }
+
+
+def install_frozen_prefix_input_guard(
+    model: Any,
+    *,
+    first_trainable_layer: int,
+) -> dict[str, Any]:
+    """Prove at runtime that the frozen lower stack is outside autograd."""
+
+    matches: list[tuple[str, Any]] = []
+    for name, module in model.named_modules():
+        match = DECODER_LAYER_PATTERN.search(name)
+        if (
+            match is not None
+            and match.end() == len(name)
+            and int(match.group("index")) == first_trainable_layer
+            and not _matches_any(name, VISION_MARKERS)
+        ):
+            matches.append((name, module))
+    if len(matches) != 1:
+        raise RuntimeError(
+            "could not uniquely locate the first trainable decoder layer: "
+            f"index={first_trainable_layer} matches={[name for name, _ in matches]}"
+        )
+    module_name, module = matches[0]
+
+    def _guard(_module: Any, positional_args: tuple[Any, ...]) -> None:
+        if not positional_args:
+            raise RuntimeError("first trainable decoder layer received no hidden state")
+        hidden_states = positional_args[0]
+        if bool(getattr(hidden_states, "requires_grad", False)):
+            raise RuntimeError(
+                "frozen decoder prefix leaked into autograd; layer "
+                f"{first_trainable_layer} input unexpectedly requires gradients"
+            )
+
+    handle = module.register_forward_pre_hook(_guard)
+    # Keep an explicit reference for the entire training lifetime.
+    model._judge_frozen_prefix_guard_handle = handle
+    return {
+        "first_trainable_layer": first_trainable_layer,
+        "guarded_module": module_name,
+        "required_input_requires_grad": False,
+    }
+
+
+def configure_safe_tensor_parallel_plan(config: Any) -> dict[str, Any]:
+    """Use Qwen's TP plan while replicating its currently unsafe hybrid layers."""
+
+    get_text_config = getattr(config, "get_text_config", None)
+    if callable(get_text_config):
+        try:
+            text_config = get_text_config(decoder=True)
+        except TypeError:
+            text_config = get_text_config()
+    else:
+        text_config = getattr(config, "text_config", config)
+    original = dict(getattr(text_config, "base_model_tp_plan", None) or {})
+    if not original:
+        raise RuntimeError("Qwen text config does not define base_model_tp_plan")
+    safe_plan = {
+        name: style
+        for name, style in original.items()
+        if ".linear_attn." not in name
+    }
+    required_suffixes = (
+        ".self_attn.q_proj",
+        ".self_attn.k_proj",
+        ".self_attn.v_proj",
+        ".self_attn.o_proj",
+        ".mlp.gate_proj",
+        ".mlp.up_proj",
+        ".mlp.down_proj",
+    )
+    missing = [
+        suffix
+        for suffix in required_suffixes
+        if not any(name.endswith(suffix) for name in safe_plan)
+    ]
+    if missing:
+        raise RuntimeError(
+            "Qwen TP plan is missing required attention/MLP projections: "
+            + ",".join(missing)
+        )
+    text_config.base_model_tp_plan = safe_plan
+    return {
+        "policy": "shard dense MLP and full-attention projections; replicate hybrid linear-attention projections",
+        "active_plan": safe_plan,
+        "replicated_for_compatibility": sorted(set(original) - set(safe_plan)),
+    }
+
+
+def audit_tensor_parallel_materialization(
+    model: Any,
+    requested_targets: list[str] | tuple[str, ...],
+) -> dict[str, Any]:
+    """Prove that every trainable projection family was actually TP-sharded."""
+
+    from torch.distributed.tensor import DTensor
+
+    sharded_counts = {target: 0 for target in requested_targets}
+    accidentally_sharded_hybrid: list[str] = []
+    for name, parameter in model.named_parameters():
+        if not isinstance(parameter, DTensor):
+            continue
+        if ".linear_attn." in name:
+            accidentally_sharded_hybrid.append(name)
+        for target in requested_targets:
+            if f".{target}.weight" in name:
+                sharded_counts[target] += _parameter_count(parameter)
+    missing = [target for target, count in sharded_counts.items() if count <= 0]
+    if missing:
+        raise RuntimeError(
+            "requested TP projection families were not materialized as DTensors: "
+            + ",".join(missing)
+        )
+    if accidentally_sharded_hybrid:
+        raise RuntimeError(
+            "safe TP plan unexpectedly sharded Qwen hybrid linear attention: "
+            + ",".join(accidentally_sharded_hybrid[:20])
+        )
+    return {
+        "sharded_parameter_counts_by_target": sharded_counts,
+        "hybrid_linear_attention_is_replicated": True,
+    }
+
+
+def load_model_and_processor(
+    args: argparse.Namespace,
+) -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
     import torch
     import transformers
     from peft import LoraConfig, get_peft_model
-    from transformers import AutoProcessor
+    from transformers import AutoConfig, AutoProcessor, DistributedConfig
 
     processor = AutoProcessor.from_pretrained(
         args.model_id,
         trust_remote_code=True,
         local_files_only=args.local_files_only,
     )
+    config = AutoConfig.from_pretrained(
+        args.model_id,
+        trust_remote_code=True,
+        local_files_only=args.local_files_only,
+    )
+    get_text_config = getattr(config, "get_text_config", None)
+    if callable(get_text_config):
+        try:
+            text_config = get_text_config(decoder=True)
+        except TypeError:
+            text_config = get_text_config()
+    else:
+        text_config = getattr(config, "text_config", config)
+    total_decoder_layers = int(getattr(text_config, "num_hidden_layers", 0))
+    if not 0 < args.trainable_decoder_layers <= total_decoder_layers:
+        raise ValueError(
+            "trainable_decoder_layers must be between one and the model depth: "
+            f"requested={args.trainable_decoder_layers} total={total_decoder_layers}"
+        )
+    first_trainable_layer = total_decoder_layers - args.trainable_decoder_layers
+    trainable_layer_indices = list(
+        range(first_trainable_layer, total_decoder_layers)
+    )
+    tp_plan_audit = configure_safe_tensor_parallel_plan(config)
     load_kwargs: dict[str, Any] = {
         "trust_remote_code": True,
         "local_files_only": args.local_files_only,
         "low_cpu_mem_usage": True,
         "attn_implementation": args.attn_implementation,
+        "config": config,
+        "distributed_config": DistributedConfig(tp_size=args.tensor_parallel_size),
     }
     dtype = torch.bfloat16
     model_class = getattr(transformers, "AutoModelForMultimodalLM", None)
@@ -173,6 +395,18 @@ def load_model_and_processor(args: argparse.Namespace) -> tuple[Any, Any, dict[s
     else:
         load_kwargs["torch_dtype"] = dtype
     model = model_class.from_pretrained(args.model_id, **load_kwargs)
+    observed_tp_size = int(
+        getattr(model, "tp_size", None) or getattr(model, "_tp_size", None) or 1
+    )
+    if observed_tp_size != args.tensor_parallel_size:
+        raise RuntimeError(
+            "loaded model did not activate requested tensor parallelism: "
+            f"requested={args.tensor_parallel_size} observed={observed_tp_size}"
+        )
+    tp_plan_audit["materialization"] = audit_tensor_parallel_materialization(
+        model,
+        args.lora_target_modules,
+    )
     model.config.use_cache = False
     model = get_peft_model(
         model,
@@ -183,15 +417,21 @@ def load_model_and_processor(args: argparse.Namespace) -> tuple[Any, Any, dict[s
             bias="none",
             task_type="CAUSAL_LM",
             target_modules=list(args.lora_target_modules),
+            layers_to_transform=trainable_layer_indices,
+            layers_pattern="layers",
         ),
+        # PEFT otherwise promotes BF16 adapters to FP32. For a long sequence,
+        # that doubles the full LoRA-B output activation and caused the
+        # observed 5.51 GiB up_proj allocation failure.
+        autocast_adapter_dtype=False,
     )
     if args.gradient_checkpointing:
-        enable_input_grads = getattr(model, "enable_input_require_grads", None)
-        if callable(enable_input_grads):
-            enable_input_grads()
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": False}
         )
+        disable_input_grads = getattr(model, "disable_input_require_grads", None)
+        if callable(disable_input_grads):
+            disable_input_grads()
     counts = freeze_multimodal_adapters(
         model,
         freeze_vision=True,
@@ -201,12 +441,31 @@ def load_model_and_processor(args: argparse.Namespace) -> tuple[Any, Any, dict[s
         model,
         args.lora_target_modules,
     )
-    return model, processor, counts
+    counts["language_lora_by_layer"] = audit_trainable_lora_layers(
+        model,
+        trainable_layer_indices,
+    )
+    counts["lora_dtype_audit"] = audit_trainable_lora_dtypes(model, dtype)
+    counts["decoder_layer_selection"] = {
+        "total_decoder_layers": total_decoder_layers,
+        "trainable_decoder_layers": args.trainable_decoder_layers,
+        "frozen_prefix_layer_indices": list(range(first_trainable_layer)),
+        "trainable_layer_indices": trainable_layer_indices,
+        "selection_policy": "upper contiguous decoder layers",
+    }
+    counts["frozen_prefix_autograd_guard"] = install_frozen_prefix_input_guard(
+        model,
+        first_trainable_layer=first_trainable_layer,
+    )
+    counts["tensor_parallel_size"] = observed_tp_size
+    return model, processor, counts, tp_plan_audit
 
 
 def _training_argument_kwargs(
     args: argparse.Namespace,
     parameter_names: set[str],
+    *,
+    parallelism_config: Any | None = None,
 ) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "output_dir": str(args.output_dir),
@@ -234,9 +493,15 @@ def _training_argument_kwargs(
         "data_seed": args.seed,
         "report_to": [],
         "label_names": ["labels"],
-        "optim": "adamw_torch_fused",
+        "optim": "adamw_torch",
         "load_best_model_at_end": False,
     }
+    if "parallelism_config" not in parameter_names:
+        raise RuntimeError("installed Transformers does not support ParallelismConfig")
+    if "save_only_model" not in parameter_names:
+        raise RuntimeError("installed Transformers does not support TP-safe model-only checkpoints")
+    kwargs["parallelism_config"] = parallelism_config
+    kwargs["save_only_model"] = True
     if "warmup_ratio" in parameter_names:
         kwargs["warmup_ratio"] = args.warmup_ratio
     elif "warmup_steps" in parameter_names:
@@ -250,16 +515,19 @@ def _training_argument_kwargs(
         )
     eval_name = "eval_strategy" if "eval_strategy" in parameter_names else "evaluation_strategy"
     kwargs[eval_name] = "no"
-    if args.deepspeed is not None:
-        kwargs["deepspeed"] = str(args.deepspeed)
     return kwargs
 
 
 def training_arguments(args: argparse.Namespace) -> Any:
+    from accelerate import ParallelismConfig
     from transformers import TrainingArguments
 
     parameter_names = set(inspect.signature(TrainingArguments.__init__).parameters)
-    kwargs = _training_argument_kwargs(args, parameter_names)
+    kwargs = _training_argument_kwargs(
+        args,
+        parameter_names,
+        parallelism_config=ParallelismConfig(tp_size=args.tensor_parallel_size),
+    )
     return TrainingArguments(**kwargs)
 
 
@@ -283,6 +551,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-id", default=DEFAULTS.model_id)
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--attn-implementation", default="sdpa")
+    parser.add_argument("--tensor-parallel-size", type=int, default=2)
     parser.add_argument("--min-pixels", type=int, default=DEFAULTS.min_pixels)
     parser.add_argument("--max-pixels", type=int, default=DEFAULTS.max_pixels)
     parser.add_argument("--max-input-tokens", type=int, default=DEFAULTS.max_input_tokens)
@@ -304,6 +573,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lora-rank", type=int, default=DEFAULTS.lora_rank)
     parser.add_argument("--lora-alpha", type=int, default=DEFAULTS.lora_alpha)
     parser.add_argument("--lora-dropout", type=float, default=DEFAULTS.lora_dropout)
+    parser.add_argument(
+        "--trainable-decoder-layers",
+        type=int,
+        default=DEFAULTS.trainable_decoder_layers,
+        help="Apply LoRA only to this many upper contiguous decoder layers.",
+    )
     parser.add_argument(
         "--lora-target-modules",
         nargs="+",
@@ -348,8 +623,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--groundedness-weight", type=float, default=0.4)
     parser.add_argument("--answerability-weight", type=float, default=0.4)
     parser.add_argument("--seed", type=int, default=DEFAULTS.seed)
-    parser.add_argument("--deepspeed", type=Path)
-    parser.add_argument("--resume-from-checkpoint")
     parser.add_argument(
         "--gradient-checkpointing",
         action=argparse.BooleanOptionalAction,
@@ -364,6 +637,8 @@ def main() -> None:
         raise ValueError("gradient_accumulation_steps must be positive")
     if args.max_steps == 0 or args.max_steps < -1:
         raise ValueError("max_steps must be -1 or a positive integer")
+    if args.tensor_parallel_size != 2:
+        raise ValueError("this launcher is intentionally a pure two-GPU TP job")
     train_examples = load_normalized_manifest(args.train_manifest)
     task_weights = {
         JudgeTask.FORMALITY: args.formality_weight,
@@ -390,21 +665,26 @@ def main() -> None:
                 f"id={args.train_example_id!r} matches={len(optimization_examples)}"
             )
     launch_world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    sampler_audit = audit_rank_aligned_sampler(
+    if launch_world_size != args.tensor_parallel_size:
+        raise RuntimeError(
+            "pure TP requires WORLD_SIZE == tensor_parallel_size: "
+            f"world_size={launch_world_size} tp_size={args.tensor_parallel_size}"
+        )
+    sampler_audit = audit_tensor_parallel_sampler(
         JudgeDataset(optimization_examples),
-        world_size=launch_world_size,
+        tensor_parallel_size=args.tensor_parallel_size,
         seed=args.seed,
     )
     if int(os.environ.get("RANK", "0")) == 0:
         print(
-            "rank_aligned_sampler_preflight="
+            "tensor_parallel_sampler_preflight="
             + json.dumps(sampler_audit, sort_keys=True),
             flush=True,
         )
         visual_budget_audit = {
             "max_input_tokens": args.max_input_tokens,
             "target_fraction": args.image_context_target_fraction,
-            "all_six_1800_frame_max_pixels": adaptive_image_max_pixels(
+            "all_six_1800_image_max_pixels": adaptive_image_max_pixels(
                 image_count=1_800,
                 configured_max_pixels=args.max_pixels,
                 min_pixels=args.min_pixels,
@@ -430,15 +710,15 @@ def main() -> None:
             + json.dumps(visual_budget_audit, sort_keys=True),
             flush=True,
         )
-    # Constructing TrainingArguments first activates Transformers' ZeRO-3 model
-    # initialization path before the 27B checkpoint is loaded on every rank.
+    # DistributedConfig must shard the checkpoint while it is loaded. Trainer
+    # then mirrors that mesh through ParallelismConfig instead of creating DDP.
+    model, processor, parameter_counts, tp_plan_audit = load_model_and_processor(args)
     hf_training_args = training_arguments(args)
     if int(hf_training_args.world_size) != launch_world_size:
         raise RuntimeError(
             "TrainingArguments world size disagrees with torchrun: "
             f"arguments={hf_training_args.world_size} launch={launch_world_size}"
         )
-    model, processor, parameter_counts = load_model_and_processor(args)
     tokenizer = getattr(processor, "tokenizer", processor)
     token_ids = resolve_verdict_token_ids(tokenizer)
     collator = JudgeFrameCollator(
@@ -454,12 +734,12 @@ def main() -> None:
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     run_contract = {
-        "contract_version": "verdict_token_bce_sampled_frames_v4",
+        "contract_version": "verdict_token_bce_independent_images_tp2_upper16_v6",
         "model_id": args.model_id,
         "media_contract": (
-            "packet-owned 300-frame user timelines sampled at 0.5 FPS; "
-            "each timeline is one pre-sampled Qwen video block; one speaker "
-            "block or six complete video blocks"
+            "packet-owned 300-frame user timelines sampled at 0.5 FPS; every "
+            "sampled JPEG is an independent Qwen image item; one speaker group "
+            "or six complete chronological image groups"
         ),
         "assistant_prefix": '{"verdict":"',
         "inference_generation_contract": (
@@ -468,14 +748,20 @@ def main() -> None:
         ),
         "verdict_token_ids": {key.value: value for key, value in token_ids.items()},
         "loss": "BCEWithLogits(logit_pass - logit_fail)",
-        "distributed_sampler_contract": {
-            "policy": "rank-aligned homogeneous model execution paths",
-            "signature": "(frame_set_count, frame_count)",
-            "world_size": int(hf_training_args.world_size),
-            "incomplete_global_microbatch": (
-                "repeat a same-signature example with zero loss weight"
-            ),
+        "distributed_contract": {
+            "policy": "pure tensor parallelism; the same example is replicated on both ranks",
+            "tensor_parallel_size": args.tensor_parallel_size,
+            "data_parallel_size": 1,
+            "rank_identity_check": "all-gather stable example fingerprint before every forward",
+            "checkpoint_state": "adapter/model only; optimizer-state resume is unsupported",
+            "tp_plan": tp_plan_audit,
             "preflight": sampler_audit,
+        },
+        "decoder_training_contract": parameter_counts["decoder_layer_selection"]
+        | {
+            "frozen_prefix_autograd_guard": parameter_counts[
+                "frozen_prefix_autograd_guard"
+            ]
         },
         "task_weights": _jsonable_weights(task_weights),
         "class_weights": _jsonable_weights(class_weights),
@@ -508,8 +794,19 @@ def main() -> None:
         train_dataset=JudgeDataset(optimization_examples),
         data_collator=collator,
         verdict_token_ids=token_ids,
+        tensor_parallel_size=args.tensor_parallel_size,
+        optimizer_cls_and_kwargs=(
+            __import__("torch").optim.AdamW,
+            {
+                "lr": args.learning_rate,
+                "betas": (args.adam_beta1, args.adam_beta2),
+                "eps": args.adam_epsilon,
+                "foreach": False,
+                "fused": False,
+            },
+        ),
     )
-    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+    trainer.train()
     trainer.save_state()
     trainer.save_model(str(args.output_dir / "final_adapter"))
     if trainer.is_world_process_zero():

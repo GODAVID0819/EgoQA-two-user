@@ -11,8 +11,6 @@ from typing import Any
 from .collator import (
     DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION,
     JudgeFrameCollator,
-    MAX_ALL_SIX_VIDEO_INPUT_TOKENS,
-    adaptive_image_max_pixels,
 )
 from .contracts import DEFAULT_TASK_WEIGHTS, JudgeTask, Verdict
 from .data import load_normalized_manifest
@@ -94,7 +92,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
     batch = collator([example])
     input_tokens = int(batch["input_ids"].shape[-1])
     result = {
-        "schema_version": "judge_sft_sampled_frame_runtime_probe_v3",
+        "schema_version": "judge_sft_independent_image_runtime_probe_v4",
         "status": "passed",
         "model_id": args.model_id,
         "model_type": getattr(config, "model_type", None),
@@ -111,7 +109,6 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 "transformers",
                 "peft",
                 "accelerate",
-                "deepspeed",
                 "qwen-vl-utils",
                 "torchcodec",
             )
@@ -128,8 +125,8 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             ],
         },
         "frame_contract": {
-            "media_encoding": "one pre-sampled Qwen video block per user timeline",
-            "video_block_count": len(example.frame_sets),
+            "media_encoding": "every sampled JPEG is one independent Qwen image item",
+            "independent_image_count": example.frame_count,
             "user_timeline_count": len(example.frame_sets),
             "frames_per_user": [len(value.frames) for value in example.frame_sets],
             "frame_count": example.frame_count,
@@ -137,21 +134,9 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             "qwen_vision_geometry": dict(collator.vision_geometry),
             "min_pixels": args.min_pixels,
             "configured_max_pixels": args.max_pixels,
-            "effective_max_pixels": adaptive_image_max_pixels(
-                image_count=example.frame_count,
-                configured_max_pixels=args.max_pixels,
-                min_pixels=args.min_pixels,
-                max_input_tokens=args.max_input_tokens,
-                target_fraction=args.image_context_target_fraction,
-                vision_token_pixel_area=collator.vision_geometry[
-                    "merged_token_pixel_area"
-                ],
-            ),
+            "effective_max_pixels": collator.effective_max_pixels(example),
             "max_input_tokens": args.max_input_tokens,
             "image_context_target_fraction": args.image_context_target_fraction,
-            "maximum_expected_video_packed_input_tokens": (
-                MAX_ALL_SIX_VIDEO_INPUT_TOKENS
-            ),
             "actual_input_tokens": input_tokens,
         },
         "verdict_token_ids": {

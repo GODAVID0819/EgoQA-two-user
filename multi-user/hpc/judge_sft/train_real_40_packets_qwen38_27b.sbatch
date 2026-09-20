@@ -28,16 +28,16 @@ MANIFEST_DIR="${MANIFEST_DIR:-}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/scratch/${USER}/egolife_judge_sft}"
 OUTPUT_DIR="${OUTPUT_DIR:-${OUTPUT_ROOT}/train_real40_${SLURM_JOB_ID}}"
 JOB_SCRATCH_ROOT="${JOB_SCRATCH_ROOT:-/scratch/${USER}/job_scratch/judge38_real40_${SLURM_JOB_ID}}"
-DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${PACKAGE_ROOT}/training/judge_sft/deepspeed_zero3.json}"
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"
+TRAINABLE_DECODER_LAYERS="${TRAINABLE_DECODER_LAYERS:-16}"
 MIN_PIXELS="${MIN_PIXELS:-3136}"
 MAX_PIXELS="${MAX_PIXELS:-262144}"
 MAX_INPUT_TOKENS="${MAX_INPUT_TOKENS:-262144}"
 IMAGE_CONTEXT_TARGET_FRACTION="${IMAGE_CONTEXT_TARGET_FRACTION:-0.85}"
 ATTN_IMPLEMENTATION="${ATTN_IMPLEMENTATION:-sdpa}"
 EPOCHS="${EPOCHS:-10}"
-GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-16}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-32}"
 LEARNING_RATE="${LEARNING_RATE:-2e-5}"
-RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
 ENABLE_CUDA_KEEPER="${ENABLE_CUDA_KEEPER:-1}"
 CUDA_KEEPER_SCRIPT="${CUDA_KEEPER_SCRIPT:-${HPC_ROOT}/shared/cuda_high_duty.py}"
 CUDA_KEEPER_PAUSE_FILE="${CUDA_KEEPER_PAUSE_FILE:-${JOB_SCRATCH_ROOT}/cuda_keeper.pause}"
@@ -153,6 +153,14 @@ mkdir -p \
   "${OUTPUT_DIR}" "${JOB_SCRATCH_ROOT}" "${TMPDIR}" \
   "${XDG_CACHE_HOME}/torch/kernels"
 cd "${PACKAGE_ROOT}"
+[[ "${TENSOR_PARALLEL_SIZE}" == "2" ]] || {
+  echo "error=tensor_parallel_size_must_equal_allocated_gpus value=${TENSOR_PARALLEL_SIZE}" >&2
+  exit 2
+}
+[[ "${TRAINABLE_DECODER_LAYERS}" == "16" ]] || {
+  echo "error=trainable_decoder_layers_must_equal_16 value=${TRAINABLE_DECODER_LAYERS}" >&2
+  exit 2
+}
 if [[ "${ENABLE_CUDA_KEEPER}" != "0" && "${ENABLE_CUDA_KEEPER}" != "1" ]]; then
   echo "error=invalid_enable_cuda_keeper value=${ENABLE_CUDA_KEEPER}" >&2
   exit 2
@@ -169,7 +177,7 @@ fi
 }
 for required in \
   "${PYTHON}" "${TORCHRUN}" "${TRAIN_MANIFEST}" \
-  "${MANIFEST_DIR}/data_audit.json" "${DEEPSPEED_CONFIG}"; do
+  "${MANIFEST_DIR}/data_audit.json"; do
   [[ -e "${required}" ]] || { echo "Missing required path: ${required}" >&2; exit 2; }
 done
 
@@ -196,15 +204,21 @@ cp "${MANIFEST_DIR}/data_audit.json" "${OUTPUT_DIR}/input_data_audit.json"
 "${PYTHON}" -P -m pip freeze > "${OUTPUT_DIR}/dependencies.txt"
 nvidia-smi --query-gpu=index,uuid,name,memory.total,driver_version --format=csv,noheader \
   > "${OUTPUT_DIR}/gpu_environment.csv"
-"${PYTHON}" -P - "${ATTN_IMPLEMENTATION}" <<'PY' > "${OUTPUT_DIR}/python_environment.txt"
+nvidia-smi topo -m > "${OUTPUT_DIR}/gpu_topology.txt"
+"${PYTHON}" -P - "${ATTN_IMPLEMENTATION}" "${MODEL_PATH}" <<'PY' > "${OUTPUT_DIR}/python_environment.txt"
+import inspect
 import sys
 
 import torch
 import transformers
 import accelerate
-import deepspeed
+import peft
 import safetensors
-from peft import LoraConfig
+import peft.tuners.lora.model as peft_lora_model
+from packaging.version import Version
+from peft import LoraConfig, get_peft_model
+from transformers import AutoConfig, DistributedConfig
+from accelerate import ParallelismConfig
 from qwen_vl_utils import process_vision_info
 
 assert torch.cuda.is_available(), "CUDA is unavailable"
@@ -212,6 +226,23 @@ assert torch.cuda.device_count() == 2, torch.cuda.device_count()
 assert all(torch.cuda.get_device_capability(i)[0] >= 9 for i in range(2))
 assert torch.cuda.is_bf16_supported(), "BF16 is unavailable"
 assert getattr(transformers, "AutoModelForMultimodalLM", None) is not None
+assert Version(transformers.__version__) >= Version("5.4.0"), transformers.__version__
+assert Version(accelerate.__version__) >= Version("1.12.0"), accelerate.__version__
+assert "autocast_adapter_dtype" in inspect.signature(get_peft_model).parameters
+assert "layers_to_transform" in inspect.signature(LoraConfig).parameters
+assert "layers_pattern" in inspect.signature(LoraConfig).parameters
+peft_lora_source = inspect.getsource(peft_lora_model)
+assert "add_lora_tp_hooks" in peft_lora_source, "PEFT lacks TP-aware LoRA hooks"
+config = AutoConfig.from_pretrained(sys.argv[2], trust_remote_code=True, local_files_only=True)
+try:
+    text_config = config.get_text_config(decoder=True)
+except TypeError:
+    text_config = config.get_text_config()
+tp_plan = dict(getattr(text_config, "base_model_tp_plan", None) or {})
+assert tp_plan, "Qwen text config has no tensor-parallel plan"
+for projection in ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"):
+    assert any(name.endswith("." + projection) for name in tp_plan), projection
+assert int(text_config.num_hidden_layers) == 64, text_config.num_hidden_layers
 attn_implementation = sys.argv[1]
 if attn_implementation == "flash_attention_2":
     import flash_attn
@@ -222,10 +253,14 @@ else:
 print("torch=", torch.__version__)
 print("transformers=", transformers.__version__)
 print("accelerate=", accelerate.__version__)
-print("deepspeed=", deepspeed.__version__)
+print("peft_version=", peft.__version__)
 print("safetensors=", safetensors.__version__)
 print("gpus=", [torch.cuda.get_device_name(i) for i in range(2)])
 print("peft=", LoraConfig.__module__)
+print("distributed_config=", DistributedConfig(tp_size=2))
+print("parallelism_config=", ParallelismConfig(tp_size=2))
+print("tp_plan_entries=", sorted(tp_plan))
+print("peft_tp_lora_hooks=available")
 print("qwen_vl_utils=", process_vision_info.__module__)
 PY
 
@@ -273,6 +308,8 @@ TRAIN_COMMAND=(
   --model-id "${MODEL_PATH}"
   --local-files-only
   --attn-implementation "${ATTN_IMPLEMENTATION}"
+  --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}"
+  --trainable-decoder-layers "${TRAINABLE_DECODER_LAYERS}"
   --min-pixels "${MIN_PIXELS}"
   --max-pixels "${MAX_PIXELS}"
   --max-input-tokens "${MAX_INPUT_TOKENS}"
@@ -280,15 +317,7 @@ TRAIN_COMMAND=(
   --epochs "${EPOCHS}"
   --gradient-accumulation-steps "${GRADIENT_ACCUMULATION_STEPS}"
   --learning-rate "${LEARNING_RATE}"
-  --deepspeed "${DEEPSPEED_CONFIG}"
 )
-if [[ -n "${RESUME_FROM_CHECKPOINT}" ]]; then
-  [[ -d "${RESUME_FROM_CHECKPOINT}" ]] || {
-    echo "Missing resume checkpoint: ${RESUME_FROM_CHECKPOINT}" >&2
-    exit 2
-  }
-  TRAIN_COMMAND+=(--resume-from-checkpoint "${RESUME_FROM_CHECKPOINT}")
-fi
 "${TRAIN_COMMAND[@]}"
 
 CURRENT_STAGE="checkpoint_inventory"

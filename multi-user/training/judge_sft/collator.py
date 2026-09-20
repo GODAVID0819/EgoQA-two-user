@@ -1,9 +1,9 @@
-"""Sampled-frame collation for next-token verdict supervision."""
+"""Independent-image collation for next-token verdict supervision."""
 
 from __future__ import annotations
 
+import hashlib
 import inspect
-from types import SimpleNamespace
 from typing import Any, Callable, Mapping
 
 from .contracts import JudgeTask, VERDICT_ASSISTANT_PREFIX
@@ -20,7 +20,6 @@ QWEN_VISION_TOKEN_PIXEL_AREA = (
 DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION = 0.85
 DEFAULT_IMAGE_TEXT_TOKEN_RESERVE = 8_192
 DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD = 2
-MAX_ALL_SIX_VIDEO_INPUT_TOKENS = 140_000
 QWEN_NO_THINK_ASSISTANT_SUFFIX = "<think>\n\n</think>\n\n"
 
 
@@ -35,13 +34,7 @@ def adaptive_image_max_pixels(
     item_token_overhead: int = DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD,
     vision_token_pixel_area: int = QWEN_VISION_TOKEN_PIXEL_AREA,
 ) -> int:
-    """Compute the conservative per-frame cap on Qwen's merged spatial grid.
-
-    ``image_count`` deliberately remains the number of raw sampled frames, not
-    the number of two-frame video tubelets. That preserves activation-memory
-    headroom for training even though Qwen's native video patch embedding later
-    halves the temporal positions.
-    """
+    """Compute the per-frame cap for Qwen's independent-image representation."""
 
     if image_count < 0:
         raise ValueError("image_count must be non-negative")
@@ -118,11 +111,13 @@ def qwen_vision_geometry(processor: Any) -> dict[str, int]:
 def render_frame_order_blocks(blocks: list[tuple[str, int]]) -> str:
     if not blocks:
         return ""
-    rows = ["Sampled-video block order (authoritative; every block is chronological):"]
+    rows = [
+        "Sampled-image group order (authoritative; every group is chronological):"
+    ]
     for index, (label, frame_count) in enumerate(blocks, start=1):
         rows.append(
-            f"- video_block_{index}: {label}; "
-            f"{frame_count} frames sampled at 0.5 FPS"
+            f"- image_group_{index}: {label}; "
+            f"the next {frame_count} images are frames sampled at 0.5 FPS"
         )
     return "\n".join(rows) + "\n\n"
 
@@ -185,71 +180,12 @@ def _assert_thinking_disabled(rendered: str) -> None:
     )
 
 
-def _coerce_video_metadata(value: Any) -> Any:
-    if not isinstance(value, dict):
-        return value
-    frames_indices = value.get("frames_indices")
-    if frames_indices is not None:
-        frames_indices = list(frames_indices)
-    total_num_frames = value.get("total_num_frames")
-    if total_num_frames is None and frames_indices is not None:
-        total_num_frames = len(frames_indices)
-    try:
-        total_num_frames = int(round(float(total_num_frames)))
-    except (TypeError, ValueError):
-        total_num_frames = 0
-    kwargs = {
-        "total_num_frames": total_num_frames,
-        "fps": value.get("fps"),
-        "width": value.get("width"),
-        "height": value.get("height"),
-        "duration": value.get("duration"),
-        "video_backend": value.get("video_backend"),
-        "frames_indices": frames_indices,
-    }
-    try:
-        from transformers.video_utils import VideoMetadata
-
-        return VideoMetadata(**kwargs)
-    except Exception:
-        return SimpleNamespace(**kwargs)
-
-
-def _split_video_inputs_and_metadata(
-    video_inputs: Any,
-    video_kwargs: Mapping[str, Any],
-) -> tuple[Any, dict[str, Any]]:
-    """Mirror the production Qwen runner's version-compatible video handling."""
-
-    normalized_kwargs = dict(video_kwargs)
-    if isinstance(normalized_kwargs.get("fps"), list):
-        fps_values = normalized_kwargs["fps"]
-        normalized_kwargs["fps"] = fps_values[0] if fps_values else 0.5
-    if video_inputs is None:
-        return None, normalized_kwargs
-    fixed_video_inputs = []
-    metadata_rows = []
-    found_metadata = False
-    for item in video_inputs:
-        if isinstance(item, tuple) and len(item) == 2:
-            video, metadata = item
-            fixed_video_inputs.append(video)
-            metadata_rows.append(_coerce_video_metadata(metadata))
-            found_metadata = True
-        else:
-            fixed_video_inputs.append(item)
-            metadata_rows.append(None)
-    if found_metadata:
-        normalized_kwargs["video_metadata"] = metadata_rows
-        normalized_kwargs["return_metadata"] = True
-    return fixed_video_inputs, normalized_kwargs
-
-
 class JudgeFrameCollator:
     """Load the exact packet-owned 0.5 FPS frames for one judge invocation.
 
-    Batch size one is intentional: an all-six sample contains 1,800 images.
-    Gradient accumulation provides the effective batch.
+    Every sampled JPEG is a separate Qwen image item. Batch size one is
+    intentional: an all-six sample contains 1,800 image items. Gradient
+    accumulation provides the effective batch.
     """
 
     def __init__(
@@ -286,15 +222,7 @@ class JudgeFrameCollator:
         self.process_vision_info = process_vision_info
         self.vision_geometry = qwen_vision_geometry(processor)
 
-    def __call__(self, features: list[JudgeExample]) -> dict[str, Any]:
-        if len(features) != 1:
-            raise ValueError(
-                "long-context sampled-frame judge training requires per-device batch "
-                f"size 1; received {len(features)}"
-            )
-        import torch
-
-        example = features[0]
+    def effective_max_pixels(self, example: JudgeExample) -> int:
         effective_max_pixels = adaptive_image_max_pixels(
             image_count=example.frame_count,
             configured_max_pixels=self.max_pixels,
@@ -305,49 +233,47 @@ class JudgeFrameCollator:
             item_token_overhead=self.image_item_token_overhead,
             vision_token_pixel_area=self.vision_geometry["merged_token_pixel_area"],
         )
-        content: list[dict[str, Any]] = [
-            {
-                "type": "video",
-                # qwen-vl-utils officially accepts a list of pre-extracted
-                # frames as one video. This retains all 300 frames while using
-                # the model's temporal video patching, matching inference.
-                "video": list(frame_set.frames),
-                "min_pixels": self.min_pixels,
-                "max_pixels": effective_max_pixels,
-                "sample_fps": 0.5,
-                "raw_fps": 0.5,
-            }
-            for frame_set in example.frame_sets
-        ]
+        return effective_max_pixels
+
+    @staticmethod
+    def _example_fingerprint(example_id: str) -> int:
+        """Return a stable signed-int64-safe identity for TP rank audits."""
+
+        digest = hashlib.sha256(example_id.encode("utf-8")).digest()
+        return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
+
+    def __call__(self, features: list[JudgeExample]) -> dict[str, Any]:
+        if len(features) != 1:
+            raise ValueError(
+                "long-context sampled-frame judge training requires per-device batch "
+                f"size 1; received {len(features)}"
+            )
+        import torch
+
+        example = features[0]
+        effective_max_pixels = self.effective_max_pixels(example)
+        content: list[dict[str, Any]] = []
+        for frame_set in example.frame_sets:
+            content.extend(
+                {
+                    "type": "image",
+                    "image": frame,
+                    "min_pixels": self.min_pixels,
+                    "max_pixels": effective_max_pixels,
+                }
+                for frame in frame_set.frames
+            )
         content.append({"type": "text", "text": model_visible_prompt(example)})
         messages = [{"role": "user", "content": content}]
         rendered = _apply_chat_template(self.processor, messages)
         _assert_thinking_disabled(rendered)
         rendered += VERDICT_ASSISTANT_PREFIX
-        try:
-            image_inputs, video_inputs, vision_kwargs = self.process_vision_info(
-                messages,
-                image_patch_size=self.vision_geometry["patch_size"],
-                return_video_kwargs=True,
-                return_video_metadata=True,
-            )
-        except TypeError:
-            try:
-                image_inputs, video_inputs, vision_kwargs = self.process_vision_info(
-                    messages,
-                    image_patch_size=self.vision_geometry["patch_size"],
-                    return_video_kwargs=True,
-                )
-            except TypeError:
-                image_inputs, video_inputs = self.process_vision_info(
-                    messages,
-                    image_patch_size=self.vision_geometry["patch_size"],
-                )
-                vision_kwargs = {}
-        video_inputs, vision_kwargs = _split_video_inputs_and_metadata(
-            video_inputs,
-            vision_kwargs,
+        image_inputs, video_inputs = self.process_vision_info(
+            messages,
+            image_patch_size=self.vision_geometry["patch_size"],
         )
+        if video_inputs is not None and len(video_inputs) > 0:
+            raise RuntimeError("independent-image judge input unexpectedly produced videos")
         processor_kwargs: dict[str, Any] = {
             "text": [rendered],
             "padding": True,
@@ -355,9 +281,6 @@ class JudgeFrameCollator:
         }
         if image_inputs is not None and len(image_inputs) > 0:
             processor_kwargs["images"] = image_inputs
-        if video_inputs is not None and len(video_inputs) > 0:
-            processor_kwargs["videos"] = video_inputs
-            processor_kwargs.update(vision_kwargs)
         batch = self.processor(**processor_kwargs)
         batch.pop("video_metadata", None)
         input_tokens = int(batch["input_ids"].shape[-1])
@@ -366,17 +289,6 @@ class JudgeFrameCollator:
                 "judge input exceeds max_input_tokens: "
                 f"example_id={example.example_id} input_tokens={input_tokens} "
                 f"max_input_tokens={self.max_input_tokens}"
-            )
-        if (
-            len(example.frame_sets) == 6
-            and example.frame_count == 1_800
-            and input_tokens > MAX_ALL_SIX_VIDEO_INPUT_TOKENS
-        ):
-            raise RuntimeError(
-                "all-six input did not receive the expected Qwen temporal video "
-                "packing: "
-                f"example_id={example.example_id} input_tokens={input_tokens} "
-                f"expected_at_most={MAX_ALL_SIX_VIDEO_INPUT_TOKENS}"
             )
         batch["labels"] = torch.tensor(
             [[example.target, example.task_id]],
@@ -391,5 +303,9 @@ class JudgeFrameCollator:
                 )
             ],
             dtype=torch.float32,
+        )
+        batch["tp_example_fingerprint"] = torch.tensor(
+            [self._example_fingerprint(example.example_id)],
+            dtype=torch.long,
         )
         return dict(batch)

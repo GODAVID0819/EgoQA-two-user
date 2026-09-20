@@ -51,6 +51,7 @@ def reload_and_probe(args: argparse.Namespace) -> dict[str, Any]:
         model,
         str(args.adapter_dir),
         is_trainable=False,
+        autocast_adapter_dtype=False,
     )
     model.eval()
     lora_parameters = sum(
@@ -60,6 +61,15 @@ def reload_and_probe(args: argparse.Namespace) -> dict[str, Any]:
     )
     if lora_parameters <= 0:
         raise RuntimeError("reloaded adapter exposes no LoRA parameters")
+    lora_dtypes = sorted(
+        {
+            str(parameter.dtype)
+            for name, parameter in model.named_parameters()
+            if "lora_" in name.lower()
+        }
+    )
+    if lora_dtypes != [str(torch.bfloat16)]:
+        raise RuntimeError(f"reloaded LoRA is not entirely BF16: {lora_dtypes}")
 
     messages = [
         {
@@ -109,6 +119,8 @@ def reload_and_probe(args: argparse.Namespace) -> dict[str, Any]:
         "model_class": type(model).__name__,
         "processor_class": type(processor).__name__,
         "lora_parameters": lora_parameters,
+        "lora_dtypes": lora_dtypes,
+        "autocast_adapter_dtype": False,
         "generation_contract": "binary-first token lock followed by continuous JSON generation",
         "verdict_token_ids": {
             verdict.value: token_ids[verdict]

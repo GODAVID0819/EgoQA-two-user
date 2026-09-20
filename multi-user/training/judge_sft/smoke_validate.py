@@ -72,6 +72,27 @@ def validate_smoke(
     token_ids = contract.get("verdict_token_ids") or {}
     checks = {
         "model_id_exact": contract.get("model_id") == expected_model_id,
+        "pure_tp2_contract": (
+            ((contract.get("distributed_contract") or {}).get("tensor_parallel_size") == 2)
+            and ((contract.get("distributed_contract") or {}).get("data_parallel_size") == 1)
+        ),
+        "independent_image_contract": (
+            "independent Qwen image item" in str(contract.get("media_contract") or "")
+        ),
+        "bf16_lora_without_autocast_promotion": (
+            (((contract.get("parameter_counts") or {}).get("lora_dtype_audit") or {}).get("expected") == "torch.bfloat16")
+            and (((contract.get("parameter_counts") or {}).get("lora_dtype_audit") or {}).get("autocast_adapter_dtype") is False)
+            and set(
+                (((contract.get("parameter_counts") or {}).get("lora_dtype_audit") or {}).get("parameter_counts_by_dtype") or {})
+            ) == {"torch.bfloat16"}
+        ),
+        "upper_16_decoder_layers_only": (
+            (((contract.get("decoder_training_contract") or {}).get("total_decoder_layers")) == 64)
+            and (((contract.get("decoder_training_contract") or {}).get("trainable_decoder_layers")) == 16)
+            and (((contract.get("decoder_training_contract") or {}).get("frozen_prefix_layer_indices")) == list(range(48)))
+            and (((contract.get("decoder_training_contract") or {}).get("trainable_layer_indices")) == list(range(48, 64)))
+            and ((((contract.get("decoder_training_contract") or {}).get("frozen_prefix_autograd_guard") or {}).get("required_input_requires_grad")) is False)
+        ),
         "single_selected_all_six_example": (
             ((contract.get("optimization_train") or {}).get("examples") == 1)
             and (
@@ -92,6 +113,10 @@ def validate_smoke(
         "adapter_tensors_finite": finite_adapter,
         "lora_B_nonzero_after_step": lora_b_nonzero,
         "adapter_reload_passed": reload_result.get("status") == "passed",
+        "adapter_reload_kept_bf16": (
+            reload_result.get("lora_dtypes") == ["torch.bfloat16"]
+            and reload_result.get("autocast_adapter_dtype") is False
+        ),
         "reload_exercised_binary_logits": (
             ((reload_result.get("decision") or {}).get("verdict") in {"pass", "fail"})
             and isinstance(

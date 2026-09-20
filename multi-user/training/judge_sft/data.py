@@ -4,8 +4,8 @@ Visual examples reference the packet-owned 0.5 FPS JPEG timelines produced by
 ``rlhf_evidence_preprocessing``. They never reconstruct or decode native video
 during training. A compact manifest stores the packet directory plus ordered
 user indices; this module resolves those references to the exact 300 frames per
-selected user. The collator presents each timeline to Qwen as one video block
-built from those frames, matching the six-video inference contract.
+selected user. The collator presents every JPEG as an independent Qwen image
+item while retaining the authoritative chronological user-group order.
 """
 
 from __future__ import annotations

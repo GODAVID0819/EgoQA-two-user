@@ -57,6 +57,7 @@ class JudgeTrainingDefaults:
     lora_rank: int = 8
     lora_alpha: int = 16
     lora_dropout: float = 0.05
+    trainable_decoder_layers: int = 16
     lora_target_modules: tuple[str, ...] = (
         "q_proj",
         "k_proj",
@@ -77,7 +78,9 @@ class JudgeTrainingDefaults:
     warmup_ratio: float = 0.1
     lr_scheduler_type: str = "cosine"
     per_device_batch_size: int = 1
-    gradient_accumulation_steps: int = 16
+    # Pure TP2 has one model replica rather than two data-parallel replicas.
+    # Accumulating 32 single examples preserves the former effective batch 32.
+    gradient_accumulation_steps: int = 32
     gradient_checkpointing: bool = True
     max_grad_norm: float = 1.0
     class_weight_smoothing: float = 1.0

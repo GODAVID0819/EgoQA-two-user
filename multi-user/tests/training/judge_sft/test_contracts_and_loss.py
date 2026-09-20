@@ -46,12 +46,18 @@ from training.judge_sft.inference import (
     select_verdict_from_next_token_logits,
 )
 from training.judge_sft.trainer import (
-    RankAlignedExecutionSampler,
-    audit_rank_aligned_sampler,
+    TensorParallelReplicatedSampler,
+    audit_tensor_parallel_sampler,
     logits_to_keep_argument,
     model_execution_signature,
 )
-from training.judge_sft.train import audit_language_lora_targets
+from training.judge_sft.train import (
+    audit_language_lora_targets,
+    audit_trainable_lora_layers,
+    audit_trainable_lora_dtypes,
+    configure_safe_tensor_parallel_plan,
+    install_frozen_prefix_input_guard,
+)
 
 
 def _example(index: int, task: JudgeTask, verdict: Verdict) -> JudgeExample:
@@ -164,7 +170,7 @@ class VerdictContractsAndLossTests(unittest.TestCase):
         self.assertAlmostEqual(scales[JudgeTask.GROUNDEDNESS], 1.6)
         self.assertAlmostEqual(scales[JudgeTask.ANSWERABILITY], 0.8)
 
-    def test_rank_aligned_sampler_keeps_zero_one_and_six_view_paths_separate(self) -> None:
+    def test_tensor_parallel_sampler_replicates_one_lossless_order(self) -> None:
         examples = [
             *[
                 _example(index, JudgeTask.FORMALITY, Verdict.PASS)
@@ -180,47 +186,26 @@ class VerdictContractsAndLossTests(unittest.TestCase):
             ],
         ]
         dataset = JudgeDataset(examples)
-        sampler = RankAlignedExecutionSampler(dataset, world_size=2, seed=42)
+        sampler = TensorParallelReplicatedSampler(dataset, seed=42)
+        second_rank = TensorParallelReplicatedSampler(dataset, seed=42)
 
         indices = list(sampler)
 
-        self.assertEqual(len(indices), 12)
-        self.assertEqual({index for index in indices if index >= 0}, set(range(9)))
-        self.assertEqual(sum(index < 0 for index in indices), 3)
-        for offset in range(0, len(indices), 2):
-            pair = [dataset[index] for index in indices[offset : offset + 2]]
-            self.assertEqual(
-                model_execution_signature(pair[0]),
-                model_execution_signature(pair[1]),
-            )
-        for index in indices:
-            expected = 0.0 if index < 0 else 1.0
-            self.assertEqual(dataset[index].loss_weight_multiplier, expected)
-
-        unit_weights = BinaryClassWeights(
-            fail=1.0,
-            passed=1.0,
-            fail_count=1,
-            pass_count=1,
-        )
-        padding = next(dataset[index] for index in indices if index < 0)
-        self.assertEqual(
-            sample_weight_for_example(
-                padding,
-                class_weights={task: unit_weights for task in JudgeTask},
-                task_scales={task: 1.0 for task in JudgeTask},
-            ),
-            0.0,
-        )
-        audit = audit_rank_aligned_sampler(
+        self.assertEqual(len(indices), 9)
+        self.assertEqual(set(indices), set(range(9)))
+        self.assertEqual(indices, list(second_rank))
+        signatures = [model_execution_signature(dataset[index]) for index in indices]
+        self.assertEqual(len(signatures), 9)
+        audit = audit_tensor_parallel_sampler(
             dataset,
-            world_size=2,
+            tensor_parallel_size=2,
             seed=42,
         )
         self.assertEqual(audit["status"], "passed")
         self.assertEqual(audit["real_examples_per_epoch"], 9)
-        self.assertEqual(audit["sampler_slots_per_epoch"], 12)
-        self.assertEqual(audit["zero_loss_padding_slots_per_epoch"], 3)
+        self.assertEqual(audit["sampler_slots_per_rank_per_epoch"], 9)
+        self.assertEqual(audit["zero_loss_padding_slots_per_epoch"], 0)
+        self.assertTrue(audit["identical_order_on_every_tp_rank"])
 
     def test_token_contract_uses_two_distinct_single_tokens(self) -> None:
         token_ids = resolve_verdict_token_ids(FakeTokenizer())
@@ -348,8 +333,8 @@ class VerdictContractsAndLossTests(unittest.TestCase):
         }
         example = normalized_record_to_example(row, require_frame_files=False)
         prompt = model_visible_prompt(example)
-        self.assertIn("video_block_1: speaker: A1; 300 frames", prompt)
-        self.assertIn("video_block_2: provider_1: A2; 300 frames", prompt)
+        self.assertIn("image_group_1: speaker: A1; the next 300 images", prompt)
+        self.assertIn("image_group_2: provider_1: A2; the next 300 images", prompt)
         self.assertEqual(example.frame_count, 1_800)
 
     def test_packet_relative_nested_frame_directories_are_resolved(self) -> None:
@@ -429,7 +414,7 @@ class VerdictContractsAndLossTests(unittest.TestCase):
             262_144,
         )
 
-    def test_collator_groups_each_sampled_timeline_as_one_video_block(self) -> None:
+    def test_collator_uses_1800_independent_images_without_video_packing(self) -> None:
         class Processor:
             def __init__(self) -> None:
                 self.call_kwargs = None
@@ -459,29 +444,14 @@ class VerdictContractsAndLossTests(unittest.TestCase):
         def process_vision_info(
             messages,
             *,
-            return_video_kwargs,
-            return_video_metadata,
             image_patch_size,
         ):
-            self.assertTrue(return_video_kwargs)
-            self.assertTrue(return_video_metadata)
             self.assertEqual(image_patch_size, 16)
             observed_messages.extend(messages)
-            block_count = sum(
-                item.get("type") == "video" for item in messages[0]["content"]
+            image_count = sum(
+                item.get("type") == "image" for item in messages[0]["content"]
             )
-            videos = []
-            for index in range(block_count):
-                metadata = {
-                    "fps": 0.5,
-                    "frames_indices": list(range(300)),
-                    "total_num_frames": 300,
-                }
-                videos.append((f"decoded-video-{index}", metadata))
-            return None, videos, {
-                "do_sample_frames": False,
-                "fps": [0.5] * block_count,
-            }
+            return [f"decoded-image-{index}" for index in range(image_count)], None
 
         processor = Processor()
         unit_weights = BinaryClassWeights(
@@ -502,22 +472,26 @@ class VerdictContractsAndLossTests(unittest.TestCase):
 
         batch = collator([_example(0, JudgeTask.GROUNDEDNESS, Verdict.PASS)])
 
-        video_items = observed_messages[0]["content"][:6]
-        self.assertTrue(all(item["type"] == "video" for item in video_items))
-        self.assertTrue(all(len(item["video"]) == 300 for item in video_items))
-        self.assertTrue(all(item["sample_fps"] == 0.5 for item in video_items))
-        self.assertTrue(all(item["raw_fps"] == 0.5 for item in video_items))
-        self.assertNotIn("images", processor.call_kwargs)
-        self.assertEqual(
-            processor.call_kwargs["videos"],
-            [f"decoded-video-{index}" for index in range(6)],
+        image_items = observed_messages[0]["content"][:1_800]
+        self.assertEqual(len(image_items), 1_800)
+        self.assertTrue(all(item["type"] == "image" for item in image_items))
+        self.assertTrue(
+            all(
+                item["max_pixels"] == 119_808
+                for item in image_items
+            )
         )
-        self.assertEqual(processor.call_kwargs["fps"], 0.5)
-        self.assertEqual(len(processor.call_kwargs["video_metadata"]), 6)
-        self.assertTrue(processor.call_kwargs["return_metadata"])
+        self.assertEqual(
+            processor.call_kwargs["images"],
+            [f"decoded-image-{index}" for index in range(1_800)],
+        )
+        self.assertNotIn("videos", processor.call_kwargs)
+        self.assertNotIn("do_resize", processor.call_kwargs)
+        self.assertNotIn("cap_pixels_per_frame", processor.call_kwargs)
         self.assertEqual(batch["labels"].tolist(), [[1, 1]])
+        self.assertEqual(batch["tp_example_fingerprint"].shape, (1,))
 
-    def test_collator_rejects_missing_all_six_temporal_packing(self) -> None:
+    def test_collator_rejects_independent_image_context_above_limit(self) -> None:
         class Processor:
             image_processor = SimpleNamespace(
                 patch_size=16,
@@ -538,7 +512,7 @@ class VerdictContractsAndLossTests(unittest.TestCase):
 
             def __call__(self, **kwargs):
                 del kwargs
-                return {"input_ids": torch.zeros((1, 140_001), dtype=torch.long)}
+                return {"input_ids": torch.zeros((1, 262_145), dtype=torch.long)}
 
         unit_weights = BinaryClassWeights(
             fail=1.0,
@@ -554,13 +528,12 @@ class VerdictContractsAndLossTests(unittest.TestCase):
             max_pixels=262_144,
             max_input_tokens=262_144,
             process_vision_info=lambda messages, **kwargs: (
+                [f"image-{index}" for index in range(1_800)],
                 None,
-                [f"video-{index}" for index in range(6)],
-                {"fps": [0.5] * 6},
             ),
         )
 
-        with self.assertRaisesRegex(RuntimeError, "temporal video packing"):
+        with self.assertRaisesRegex(RuntimeError, "exceeds max_input_tokens"):
             collator([_example(0, JudgeTask.GROUNDEDNESS, Verdict.PASS)])
 
     def test_native_video_manifest_is_rejected_as_obsolete(self) -> None:
@@ -618,6 +591,88 @@ class VerdictContractsAndLossTests(unittest.TestCase):
         self.assertEqual(counts["q_proj"], 2)
         with self.assertRaisesRegex(RuntimeError, "v_proj"):
             audit_language_lora_targets(Model(), ["q_proj", "v_proj"])
+
+    def test_lora_dtype_audit_rejects_fp32_promotion(self) -> None:
+        class Model:
+            def __init__(self, dtype):
+                self.parameter = torch.nn.Parameter(torch.ones(2, dtype=dtype))
+
+            def named_parameters(self):
+                yield "model.layers.0.mlp.up_proj.lora_B.default.weight", self.parameter
+
+        audit = audit_trainable_lora_dtypes(Model(torch.bfloat16), torch.bfloat16)
+        self.assertEqual(audit["parameter_counts_by_dtype"], {"torch.bfloat16": 2})
+        self.assertFalse(audit["autocast_adapter_dtype"])
+        with self.assertRaisesRegex(RuntimeError, "promoted away from BF16"):
+            audit_trainable_lora_dtypes(Model(torch.float32), torch.bfloat16)
+
+    def test_only_upper_16_decoder_layers_have_trainable_lora(self) -> None:
+        class Model:
+            def named_parameters(self):
+                for index in range(48, 64):
+                    yield (
+                        "base_model.model.language_model.layers."
+                        f"{index}.mlp.up_proj.lora_A.default.weight",
+                        torch.nn.Parameter(torch.ones(2)),
+                    )
+
+        audit = audit_trainable_lora_layers(Model(), list(range(48, 64)))
+        self.assertEqual(audit["layer_indices"], list(range(48, 64)))
+        with self.assertRaisesRegex(RuntimeError, "differ from"):
+            audit_trainable_lora_layers(Model(), list(range(47, 64)))
+
+    def test_frozen_prefix_guard_rejects_gradient_bearing_layer_48_input(self) -> None:
+        class Stack(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.layers = torch.nn.ModuleList(
+                    [torch.nn.Identity() for _ in range(64)]
+                )
+
+        model = Stack()
+        audit = install_frozen_prefix_input_guard(
+            model,
+            first_trainable_layer=48,
+        )
+        self.assertEqual(audit["guarded_module"], "layers.48")
+        model.layers[48](torch.ones(1, requires_grad=False))
+        with self.assertRaisesRegex(RuntimeError, "leaked into autograd"):
+            model.layers[48](torch.ones(1, requires_grad=True))
+
+    def test_nonreentrant_checkpoint_trains_params_without_input_grad(self) -> None:
+        layer = torch.nn.Linear(2, 2, bias=False)
+        inputs = torch.ones(1, 2, requires_grad=False)
+        output = torch.utils.checkpoint.checkpoint(
+            layer,
+            inputs,
+            use_reentrant=False,
+        )
+        output.sum().backward()
+        self.assertIsNotNone(layer.weight.grad)
+        self.assertFalse(inputs.requires_grad)
+
+    def test_safe_tp_plan_replicates_only_hybrid_linear_attention(self) -> None:
+        plan = {
+            "layers.*.self_attn.q_proj": "colwise",
+            "layers.*.self_attn.k_proj": "colwise",
+            "layers.*.self_attn.v_proj": "colwise",
+            "layers.*.self_attn.o_proj": "rowwise",
+            "layers.*.mlp.gate_proj": "colwise",
+            "layers.*.mlp.up_proj": "colwise",
+            "layers.*.mlp.down_proj": "rowwise",
+            "layers.*.linear_attn.in_proj_qkv": "colwise_gather_output",
+        }
+        text_config = SimpleNamespace(base_model_tp_plan=plan)
+        config = SimpleNamespace(get_text_config=lambda **kwargs: text_config)
+        audit = configure_safe_tensor_parallel_plan(config)
+        self.assertNotIn(
+            "layers.*.linear_attn.in_proj_qkv",
+            text_config.base_model_tp_plan,
+        )
+        self.assertEqual(
+            audit["replicated_for_compatibility"],
+            ["layers.*.linear_attn.in_proj_qkv"],
+        )
 
 
 if __name__ == "__main__":

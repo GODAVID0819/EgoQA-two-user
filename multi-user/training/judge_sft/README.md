@@ -20,27 +20,27 @@ The production generation run did not retain six monolithic training videos.
 Its durable judge input is in
 `/scratch/$USER/egolife_rlhf_evidence_v1/packets`: six ordered, packet-owned
 timelines of exactly 300 JPEGs each, already sampled from 600 seconds at 0.5
-FPS. Each timeline is supplied to Qwen as one video block containing its 300
-ordered frames—not as 300 separate image attachments. This matches the
-production six-video input structure and enables Qwen's temporal video
-patching without dropping frames or lowering spatial resolution. Groundedness
-and all-six answerability see six video blocks containing all 1,800 frames;
-speaker-only answerability sees one 300-frame video block; formality is
-text-only. Both
+FPS. Every sampled JPEG is supplied to Qwen as an independent image item.
+Groundedness and all-six answerability therefore see 1,800 ordered images in
+six explicitly described chronological user groups; speaker-only
+answerability sees 300 images; formality is text-only. Both
 answerability conditions receive only the generated question from the QA item.
 Options, the correct letter, answer text, rationale, and every other QA field
 are withheld; condition metadata still identifies which media is present.
 
 The collator uses Qwen3.8's processor-declared vision geometry: a 16-pixel
-spatial patch, a 2-by-2 spatial merge, and a two-frame temporal patch. It passes
-`image_patch_size=16` explicitly to `qwen-vl-utils` and fails closed if the
-loaded processor reports different geometry. The resulting language-model
-spatial-token area is 32-by-32 pixels, not the older 28-by-28 assumption.
+spatial patch and a 2-by-2 spatial merge. The image processor also declares a
+temporal patch size of two, but each still image satisfies that internal tensor
+dimension independently; adjacent sampled frames are never paired into a video
+tubelet. The collator passes `image_patch_size=16` explicitly to
+`qwen-vl-utils` and fails closed if the loaded processor reports different
+geometry. The resulting language-model spatial-token area is 32-by-32 pixels,
+not the older 28-by-28 assumption.
 
-The dynamic per-frame resolution cap deliberately budgets all 1,800 raw frames
-before Qwen's temporal packing, retaining training-memory headroom. With the
-defaults below, an all-six call is capped at 119,808 pixels per frame, while a
-300-frame call remains at the configured 262,144-pixel cap:
+The dynamic per-frame resolution cap budgets all 1,800 independent image items
+against the configured context target. With the defaults, the all-six cap is
+119,808 pixels per frame. A one-user 300-frame call retains the configured
+262,144-pixel cap:
 
 ```text
 max_input_tokens=262144
@@ -51,13 +51,10 @@ min_pixels=3136
 configured_max_pixels=262144
 ```
 
-For all-six rows, the cap is applied to every frame before the six timelines
-enter Qwen as video blocks. Qwen's native temporal video patching then combines
-adjacent frames through a learned Conv3D tubelet. Every sampled frame still
-contributes, but the language-model sequence is roughly half the length of the obsolete
-1,800-independent-image representation.
-The collator and runtime probe reject an all-six row above 140,000 input tokens;
-that threshold catches a missing temporal-video packing path before training.
+For all-six rows, the cap is applied to every image. There is no two-frame
+temporal tubelet packing and no video metadata. The processor-only runtime gate
+records the resulting packed token count, and the collator rejects any row that
+exceeds `max_input_tokens`.
 
 Manifests are compact. A visual row stores `frame_packet`, ordered
 `frame_user_indices`, and `frame_order`; the loader resolves and verifies all
@@ -137,24 +134,47 @@ objective exactly:
 
 The first real run uses BF16 Qwen3.8-27B with language-side attention and MLP
 LoRA on `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, and
-`down_proj`, rank 8, alpha 16, dropout 0.05. The launcher audits that every
-requested family has trainable language-side LoRA parameters. The vision
-encoder, merger/aligner, embeddings, LM head, and all base weights remain
-frozen. Attention defaults to PyTorch native SDPA, avoiding an external
+`down_proj`, rank 8, alpha 16, dropout 0.05. Adapters are applied only to the
+upper 16 decoder layers, indices 48 through 63. Layers 0 through 47 still run
+the pretrained forward pass but contain no adapters and remain outside the
+autograd graph. A forward pre-hook fails the job if layer 48 receives a tensor
+that already requires gradients, proving that the frozen prefix was not merely
+excluded from the optimizer while still retaining its activation graph.
+Non-reentrant checkpointing computes adapter parameter gradients without
+requiring the frozen-prefix input to require gradients.
+
+The launcher audits the exact 16-layer selection and that every requested
+projection family has trainable language-side LoRA parameters. The vision
+encoder, merger/aligner, embeddings, LM head, lower 48 decoder layers, and all
+base weights remain frozen. PEFT is called with
+`autocast_adapter_dtype=False`, and startup fails unless every trainable LoRA
+parameter is BF16; this prevents the FP32 LoRA-B activation that caused the
+measured 5.51-GiB allocation failure. Attention defaults to PyTorch native SDPA, avoiding an external
 `flash-attn` build while still allowing H200 fused SDPA kernels. Set
 `ATTN_IMPLEMENTATION=flash_attention_2` only in an environment with a compatible
-`flash_attn` installation. The full launcher uses two H200s, fused AdamW, LR `2e-5`, betas
+`flash_attn` installation. The full launcher uses two H200s as one pure TP2
+model replica, non-foreach/non-fused AdamW, LR `2e-5`, betas
 `(0.9, 0.95)`, weight decay `0.01`, 10% warmup, cosine decay, ten epochs,
-microbatch one per GPU, gradient accumulation sixteen (effective batch 32),
-gradient checkpointing, clipping at 1.0, and ZeRO-3. There is no in-training
+one shared microbatch across the TP ranks, gradient accumulation 32 (effective
+batch 32), gradient checkpointing, and clipping at 1.0. There is no in-training
 evaluation or early stopping. Every epoch checkpoint is saved without a
-retention cap, and `final_adapter` stores the last epoch for convenience.
-Because ZeRO-3 gathers module parameters collectively, both ranks must traverse
-the same model branches in every microstep. The training sampler shuffles
-global microbatches while grouping them by exact media signature: text-only,
-one 300-frame timeline, or six 300-frame timelines. An incomplete two-rank
-group is padded with a same-signature zero-loss copy, so no labeled row is
-dropped and padding does not alter the task or class objective.
+retention cap, and `final_adapter` stores the last epoch for convenience. TP
+checkpoints contain model/adapter state only because optimizer-state resume is
+not supported for models sharded at load time. Both TP ranks receive the same
+example; the trainer all-gathers a stable example fingerprint before every
+forward and fails if rank inputs differ.
+
+Training only the upper 16 layers reduces the rough worst-case decoder
+checkpoint-boundary budget from about 131 GiB for all 64 layers to about 33
+GiB. The full 1,800-image sequence, frozen model weights, vision forward, and
+hybrid linear-attention working tensors still occupy both GPUs, so the all-six
+one-step smoke remains a hard gate before the ten-epoch run.
+
+Qwen's MLP and ordinary attention projections use the model's native TP plan.
+The hybrid linear-attention projections remain replicated because current
+native Transformers TP has a known reshape failure for that Qwen path. This
+still shards every `gate_proj`, `up_proj`, and `down_proj`, including the exact
+wide MLP operation responsible for the preceding OOM.
 The launcher preserves the 10% warmup across Transformers APIs: it uses
 `warmup_ratio=0.1` where supported and the Transformers v5.2+
 `warmup_steps=0.1` ratio form otherwise.
@@ -244,10 +264,8 @@ they do not establish held-out judge quality. The full job writes
 `checkpoint_inventory.json` and fails if it cannot find a checkpoint for every
 configured epoch.
 
-The collator treats these manifests as image-only even though
-`qwen_vl_utils.process_vision_info` can return empty video metadata. It omits
-`videos` and video-only fields such as `fps=[]` unless actual video inputs are
-present, which is required by the strict Transformers v5 processor schema.
+The collator treats these manifests as image-only. It rejects any unexpected
+video output and omits `videos` and every video-only processor field.
 
 Both GPU training launchers start the same utilization-aware CUDA keeper used
 by the production question-generation job. It is enabled by default, watches
@@ -269,8 +287,9 @@ generation: /scratch/$USER/egolife_rlhf_qa_generation/qwen38_legacy_two_pass_sch
 ```
 
 They default to the generation environment at
-`/scratch/$USER/conda/envs/qwen38-vllm`. It must also contain PEFT, Accelerate,
-DeepSpeed, `qwen-vl-utils`, and Safetensors. The launchers do
+`/scratch/$USER/conda/envs/qwen38-vllm`. It must contain Transformers 5.4 or
+newer, Accelerate 1.12 or newer, a PEFT build with TP-aware LoRA,
+`qwen-vl-utils`, and Safetensors. The launchers do
 not install or upgrade packages; if those training dependencies live in a
 separate environment, pass its exact directory as `TRAIN_ENV`.
 If the shared Hugging Face cache contains more than one Qwen3.8-27B snapshot,
