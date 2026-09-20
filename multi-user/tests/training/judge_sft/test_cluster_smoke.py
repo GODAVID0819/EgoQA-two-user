@@ -216,6 +216,8 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         self.assertIn("audit_lora_tensor_parallel_materialization", train_source)
         self.assertIn("ensure_tensor_parallel_metadata", train_source)
         self.assertIn("materialize_lora_tensor_parallelism", train_source)
+        self.assertIn("synchronize_replicated_lora_parameters", train_source)
+        self.assertIn("transformers.set_seed(args.seed)", train_source)
         self.assertIn("module._tp_info = TpInfo", train_source)
         self.assertLess(
             train_source.index('tp_plan_audit["materialization"]'),
@@ -224,6 +226,14 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         self.assertLess(
             train_source.index("model = get_peft_model"),
             train_source.index('tp_plan_audit["lora_materialization"]'),
+        )
+        self.assertLess(
+            train_source.index("transformers.set_seed(args.seed)"),
+            train_source.index("model = get_peft_model"),
+        )
+        self.assertLess(
+            train_source.index('tp_plan_audit["lora_materialization"]'),
+            train_source.index('tp_plan_audit["replicated_lora_sync"]'),
         )
         self.assertIn('layers_pattern="layers"', train_source)
         self.assertIn("disable_input_require_grads", train_source)

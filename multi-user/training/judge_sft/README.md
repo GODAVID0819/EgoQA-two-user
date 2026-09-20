@@ -164,6 +164,13 @@ not supported for models sharded at load time. Both TP ranks receive the same
 example; the trainer all-gathers a stable example fingerprint before every
 forward and fails if rank inputs differ.
 
+LoRA construction is seeded identically immediately before PEFT initializes
+the adapters. After the sharded LoRA factor is materialized as a DTensor, rank
+zero broadcasts every remaining trainable non-DTensor LoRA factor. The run
+contract records the maximum pre-synchronization difference and the number of
+replicated factors synchronized; this prevents pure TP from silently training
+different replicated LoRA-A/LoRA-B values on its two ranks.
+
 Training only the upper 16 layers reduces the rough worst-case decoder
 checkpoint-boundary budget from about 131 GiB for all 64 layers to about 33
 GiB. The full 1,800-image sequence, frozen model weights, vision forward, and

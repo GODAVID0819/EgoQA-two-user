@@ -255,6 +255,85 @@ def audit_lora_tensor_parallel_materialization(model: Any) -> dict[str, Any]:
     }
 
 
+def synchronize_replicated_lora_parameters(
+    model: Any,
+    *,
+    expected_world_size: int,
+) -> dict[str, Any]:
+    """Broadcast every non-DTensor LoRA factor from rank zero.
+
+    Pure tensor parallelism does not wrap the model in DDP, so parameters that
+    are intentionally replicated are not automatically synchronized. PEFT
+    randomly initializes LoRA-A before Trainer seeds each process. Without this
+    broadcast, different TP ranks can train sharded LoRA-B factors against
+    different replicated LoRA-A values and produce an inconsistent checkpoint.
+    """
+
+    import torch
+    import torch.distributed as dist
+    from torch.distributed.tensor import DTensor
+
+    if not dist.is_available() or not dist.is_initialized():
+        raise RuntimeError(
+            "replicated LoRA synchronization requires an initialized process group"
+        )
+    world_size = dist.get_world_size()
+    if world_size != expected_world_size:
+        raise RuntimeError(
+            "replicated LoRA synchronization requires WORLD_SIZE == TP size: "
+            f"world_size={world_size} tp_size={expected_world_size}"
+        )
+
+    synchronized_names: list[str] = []
+    factor_counts = {"lora_A": 0, "lora_B": 0}
+    max_difference: Any | None = None
+    with torch.no_grad():
+        for name, parameter in model.named_parameters():
+            if (
+                not parameter.requires_grad
+                or "lora_" not in name.lower()
+                or isinstance(parameter, DTensor)
+            ):
+                continue
+
+            local_value = parameter.detach().clone()
+            rank_zero_value = local_value.clone()
+            dist.broadcast(rank_zero_value, src=0)
+            difference = (
+                local_value.float() - rank_zero_value.float()
+            ).abs().max()
+            max_difference = (
+                difference
+                if max_difference is None
+                else torch.maximum(max_difference, difference)
+            )
+            parameter.copy_(rank_zero_value)
+            synchronized_names.append(name)
+            if "lora_A." in name:
+                factor_counts["lora_A"] += 1
+            elif "lora_B." in name:
+                factor_counts["lora_B"] += 1
+
+    if max_difference is None:
+        raise RuntimeError("found no replicated trainable LoRA parameters to synchronize")
+    missing_factors = [name for name, count in factor_counts.items() if count <= 0]
+    if missing_factors:
+        raise RuntimeError(
+            "replicated LoRA synchronization did not find both factor families: "
+            + ",".join(missing_factors)
+        )
+    dist.all_reduce(max_difference, op=dist.ReduceOp.MAX)
+    return {
+        "policy": "rank-zero broadcast for every trainable non-DTensor LoRA factor",
+        "world_size": world_size,
+        "broadcast_source_rank": 0,
+        "replicated_parameter_count": len(synchronized_names),
+        "replicated_parameter_counts_by_factor": factor_counts,
+        "pre_sync_max_abs_difference": float(max_difference.item()),
+        "all_tp_ranks_equal_after_broadcast": True,
+    }
+
+
 def install_frozen_prefix_input_guard(
     model: Any,
     *,
@@ -629,6 +708,14 @@ def load_model_and_processor(
     observed_tp_size = int(tp_plan_audit["metadata"]["observed_tp_size"])
     tp_mesh = tensor_parallel_mesh(model._device_mesh)
     model.config.use_cache = False
+    # Each torchrun process has an independent RNG before Trainer is built.
+    # Seed immediately before PEFT creates the replicated LoRA factors, then
+    # enforce equality with a rank-zero broadcast below.
+    transformers.set_seed(args.seed)
+    tp_plan_audit["lora_initialization"] = {
+        "seed": args.seed,
+        "policy": "identical seed immediately before LoRA construction",
+    }
     model = get_peft_model(
         model,
         LoraConfig(
@@ -651,6 +738,12 @@ def load_model_and_processor(
         tp_mesh=tp_mesh,
         tp_size=observed_tp_size,
         requested_targets=args.lora_target_modules,
+    )
+    tp_plan_audit["replicated_lora_sync"] = (
+        synchronize_replicated_lora_parameters(
+            model,
+            expected_world_size=observed_tp_size,
+        )
     )
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable(
@@ -964,7 +1057,7 @@ def main() -> None:
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     run_contract = {
-        "contract_version": "verdict_token_bce_independent_images_tp2_upper16_v7",
+        "contract_version": "verdict_token_bce_independent_images_tp2_upper16_v8",
         "model_id": args.model_id,
         "media_contract": (
             "packet-owned 300-frame user timelines sampled at 0.5 FPS; every "

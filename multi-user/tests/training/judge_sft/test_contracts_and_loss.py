@@ -58,6 +58,7 @@ from training.judge_sft.train import (
     configure_safe_tensor_parallel_plan,
     ensure_tensor_parallel_metadata,
     install_frozen_prefix_input_guard,
+    synchronize_replicated_lora_parameters,
 )
 
 
@@ -712,6 +713,48 @@ class VerdictContractsAndLossTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "mesh disagrees"):
             ensure_tensor_parallel_metadata(model, requested_tp_size=2)
+
+    def test_replicated_lora_parameters_are_broadcast_from_rank_zero(self) -> None:
+        class AdapterModel(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.base = torch.nn.Linear(2, 2, bias=False)
+                self.lora_A = torch.nn.ModuleDict(
+                    {"default": torch.nn.Linear(2, 2, bias=False)}
+                )
+                self.lora_B = torch.nn.ModuleDict(
+                    {"default": torch.nn.Linear(2, 2, bias=False)}
+                )
+
+        model = AdapterModel()
+        base_before = model.base.weight.detach().clone()
+
+        def rank_zero_broadcast(tensor, *, src):
+            self.assertEqual(src, 0)
+            tensor.fill_(3.0)
+
+        with (
+            patch("torch.distributed.is_available", return_value=True),
+            patch("torch.distributed.is_initialized", return_value=True),
+            patch("torch.distributed.get_world_size", return_value=2),
+            patch("torch.distributed.broadcast", side_effect=rank_zero_broadcast),
+            patch("torch.distributed.all_reduce"),
+        ):
+            audit = synchronize_replicated_lora_parameters(
+                model,
+                expected_world_size=2,
+            )
+
+        self.assertTrue(torch.equal(model.base.weight, base_before))
+        self.assertTrue(torch.all(model.lora_A["default"].weight == 3.0))
+        self.assertTrue(torch.all(model.lora_B["default"].weight == 3.0))
+        self.assertEqual(audit["replicated_parameter_count"], 2)
+        self.assertEqual(
+            audit["replicated_parameter_counts_by_factor"],
+            {"lora_A": 1, "lora_B": 1},
+        )
+        self.assertGreater(audit["pre_sync_max_abs_difference"], 0.0)
+        self.assertTrue(audit["all_tp_ranks_equal_after_broadcast"])
 
 
 if __name__ == "__main__":
