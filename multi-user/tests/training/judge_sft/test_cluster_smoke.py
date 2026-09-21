@@ -215,6 +215,7 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         self.assertIn("layers_to_transform=trainable_layer_indices", train_source)
         self.assertIn("audit_lora_tensor_parallel_materialization", train_source)
         self.assertIn("ensure_tensor_parallel_metadata", train_source)
+        self.assertIn("synchronize_lora_initialization", train_source)
         self.assertIn("materialize_lora_tensor_parallelism", train_source)
         self.assertIn("module._tp_info = TpInfo", train_source)
         self.assertLess(
@@ -223,8 +224,18 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         )
         self.assertLess(
             train_source.index("model = get_peft_model"),
+            train_source.index('tp_plan_audit["lora_initialization"]'),
+        )
+        self.assertLess(
+            train_source.index('tp_plan_audit["lora_initialization"]'),
             train_source.index('tp_plan_audit["lora_materialization"]'),
         )
+        seed_position = train_source.index("set_seed(args.seed)")
+        peft_position = train_source.index("model = get_peft_model")
+        self.assertLess(seed_position, peft_position)
+        self.assertIn("torch.distributed.broadcast(", train_source)
+        self.assertIn("torch.distributed.all_gather(", train_source)
+        self.assertIn("exact_post_broadcast_equality", train_source)
         self.assertIn('layers_pattern="layers"', train_source)
         self.assertIn("disable_input_require_grads", train_source)
         self.assertNotIn("enable_input_require_grads", train_source)

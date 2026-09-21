@@ -558,13 +558,114 @@ def materialize_lora_tensor_parallelism(
     }
 
 
+def synchronize_lora_initialization(
+    model: Any,
+    *,
+    tp_mesh: Any,
+    requested_targets: list[str] | tuple[str, ...],
+) -> dict[str, Any]:
+    """Broadcast and exactly audit LoRA initialization before TP sharding.
+
+    Each torchrun process constructs PEFT adapters independently. Even with a
+    common seed, rank-specific RNG consumption in a future dependency could
+    silently diverge replicated LoRA factors. Rank zero is therefore the
+    authoritative initialization source for every still-local LoRA parameter;
+    sharded factors are derived from those identical full tensors afterwards.
+    """
+
+    import torch
+    from peft.tuners.lora.layer import LoraLayer
+    from torch.distributed.tensor import DTensor
+
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        raise RuntimeError("LoRA TP initialization sync requires a process group")
+    process_group = tp_mesh.get_group()
+    group_world_size = torch.distributed.get_world_size(process_group)
+    if group_world_size != int(tp_mesh.size()):
+        raise RuntimeError(
+            "LoRA TP initialization group disagrees with the device mesh: "
+            f"group={group_world_size} mesh={int(tp_mesh.size())}"
+        )
+    source_rank = torch.distributed.get_global_rank(process_group, 0)
+    requested = set(requested_targets)
+    seen = {target: 0 for target in requested}
+    broadcast_counts = {target: 0 for target in requested}
+    parameter_count = 0
+
+    for module_name, module in model.named_modules():
+        if not isinstance(module, LoraLayer):
+            continue
+        target = module_name.rsplit(".", 1)[-1]
+        if target not in requested:
+            continue
+        seen[target] += 1
+        for factor_name in ("lora_A", "lora_B"):
+            factor_modules = getattr(module, factor_name)
+            for adapter_name, factor_module in factor_modules.items():
+                for parameter_name, parameter in factor_module.named_parameters(
+                    recurse=False
+                ):
+                    full_name = (
+                        f"{module_name}.{factor_name}.{adapter_name}.{parameter_name}"
+                    )
+                    if isinstance(parameter, DTensor):
+                        raise RuntimeError(
+                            "LoRA parameter was sharded before initialization sync: "
+                            + full_name
+                        )
+                    with torch.no_grad():
+                        torch.distributed.broadcast(
+                            parameter,
+                            src=source_rank,
+                            group=process_group,
+                        )
+                    gathered = [
+                        torch.empty_like(parameter) for _ in range(group_world_size)
+                    ]
+                    torch.distributed.all_gather(
+                        gathered,
+                        parameter.detach(),
+                        group=process_group,
+                    )
+                    if any(
+                        not torch.equal(gathered[0], candidate)
+                        for candidate in gathered[1:]
+                    ):
+                        raise RuntimeError(
+                            "LoRA initialization remained inconsistent after broadcast: "
+                            + full_name
+                        )
+                    broadcast_counts[target] += parameter.numel()
+                    parameter_count += 1
+
+    missing = [target for target, count in seen.items() if count <= 0]
+    if missing:
+        raise RuntimeError(
+            "LoRA initialization sync omitted requested targets: "
+            + ",".join(sorted(missing))
+        )
+    if parameter_count <= 0:
+        raise RuntimeError("LoRA initialization sync found no adapter parameters")
+    return {
+        "policy": (
+            "reset every rank to the common seed, then broadcast every full "
+            "LoRA factor from TP rank zero before sharding"
+        ),
+        "source_global_rank": source_rank,
+        "tp_group_world_size": group_world_size,
+        "audited_parameter_tensors": parameter_count,
+        "broadcast_parameter_counts_by_target": broadcast_counts,
+        "exact_post_broadcast_equality": True,
+    }
+
+
 def load_model_and_processor(
     args: argparse.Namespace,
 ) -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
     import torch
     import transformers
     from peft import LoraConfig, get_peft_model
-    from transformers import AutoConfig, AutoProcessor, DistributedConfig
+    from transformers import AutoConfig, AutoProcessor, DistributedConfig, set_seed
 
     processor = AutoProcessor.from_pretrained(
         args.model_id,
@@ -629,6 +730,9 @@ def load_model_and_processor(
     observed_tp_size = int(tp_plan_audit["metadata"]["observed_tp_size"])
     tp_mesh = tensor_parallel_mesh(model._device_mesh)
     model.config.use_cache = False
+    # Trainer seeds itself only after the model already exists. Reset every TP
+    # process here so PEFT's random LoRA-A initialization is deterministic.
+    set_seed(args.seed)
     model = get_peft_model(
         model,
         LoraConfig(
@@ -645,6 +749,11 @@ def load_model_and_processor(
         # that doubles the full LoRA-B output activation and caused the
         # observed 5.51 GiB up_proj allocation failure.
         autocast_adapter_dtype=False,
+    )
+    tp_plan_audit["lora_initialization"] = synchronize_lora_initialization(
+        model,
+        tp_mesh=tp_mesh,
+        requested_targets=args.lora_target_modules,
     )
     tp_plan_audit["lora_materialization"] = materialize_lora_tensor_parallelism(
         model,
@@ -964,7 +1073,7 @@ def main() -> None:
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     run_contract = {
-        "contract_version": "verdict_token_bce_independent_images_tp2_upper16_v7",
+        "contract_version": "verdict_token_bce_independent_images_tp2_upper16_v8",
         "model_id": args.model_id,
         "media_contract": (
             "packet-owned 300-frame user timelines sampled at 0.5 FPS; every "

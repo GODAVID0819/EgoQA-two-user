@@ -300,5 +300,10 @@ PEFT's state-dict gathering path, while only rank zero writes the adapter,
 processor, and training-argument files. This avoids a rank-zero-only DTensor
 gather deadlock at checkpoint time. The collective receives an adapter-only
 state dict so checkpointing never gathers the frozen 27B base model to CPU.
+Immediately before PEFT creates the adapters, both ranks also reset to the
+configured training seed. Rank zero then broadcasts every full LoRA A/B tensor
+before any factor is sharded, and an exact all-gather equality audit must pass.
+This prevents independently initialized TP ranks from being combined into an
+incoherent adapter.
 If the shared Hugging Face cache contains more than one Qwen3.8-27B snapshot,
 set `MODEL_PATH` to one exact snapshot directory.
