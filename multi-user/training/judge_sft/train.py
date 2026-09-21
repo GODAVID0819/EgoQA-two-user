@@ -820,7 +820,7 @@ def _training_argument_kwargs(
         "lr_scheduler_type": args.lr_scheduler_type,
         "bf16": True,
         "tf32": True,
-        "gradient_checkpointing": args.gradient_checkpointing,
+        "gradient_checkpointing": False,
         "remove_unused_columns": False,
         "dataloader_num_workers": 0,
         "dataloader_pin_memory": True,

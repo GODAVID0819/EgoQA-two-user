@@ -1,0 +1,1 @@
+{"candidate_id": "RLHF6U_DAY4_11300000_A1_A2_A3_A4_A5_A6__ASKER_A1::attempt_01", "source_packet_id": "RLHF6U_DAY4_11300000_A1_A2_A3_A4_A5_A6", "source_evidence_id": "RLHF6U_DAY4_11300000_A1_A2_A3_A4_A5_A6__ASKER_A1", "generation_attempt": 1, "asker_index": 0, "asker_user": "Jake", "reason": "generator output was not parsed as a QA JSON object"}
