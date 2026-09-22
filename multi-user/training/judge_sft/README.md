@@ -162,7 +162,12 @@ retention cap, and `final_adapter` stores the last epoch for convenience. TP
 checkpoints contain model/adapter state only because optimizer-state resume is
 not supported for models sharded at load time. Both TP ranks receive the same
 example; the trainer all-gathers a stable example fingerprint before every
-forward and fails if rank inputs differ.
+forward and fails if rank inputs differ. CPU image preprocessing uses two
+persistent DataLoader workers per TP rank with one-batch prefetch. The sampler
+keeps examples with identical packet frames adjacent, and each worker keeps a
+two-entry LRU of decoded/resized CPU images. This overlaps JPEG work with GPU
+training and avoids decoding shared media repeatedly; it does not cache CUDA
+tensors or change the images, labels, loss weights, or optimizer schedule.
 
 Training only the upper 16 layers reduces the rough worst-case decoder
 checkpoint-boundary budget from about 131 GiB for all 64 layers to about 33

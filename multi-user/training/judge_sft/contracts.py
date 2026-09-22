@@ -82,6 +82,9 @@ class JudgeTrainingDefaults:
     # Accumulating 32 single examples preserves the former effective batch 32.
     gradient_accumulation_steps: int = 32
     gradient_checkpointing: bool = True
+    dataloader_num_workers: int = 2
+    dataloader_prefetch_factor: int = 1
+    decoded_image_cache_entries: int = 2
     max_grad_norm: float = 1.0
     class_weight_smoothing: float = 1.0
     max_class_weight: float = 10.0

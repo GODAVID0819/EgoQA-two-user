@@ -12,6 +12,9 @@ PREP_SBATCH = ROOT / "hpc" / "judge_sft" / "prepare_real_manifests.sbatch"
 RUNTIME_SBATCH = ROOT / "hpc" / "judge_sft" / "runtime_smoke_qwen38_27b.sbatch"
 STEP1_SBATCH = ROOT / "hpc" / "judge_sft" / "train_one_step_qwen38_27b.sbatch"
 TRAIN_SBATCH = ROOT / "hpc" / "judge_sft" / "train_real_40_packets_qwen38_27b.sbatch"
+HALF5_SBATCH = (
+    ROOT / "hpc" / "judge_sft" / "train_half5_ga8_l2_f050_qwen38_27b (1).sbatch"
+)
 TRAIN_MODULE = ROOT / "training" / "judge_sft" / "train.py"
 TRAINER_MODULE = ROOT / "training" / "judge_sft" / "trainer.py"
 
@@ -35,6 +38,9 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         self.assertEqual(parsed.epochs, 10.0)
         self.assertEqual(parsed.image_context_target_fraction, 0.85)
         self.assertEqual(parsed.attn_implementation, "sdpa")
+        self.assertEqual(parsed.dataloader_num_workers, 2)
+        self.assertEqual(parsed.dataloader_prefetch_factor, 1)
+        self.assertEqual(parsed.decoded_image_cache_entries, 2)
         self.assertEqual(
             parsed.lora_target_modules,
             [
@@ -67,6 +73,10 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
         self.assertEqual(v4["evaluation_strategy"], "no")
         self.assertEqual(v4["parallelism_config"], "tp2")
         self.assertTrue(v4["save_only_model"])
+        self.assertEqual(v4["dataloader_num_workers"], 2)
+        self.assertTrue(v4["dataloader_persistent_workers"])
+        self.assertEqual(v4["dataloader_prefetch_factor"], 1)
+        self.assertEqual(v4["dataloader_multiprocessing_context"], "fork")
 
         v5 = _training_argument_kwargs(
             parsed,
@@ -163,6 +173,19 @@ class JudgeSftClusterSmokeTests(unittest.TestCase):
             text.index("training.torch_storage_preflight"),
             text.index("training.judge_sft.train"),
         )
+
+    def test_half5_launcher_exposes_cpu_preprocessing_controls(self) -> None:
+        text = HALF5_SBATCH.read_text(encoding="utf-8")
+        for expected in (
+            'DATALOADER_NUM_WORKERS="${DATALOADER_NUM_WORKERS:-2}"',
+            'DATALOADER_PREFETCH_FACTOR="${DATALOADER_PREFETCH_FACTOR:-1}"',
+            'DECODED_IMAGE_CACHE_ENTRIES="${DECODED_IMAGE_CACHE_ENTRIES:-2}"',
+            '--dataloader-num-workers "${DATALOADER_NUM_WORKERS}"',
+            '--dataloader-prefetch-factor "${DATALOADER_PREFETCH_FACTOR}"',
+            '--decoded-image-cache-entries "${DECODED_IMAGE_CACHE_ENTRIES}"',
+        ):
+            self.assertIn(expected, text)
+
     def test_full_train_is_ten_epoch_real_data_run(self) -> None:
         text = TRAIN_SBATCH.read_text(encoding="utf-8")
         for expected in (

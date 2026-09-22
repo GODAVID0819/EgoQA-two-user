@@ -19,6 +19,17 @@ def model_execution_signature(example: JudgeExample) -> tuple[int, int]:
     return len(example.frame_sets), example.frame_count
 
 
+def media_locality_key(
+    example: JudgeExample,
+) -> tuple[str, tuple[tuple[str, ...], ...]]:
+    """Identify examples that can reuse the same decoded CPU images."""
+
+    return (
+        example.group_id,
+        tuple(frame_set.frames for frame_set in example.frame_sets),
+    )
+
+
 class TensorParallelReplicatedSampler:
     """Emit one deterministic order identically on every tensor-parallel rank."""
 
@@ -34,10 +45,18 @@ class TensorParallelReplicatedSampler:
         self.seed = int(seed)
         self.epoch = 0
 
-        grouped: dict[tuple[int, int], list[int]] = defaultdict(list)
+        grouped: dict[
+            tuple[int, int],
+            dict[tuple[str, tuple[tuple[str, ...], ...]], list[int]],
+        ] = defaultdict(lambda: defaultdict(list))
         for index, example in enumerate(dataset.examples):
-            grouped[model_execution_signature(example)].append(index)
-        self._grouped_indices = dict(grouped)
+            grouped[model_execution_signature(example)][
+                media_locality_key(example)
+            ].append(index)
+        self._grouped_indices = {
+            signature: list(locality_buckets.values())
+            for signature, locality_buckets in grouped.items()
+        }
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -50,8 +69,12 @@ class TensorParallelReplicatedSampler:
         signature_groups: list[list[int]] = []
 
         for signature in sorted(self._grouped_indices):
-            indices = list(self._grouped_indices[signature])
-            generator.shuffle(indices)
+            buckets = [list(bucket) for bucket in self._grouped_indices[signature]]
+            generator.shuffle(buckets)
+            indices: list[int] = []
+            for bucket in buckets:
+                generator.shuffle(bucket)
+                indices.extend(bucket)
             signature_groups.append(indices)
 
         generator.shuffle(signature_groups)
@@ -115,6 +138,10 @@ def audit_tensor_parallel_sampler(
         "sampler_slots_per_rank_per_epoch": len(rank_samplers[0]),
         "identical_order_on_every_tp_rank": True,
         "zero_loss_padding_slots_per_epoch": 0,
+        "media_locality_buckets": sum(
+            len(buckets)
+            for buckets in rank_samplers[0]._grouped_indices.values()
+        ),
         "execution_signature_counts": dict(
             sorted(signature_counts.items())
         ),
@@ -305,8 +332,7 @@ def build_verdict_trainer_class() -> type:
                 )
 
             # get_peft_model_state_dict runs before PEFT's
-            # is_main_process write gate, so all ranks participate in
-            # DTensor.full_tensor() gathers.
+            # is_main_process write gate, so all ranks participate in DTensor.full_tensor() gathers.
             #
             # Supplying an adapter-only state dict also prevents PEFT
             # 0.21 from gathering the frozen 27B base model to CPU at

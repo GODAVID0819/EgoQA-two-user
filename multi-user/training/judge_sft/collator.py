@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+from collections import OrderedDict
 from typing import Any, Callable, Mapping
 
 from .contracts import JudgeTask, VERDICT_ASSISTANT_PREFIX
@@ -200,6 +201,7 @@ class JudgeFrameCollator:
         image_context_target_fraction: float = DEFAULT_IMAGE_CONTEXT_TARGET_FRACTION,
         image_text_token_reserve: int = DEFAULT_IMAGE_TEXT_TOKEN_RESERVE,
         image_item_token_overhead: int = DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD,
+        decoded_image_cache_entries: int = 2,
         process_vision_info: Callable[..., Any] | None = None,
     ) -> None:
         if not 0 < min_pixels <= max_pixels:
@@ -219,8 +221,17 @@ class JudgeFrameCollator:
         self.image_context_target_fraction = float(image_context_target_fraction)
         self.image_text_token_reserve = int(image_text_token_reserve)
         self.image_item_token_overhead = int(image_item_token_overhead)
+        if decoded_image_cache_entries < 0:
+            raise ValueError("decoded_image_cache_entries must be non-negative")
+        self.decoded_image_cache_entries = int(decoded_image_cache_entries)
         self.process_vision_info = process_vision_info
         self.vision_geometry = qwen_vision_geometry(processor)
+        # This cache contains resized CPU images only. Keeping it deliberately
+        # small avoids repeatedly opening the same packet JPEGs without adding
+        # any CUDA allocations or changing the pixels passed to the processor.
+        self._decoded_image_cache: OrderedDict[
+            tuple[int, tuple[str, ...]], tuple[Any, ...]
+        ] = OrderedDict()
 
     def effective_max_pixels(self, example: JudgeExample) -> int:
         effective_max_pixels = adaptive_image_max_pixels(
@@ -268,10 +279,31 @@ class JudgeFrameCollator:
         rendered = _apply_chat_template(self.processor, messages)
         _assert_thinking_disabled(rendered)
         rendered += VERDICT_ASSISTANT_PREFIX
-        image_inputs, video_inputs = self.process_vision_info(
-            messages,
-            image_patch_size=self.vision_geometry["patch_size"],
-        )
+        image_inputs = None
+        video_inputs = None
+        if example.frame_count:
+            cache_key = (effective_max_pixels, example.frames)
+            cached = self._decoded_image_cache.get(cache_key)
+            if cached is not None:
+                self._decoded_image_cache.move_to_end(cache_key)
+                image_inputs = list(cached)
+            else:
+                image_inputs, video_inputs = self.process_vision_info(
+                    messages,
+                    image_patch_size=self.vision_geometry["patch_size"],
+                )
+                if (
+                    self.decoded_image_cache_entries > 0
+                    and image_inputs is not None
+                    and (video_inputs is None or len(video_inputs) == 0)
+                ):
+                    self._decoded_image_cache[cache_key] = tuple(image_inputs)
+                    self._decoded_image_cache.move_to_end(cache_key)
+                    while (
+                        len(self._decoded_image_cache)
+                        > self.decoded_image_cache_entries
+                    ):
+                        self._decoded_image_cache.popitem(last=False)
         if video_inputs is not None and len(video_inputs) > 0:
             raise RuntimeError("independent-image judge input unexpectedly produced videos")
         processor_kwargs: dict[str, Any] = {

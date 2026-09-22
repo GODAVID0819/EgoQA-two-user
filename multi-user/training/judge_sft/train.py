@@ -822,7 +822,7 @@ def _training_argument_kwargs(
         "tf32": True,
         "gradient_checkpointing": False,
         "remove_unused_columns": False,
-        "dataloader_num_workers": 0,
+        "dataloader_num_workers": args.dataloader_num_workers,
         "dataloader_pin_memory": True,
         "logging_steps": 1,
         "save_strategy": "steps" if args.max_steps > 0 else "epoch",
@@ -841,6 +841,14 @@ def _training_argument_kwargs(
         raise RuntimeError("installed Transformers does not support TP-safe model-only checkpoints")
     kwargs["parallelism_config"] = parallelism_config
     kwargs["save_only_model"] = True
+    if args.dataloader_num_workers > 0:
+        kwargs["dataloader_persistent_workers"] = True
+        kwargs["dataloader_prefetch_factor"] = args.dataloader_prefetch_factor
+        # Workers decode and resize JPEGs on CPU while the main process runs
+        # the current forward/backward pass on CUDA.
+        kwargs["dataloader_multiprocessing_context"] = "fork"
+    if "dataloader_non_blocking" in parameter_names:
+        kwargs["dataloader_non_blocking"] = True
     if "warmup_ratio" in parameter_names:
         kwargs["warmup_ratio"] = args.warmup_ratio
     elif "warmup_steps" in parameter_names:
@@ -967,6 +975,21 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=DEFAULTS.gradient_checkpointing,
     )
+    parser.add_argument(
+        "--dataloader-num-workers",
+        type=int,
+        default=DEFAULTS.dataloader_num_workers,
+    )
+    parser.add_argument(
+        "--dataloader-prefetch-factor",
+        type=int,
+        default=DEFAULTS.dataloader_prefetch_factor,
+    )
+    parser.add_argument(
+        "--decoded-image-cache-entries",
+        type=int,
+        default=DEFAULTS.decoded_image_cache_entries,
+    )
     return parser
 
 
@@ -974,6 +997,12 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.gradient_accumulation_steps < 1:
         raise ValueError("gradient_accumulation_steps must be positive")
+    if args.dataloader_num_workers < 0:
+        raise ValueError("dataloader_num_workers must be non-negative")
+    if args.dataloader_prefetch_factor < 1:
+        raise ValueError("dataloader_prefetch_factor must be positive")
+    if args.decoded_image_cache_entries < 0:
+        raise ValueError("decoded_image_cache_entries must be non-negative")
     if args.max_steps == 0 or args.max_steps < -1:
         raise ValueError("max_steps must be -1 or a positive integer")
     if args.tensor_parallel_size != 2:
@@ -1070,6 +1099,7 @@ def main() -> None:
         image_context_target_fraction=args.image_context_target_fraction,
         image_text_token_reserve=args.image_text_token_reserve,
         image_item_token_overhead=args.image_item_token_overhead,
+        decoded_image_cache_entries=args.decoded_image_cache_entries,
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     run_contract = {

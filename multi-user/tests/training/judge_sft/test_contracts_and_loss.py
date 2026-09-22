@@ -208,6 +208,28 @@ class VerdictContractsAndLossTests(unittest.TestCase):
         self.assertEqual(audit["zero_loss_padding_slots_per_epoch"], 0)
         self.assertTrue(audit["identical_order_on_every_tp_rank"])
 
+    def test_sampler_keeps_shared_media_adjacent_for_cpu_cache_reuse(self) -> None:
+        shared = _example(0, JudgeTask.GROUNDEDNESS, Verdict.PASS)
+        same_media = JudgeExample(
+            **{**shared.__dict__, "example_id": "same-media"}
+        )
+        other_packet = JudgeExample(
+            **{
+                **shared.__dict__,
+                "example_id": "other-packet",
+                "group_id": "other-packet",
+            }
+        )
+        dataset = JudgeDataset([shared, other_packet, same_media])
+        order = list(TensorParallelReplicatedSampler(dataset, seed=42))
+        shared_positions = sorted((order.index(0), order.index(2)))
+
+        self.assertEqual(shared_positions[1] - shared_positions[0], 1)
+        audit = audit_tensor_parallel_sampler(
+            dataset, tensor_parallel_size=2, seed=42
+        )
+        self.assertEqual(audit["media_locality_buckets"], 2)
+
     def test_token_contract_uses_two_distinct_single_tokens(self) -> None:
         token_ids = resolve_verdict_token_ids(FakeTokenizer())
         self.assertEqual(token_ids, {Verdict.FAIL: 7, Verdict.PASS: 11})
@@ -491,6 +513,60 @@ class VerdictContractsAndLossTests(unittest.TestCase):
         self.assertNotIn("cap_pixels_per_frame", processor.call_kwargs)
         self.assertEqual(batch["labels"].tolist(), [[1, 1]])
         self.assertEqual(batch["tp_example_fingerprint"].shape, (1,))
+
+    def test_collator_reuses_packet_local_decoded_images(self) -> None:
+        class Processor:
+            image_processor = SimpleNamespace(
+                patch_size=16,
+                merge_size=2,
+                temporal_patch_size=2,
+            )
+
+            def apply_chat_template(
+                self,
+                messages,
+                *,
+                tokenize,
+                add_generation_prompt,
+                enable_thinking,
+            ):
+                del messages, tokenize, add_generation_prompt, enable_thinking
+                return "assistant-start"
+
+            def __call__(self, **kwargs):
+                del kwargs
+                return {"input_ids": torch.tensor([[1, 2, 3]])}
+
+        decode_calls = []
+
+        def process_vision_info(messages, *, image_patch_size):
+            del image_patch_size
+            decode_calls.append(messages)
+            return [object() for _ in range(1_800)], None
+
+        unit_weights = BinaryClassWeights(
+            fail=1.0,
+            passed=1.0,
+            fail_count=1,
+            pass_count=1,
+        )
+        collator = JudgeFrameCollator(
+            processor=Processor(),
+            class_weights={task: unit_weights for task in JudgeTask},
+            task_scales={task: 1.0 for task in JudgeTask},
+            min_pixels=3_136,
+            max_pixels=262_144,
+            max_input_tokens=262_144,
+            decoded_image_cache_entries=2,
+            process_vision_info=process_vision_info,
+        )
+        example = _example(0, JudgeTask.GROUNDEDNESS, Verdict.PASS)
+
+        first = collator([example])
+        second = collator([example])
+
+        self.assertEqual(len(decode_calls), 1)
+        self.assertTrue(torch.equal(first["input_ids"], second["input_ids"]))
 
     def test_collator_rejects_independent_image_context_above_limit(self) -> None:
         class Processor:
