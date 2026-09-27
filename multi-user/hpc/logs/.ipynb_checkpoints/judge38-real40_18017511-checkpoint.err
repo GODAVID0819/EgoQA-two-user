@@ -1,0 +1,285 @@
+W0919 09:11:28.321000 1226189 site-packages/torch/distributed/run.py:874] 
+W0919 09:11:28.321000 1226189 site-packages/torch/distributed/run.py:874] *****************************************
+W0919 09:11:28.321000 1226189 site-packages/torch/distributed/run.py:874] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0919 09:11:28.321000 1226189 site-packages/torch/distributed/run.py:874] *****************************************
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+[RANK 0] Gradient accumulation steps mismatch: GradientAccumulationPlugin has 1, DeepSpeed config has 16. Using DeepSpeed's value.
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+  0%|          | 0/280 [00:00<?, ?it/s][transformers] `use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`.
+[transformers] `use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`.
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.reduce_scatter_tensor` is deprecated. Please use `torch.distributed.reduce_scatter_single` instead.
+  return func(*args, **kwargs)
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.reduce_scatter_tensor` is deprecated. Please use `torch.distributed.reduce_scatter_single` instead.
+  return func(*args, **kwargs)
+[rank1]:[E919 09:57:11.440106699 ProcessGroupNCCL.cpp:730] [Rank 1] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=8053, OpType=_ALLGATHER_BASE, NumelIn=26216960, NumelOut=52433920, Timeout(ms)=1800000) ran for 1800079 milliseconds before timing out.
+[rank1]:[E919 09:57:11.454973869 ProcessGroupNCCL.cpp:2372] [PG ID 0 PG GUID 0(default_pg) Rank 1]  failure detected by watchdog at work sequence id: 8053 PG status: last enqueued work: 8063, last started work: -1 (), last completed work: 8052
+[rank1]:[E919 09:57:11.457665047 ProcessGroupNCCL.cpp:774] Stack trace of the failed collective: 
+#0 all_gather_single from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/distributed_c10d.py:4387
+#1 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83
+#2 all_gather_into_tensor from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/distributed_c10d.py:4413
+#3 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/typing_extensions.py:3140
+#4 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83
+#5 all_gather_into_tensor from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/comm/torch.py:372
+#6 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/comm/torch.py:173
+#7 all_gather_into_tensor from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/comm/comm.py:335
+#8 log_wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/comm/comm.py:130
+#9 allgather_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/comm/comm.py:350
+#10 wrapped_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/utils/nvtx.py:33
+#11 _dist_allgather_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partition_parameters.py:122
+#12 _all_gather_dtype from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partition_parameters.py:1344
+#13 _all_gather_coalesced from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partition_parameters.py:1457
+#14 all_gather_coalesced from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partition_parameters.py:1583
+#15 wrapped_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/utils/nvtx.py:33
+#16 __all_gather_params_ from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partitioned_param_coordinator.py:609
+#17 __all_gather_params from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partitioned_param_coordinator.py:580
+#18 wrapped_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/utils/nvtx.py:33
+#19 _fetch_sub_module_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partitioned_param_coordinator.py:484
+#20 fetch_sub_module from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partitioned_param_coordinator.py:344
+#21 decorate_context from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/_contextlib.py:124
+#22 wrapped_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/utils/nvtx.py:33
+#23 _fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446
+#24 pre_sub_module_forward_function from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/parameter_offload.py:543
+#25 decorate_context from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/_contextlib.py:124
+#26 _pre_forward_module_hook from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/parameter_offload.py:360
+#27 _fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446
+#28 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1821
+#29 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#30 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#31 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1562
+#32 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/generic.py:939
+#33 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1832
+#34 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#35 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#36 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1769
+#37 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/generic.py:939
+#38 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1832
+#39 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#40 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#41 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/peft/tuners/tuners_utils.py:359
+#42 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1832
+#43 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#44 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#45 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/peft/peft_model.py:2120
+#46 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1832
+#47 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#48 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#49 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/engine.py:3047
+#50 wrapped_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/utils/nvtx.py:33
+#51 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1789
+#52 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#53 _verdict_forward from /scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/trainer.py:61
+#54 compute_loss from /scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/trainer.py:82
+#55 training_step from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py:1940
+#56 _run_epoch from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py:1768
+#57 _inner_training_loop from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py:1540
+#58 train from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py:1458
+#59 main from /scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/train.py:454
+#60 <module> from /scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/train.py:462
+#61 _run_code from <frozen runpy>:88
+#62 _run_module_as_main from <frozen runpy>:198
+
+[rank1]:[E919 09:57:11.457783357 ProcessGroupNCCL.cpp:2714] [PG ID 0 PG GUID 0(default_pg) Rank 1] First PG on this rank to signal dumping.
+[rank0]:[E919 09:57:11.531548767 ProcessGroupNCCL.cpp:730] [Rank 0] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=8054, OpType=_ALLGATHER_BASE, NumelIn=576, NumelOut=1152, Timeout(ms)=1800000) ran for 1800071 milliseconds before timing out.
+[rank0]:[E919 09:57:11.531819795 ProcessGroupNCCL.cpp:2372] [PG ID 0 PG GUID 0(default_pg) Rank 0]  failure detected by watchdog at work sequence id: 8054 PG status: last enqueued work: 8054, last started work: -1 (), last completed work: 8053
+[rank0]:[E919 09:57:11.532705502 ProcessGroupNCCL.cpp:774] Stack trace of the failed collective: 
+#0 all_gather_single from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/distributed_c10d.py:4387
+#1 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83
+#2 all_gather_into_tensor from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/distributed_c10d.py:4413
+#3 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/typing_extensions.py:3140
+#4 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83
+#5 all_gather_into_tensor from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/comm/torch.py:372
+#6 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/comm/torch.py:173
+#7 all_gather_into_tensor from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/comm/comm.py:335
+#8 log_wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/comm/comm.py:130
+#9 allgather_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/comm/comm.py:350
+#10 wrapped_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/utils/nvtx.py:33
+#11 _dist_allgather_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partition_parameters.py:122
+#12 _all_gather_sequential from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partition_parameters.py:1377
+#13 all_gather_coalesced from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partition_parameters.py:1581
+#14 wrapped_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/utils/nvtx.py:33
+#15 __all_gather_params_ from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partitioned_param_coordinator.py:609
+#16 __all_gather_params from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partitioned_param_coordinator.py:580
+#17 wrapped_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/utils/nvtx.py:33
+#18 _fetch_sub_module_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partitioned_param_coordinator.py:381
+#19 fetch_sub_module from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/partitioned_param_coordinator.py:344
+#20 decorate_context from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/_contextlib.py:124
+#21 wrapped_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/utils/nvtx.py:33
+#22 _fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446
+#23 pre_sub_module_forward_function from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/parameter_offload.py:543
+#24 decorate_context from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/_contextlib.py:124
+#25 _pre_forward_module_hook from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/zero/parameter_offload.py:360
+#26 _fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1446
+#27 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1821
+#28 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#29 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#30 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:862
+#31 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1832
+#32 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#33 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#34 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1096
+#35 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/output_capturing.py:262
+#36 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/generic.py:1068
+#37 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1832
+#38 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#39 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#40 get_image_features from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1407
+#41 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/generic.py:939
+#42 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/generic.py:993
+#43 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1530
+#44 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/generic.py:939
+#45 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1832
+#46 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#47 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#48 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py:1769
+#49 wrapper from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/generic.py:939
+#50 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1832
+#51 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#52 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#53 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/peft/tuners/tuners_utils.py:359
+#54 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1832
+#55 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#56 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#57 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/peft/peft_model.py:2120
+#58 inner from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1832
+#59 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1884
+#60 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#61 forward from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/engine.py:3047
+#62 wrapped_fn from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/utils/nvtx.py:33
+#63 _call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1789
+#64 _wrapped_call_impl from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py:1778
+#65 _verdict_forward from /scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/trainer.py:61
+#66 compute_loss from /scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/trainer.py:82
+#67 training_step from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py:1940
+#68 _run_epoch from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py:1768
+#69 _inner_training_loop from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py:1540
+#70 train from /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py:1458
+#71 main from /scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/train.py:454
+#72 <module> from /scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/train.py:462
+#73 _run_code from <frozen runpy>:88
+#74 _run_module_as_main from <frozen runpy>:198
+
+[rank0]:[E919 09:57:11.532814873 ProcessGroupNCCL.cpp:2714] [PG ID 0 PG GUID 0(default_pg) Rank 0] First PG on this rank to signal dumping.
+[rank0]:[E919 09:57:11.600281168 ProcessGroupNCCL.cpp:1964] [PG ID 0 PG GUID 0(default_pg) Rank 0] Received a dump signal due to a collective timeout from this local rank and we will try our best to dump the debug info. Last enqueued NCCL work: 8054, last completed NCCL work: 8053.This is most likely caused by incorrect usages of collectives, e.g., wrong sizes used across ranks, the order of collectives is not same for all ranks or the scheduled collective, for some reason, didn't run. Additionally, this can be caused by GIL deadlock or other reasons such as network errors or bugs in the communications library (e.g. NCCL), etc. 
+[rank0]:[E919 09:57:11.600630704 ProcessGroupNCCL.cpp:1677] [PG ID 0 PG GUID 0(default_pg) Rank 0] ProcessGroupNCCL preparing to dump debug info. Include stack trace: 1, only active collectives: 0
+[rank1]:[E919 09:57:12.093350940 ProcessGroupNCCL.cpp:1964] [PG ID 0 PG GUID 0(default_pg) Rank 1] Received a dump signal due to a collective timeout from this local rank and we will try our best to dump the debug info. Last enqueued NCCL work: 8063, last completed NCCL work: 8052.This is most likely caused by incorrect usages of collectives, e.g., wrong sizes used across ranks, the order of collectives is not same for all ranks or the scheduled collective, for some reason, didn't run. Additionally, this can be caused by GIL deadlock or other reasons such as network errors or bugs in the communications library (e.g. NCCL), etc. 
+[rank1]:[E919 09:57:12.093715822 ProcessGroupNCCL.cpp:1677] [PG ID 0 PG GUID 0(default_pg) Rank 1] ProcessGroupNCCL preparing to dump debug info. Include stack trace: 1, only active collectives: 0
+[rank1]:[E919 09:58:12.824632717 ProcessGroupNCCL.cpp:791] [Rank 1] Some NCCL operations have failed or timed out. Due to the asynchronous nature of CUDA kernels, subsequent GPU operations might run on corrupted/incomplete data.
+[rank1]:[E919 09:58:12.824662501 ProcessGroupNCCL.cpp:805] [Rank 1] To avoid data inconsistency, we are taking the entire process down.
+[rank1]:[E919 09:58:12.825592912 ProcessGroupNCCL.cpp:2174] [PG ID 0 PG GUID 0(default_pg) Rank 1] Process group watchdog thread terminated with exception: [Rank 1] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=8053, OpType=_ALLGATHER_BASE, NumelIn=26216960, NumelOut=52433920, Timeout(ms)=1800000) ran for 1800079 milliseconds before timing out.
+Exception raised from checkTimeout at /__w/pytorch/pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:733 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x9d (0x14c4b4b63bfd in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #1: c10::DistError::DistError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x14c4b4b64bd2 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #2: c10::DistBackendError::DistBackendError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x14c4b4b64d02 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #3: c10d::ProcessGroupNCCL::WorkNCCL::checkTimeout(std::optional<std::chrono::duration<long, std::ratio<1l, 1000l> > >) + 0x2b1 (0x14c3ff84fb41 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #4: c10d::ProcessGroupNCCL::Watchdog::runLoop() + 0x1541 (0x14c3ff85b931 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #5: c10d::ProcessGroupNCCL::Watchdog::run() + 0x157 (0x14c3ff85cd47 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdf0e6 (0x14c4ba1ed0e6 in /scratch/hm2991/conda/envs/qwen38-vllm/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x958bf (0x14c4bf31e8bf in /lib64/libc.so.6)
+frame #8: <unknown function> + 0x10643c (0x14c4bf38f43c in /lib64/libc.so.6)
+
+terminate called after throwing an instance of 'c10::DistBackendError'
+  what():  [PG ID 0 PG GUID 0(default_pg) Rank 1] Process group watchdog thread terminated with exception: [Rank 1] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=8053, OpType=_ALLGATHER_BASE, NumelIn=26216960, NumelOut=52433920, Timeout(ms)=1800000) ran for 1800079 milliseconds before timing out.
+Exception raised from checkTimeout at /__w/pytorch/pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:733 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x9d (0x14c4b4b63bfd in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #1: c10::DistError::DistError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x14c4b4b64bd2 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #2: c10::DistBackendError::DistBackendError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x14c4b4b64d02 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #3: c10d::ProcessGroupNCCL::WorkNCCL::checkTimeout(std::optional<std::chrono::duration<long, std::ratio<1l, 1000l> > >) + 0x2b1 (0x14c3ff84fb41 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #4: c10d::ProcessGroupNCCL::Watchdog::runLoop() + 0x1541 (0x14c3ff85b931 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #5: c10d::ProcessGroupNCCL::Watchdog::run() + 0x157 (0x14c3ff85cd47 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdf0e6 (0x14c4ba1ed0e6 in /scratch/hm2991/conda/envs/qwen38-vllm/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x958bf (0x14c4bf31e8bf in /lib64/libc.so.6)
+frame #8: <unknown function> + 0x10643c (0x14c4bf38f43c in /lib64/libc.so.6)
+
+Exception raised from run at /__w/pytorch/pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:2180 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x9d (0x14c4b4b63bfd in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #1: c10::DistError::DistError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x14c4b4b64bd2 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #2: c10::DistBackendError::DistBackendError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x14c4b4b64d02 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #3: <unknown function> + 0x697922 (0x14c3fef96922 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #4: <unknown function> + 0xdf0e6 (0x14c4ba1ed0e6 in /scratch/hm2991/conda/envs/qwen38-vllm/bin/../lib/libstdc++.so.6)
+frame #5: <unknown function> + 0x958bf (0x14c4bf31e8bf in /lib64/libc.so.6)
+frame #6: <unknown function> + 0x10643c (0x14c4bf38f43c in /lib64/libc.so.6)
+
+[rank0]:[E919 09:58:12.094182518 ProcessGroupNCCL.cpp:791] [Rank 0] Some NCCL operations have failed or timed out. Due to the asynchronous nature of CUDA kernels, subsequent GPU operations might run on corrupted/incomplete data.
+[rank0]:[E919 09:58:12.094208065 ProcessGroupNCCL.cpp:805] [Rank 0] To avoid data inconsistency, we are taking the entire process down.
+[rank0]:[E919 09:58:12.095277632 ProcessGroupNCCL.cpp:2174] [PG ID 0 PG GUID 0(default_pg) Rank 0] Process group watchdog thread terminated with exception: [Rank 0] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=8054, OpType=_ALLGATHER_BASE, NumelIn=576, NumelOut=1152, Timeout(ms)=1800000) ran for 1800071 milliseconds before timing out.
+Exception raised from checkTimeout at /__w/pytorch/pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:733 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x9d (0x146b63b63bfd in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #1: c10::DistError::DistError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x146b63b64bd2 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #2: c10::DistBackendError::DistBackendError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x146b63b64d02 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #3: c10d::ProcessGroupNCCL::WorkNCCL::checkTimeout(std::optional<std::chrono::duration<long, std::ratio<1l, 1000l> > >) + 0x2b1 (0x146aaec4fb41 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #4: c10d::ProcessGroupNCCL::Watchdog::runLoop() + 0x1541 (0x146aaec5b931 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #5: c10d::ProcessGroupNCCL::Watchdog::run() + 0x157 (0x146aaec5cd47 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdf0e6 (0x146b6954c0e6 in /scratch/hm2991/conda/envs/qwen38-vllm/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x958bf (0x146b6e57d8bf in /lib64/libc.so.6)
+frame #8: <unknown function> + 0x10643c (0x146b6e5ee43c in /lib64/libc.so.6)
+
+terminate called after throwing an instance of 'c10::DistBackendError'
+  what():  [PG ID 0 PG GUID 0(default_pg) Rank 0] Process group watchdog thread terminated with exception: [Rank 0] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=8054, OpType=_ALLGATHER_BASE, NumelIn=576, NumelOut=1152, Timeout(ms)=1800000) ran for 1800071 milliseconds before timing out.
+Exception raised from checkTimeout at /__w/pytorch/pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:733 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x9d (0x146b63b63bfd in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #1: c10::DistError::DistError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x146b63b64bd2 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #2: c10::DistBackendError::DistBackendError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x146b63b64d02 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #3: c10d::ProcessGroupNCCL::WorkNCCL::checkTimeout(std::optional<std::chrono::duration<long, std::ratio<1l, 1000l> > >) + 0x2b1 (0x146aaec4fb41 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #4: c10d::ProcessGroupNCCL::Watchdog::runLoop() + 0x1541 (0x146aaec5b931 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #5: c10d::ProcessGroupNCCL::Watchdog::run() + 0x157 (0x146aaec5cd47 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdf0e6 (0x146b6954c0e6 in /scratch/hm2991/conda/envs/qwen38-vllm/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x958bf (0x146b6e57d8bf in /lib64/libc.so.6)
+frame #8: <unknown function> + 0x10643c (0x146b6e5ee43c in /lib64/libc.so.6)
+
+Exception raised from run at /__w/pytorch/pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:2180 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x9d (0x146b63b63bfd in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #1: c10::DistError::DistError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x146b63b64bd2 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #2: c10::DistBackendError::DistBackendError(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x72 (0x146b63b64d02 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libc10.so)
+frame #3: <unknown function> + 0x697922 (0x146aae396922 in /scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/lib/libtorch_cuda.so)
+frame #4: <unknown function> + 0xdf0e6 (0x146b6954c0e6 in /scratch/hm2991/conda/envs/qwen38-vllm/bin/../lib/libstdc++.so.6)
+frame #5: <unknown function> + 0x958bf (0x146b6e57d8bf in /lib64/libc.so.6)
+frame #6: <unknown function> + 0x10643c (0x146b6e5ee43c in /lib64/libc.so.6)
+
+E0919 09:58:19.475000 1226189 site-packages/torch/distributed/elastic/multiprocessing/api.py:1002] failed (exitcode: -6) local_rank: 0 (pid: 1226248) of binary: /scratch/hm2991/conda/envs/qwen38-vllm/bin/python
+Traceback (most recent call last):
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/bin/torchrun", line 10, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 367, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/run.py", line 1028, in main
+    run(args)
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/run.py", line 1019, in run
+    elastic_launch(
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 194, in __call__
+    return launch_agent(
+           ^^^^^^^^^^^^^
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 383, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+========================================================
+training.judge_sft.train FAILED
+--------------------------------------------------------
+Failures:
+[1]:
+  time      : 2026-09-19_09:58:19
+  host      : gh127.hpc.nyu.edu
+  rank      : 1 (local_rank: 1)
+  exitcode  : -6 (pid: 1226249)  (SIGABRT)
+  error_file: <N/A>
+  traceback : Signal 6 (SIGABRT) received by PID 1226249
+--------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-09-19_09:58:19
+  host      : gh127.hpc.nyu.edu
+  rank      : 0 (local_rank: 0)
+  exitcode  : -6 (pid: 1226248)  (SIGABRT)
+  error_file: <N/A>
+  traceback : Signal 6 (SIGABRT) received by PID 1226248
+========================================================
+judge real40 training failed stage=train exit_code=1

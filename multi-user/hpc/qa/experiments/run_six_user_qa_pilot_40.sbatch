@@ -21,7 +21,5 @@ MAX_ATTEMPTS="1"
 ALLOW_PARTIAL="1"
 export RUN_MODE ACCEPTED_TARGET EVIDENCE_TARGET MAX_GROUPS MAX_ATTEMPTS ALLOW_PARTIAL
 
-PROJECT_ROOT="${PROJECT_ROOT:-/scratch/hm2991/Long-video-understanding-clip}"
-PACKAGE_ROOT="${PACKAGE_ROOT:-${PROJECT_ROOT}/egolife_two_user_qa/multi-user}"
-export PROJECT_ROOT PACKAGE_ROOT
+PROJECT_ROOT="${PROJECT_ROOT:-/scratch/xl6775/projects/EgoQA-two-user-grpo-clean}"
 bash "${PROJECT_ROOT}/hpc/qa/smoke/run_six_user_qa_runtime_probe.sbatch"

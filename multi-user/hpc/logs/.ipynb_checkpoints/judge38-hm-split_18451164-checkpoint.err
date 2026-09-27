@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/prepare_real_data.py", line 818, in <module>
+    main()
+  File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/prepare_real_data.py", line 813, in main
+    result = prepare(args)
+             ^^^^^^^^^^^^^
+  File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/prepare_real_data.py", line 732, in prepare
+    records, exclusions, prompt_snapshots = build_records(
+                                            ^^^^^^^^^^^^^^
+  File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/prepare_real_data.py", line 571, in build_records
+    _validate_qa_join(label, attempt)
+  File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/prepare_real_data.py", line 423, in _validate_qa_join
+    raise ValueError(
+ValueError: RLHF6U_DAY2_16200000_A1_A2_A3_A4_A5_A6__ASKER_A1::attempt_03: human label and generation trajectory disagree on options

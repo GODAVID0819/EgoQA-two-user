@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import os
+import time
 from collections import OrderedDict
 from typing import Any, Callable, Mapping
 
@@ -202,6 +204,7 @@ class JudgeFrameCollator:
         image_text_token_reserve: int = DEFAULT_IMAGE_TEXT_TOKEN_RESERVE,
         image_item_token_overhead: int = DEFAULT_IMAGE_ITEM_TOKEN_OVERHEAD,
         decoded_image_cache_entries: int = 2,
+        probe_instrumentation: bool = False,
         process_vision_info: Callable[..., Any] | None = None,
     ) -> None:
         if not 0 < min_pixels <= max_pixels:
@@ -224,8 +227,10 @@ class JudgeFrameCollator:
         if decoded_image_cache_entries < 0:
             raise ValueError("decoded_image_cache_entries must be non-negative")
         self.decoded_image_cache_entries = int(decoded_image_cache_entries)
+        self.probe_instrumentation = bool(probe_instrumentation)
         self.process_vision_info = process_vision_info
         self.vision_geometry = qwen_vision_geometry(processor)
+        self._probe_worker_last_end_ns: int | None = None
         # This cache contains resized CPU images only. Keeping it deliberately
         # small avoids repeatedly opening the same packet JPEGs without adding
         # any CUDA allocations or changing the pixels passed to the processor.
@@ -261,6 +266,15 @@ class JudgeFrameCollator:
             )
         import torch
 
+        probe_start_ns = time.monotonic_ns() if self.probe_instrumentation else 0
+        worker_info = torch.utils.data.get_worker_info()
+        probe_worker_id = -1 if worker_info is None else int(worker_info.id)
+        probe_worker_idle_before_ms = None
+        if self.probe_instrumentation and self._probe_worker_last_end_ns is not None:
+            probe_worker_idle_before_ms = (
+                probe_start_ns - self._probe_worker_last_end_ns
+            ) / 1e6
+
         example = features[0]
         effective_max_pixels = self.effective_max_pixels(example)
         content: list[dict[str, Any]] = []
@@ -281,17 +295,27 @@ class JudgeFrameCollator:
         rendered += VERDICT_ASSISTANT_PREFIX
         image_inputs = None
         video_inputs = None
+        probe_cache_hit = False
+        probe_vision_info_ms = 0.0
         if example.frame_count:
             cache_key = (effective_max_pixels, example.frames)
             cached = self._decoded_image_cache.get(cache_key)
             if cached is not None:
+                probe_cache_hit = True
                 self._decoded_image_cache.move_to_end(cache_key)
                 image_inputs = list(cached)
             else:
+                probe_vision_start_ns = (
+                    time.monotonic_ns() if self.probe_instrumentation else 0
+                )
                 image_inputs, video_inputs = self.process_vision_info(
                     messages,
                     image_patch_size=self.vision_geometry["patch_size"],
                 )
+                if self.probe_instrumentation:
+                    probe_vision_info_ms = (
+                        time.monotonic_ns() - probe_vision_start_ns
+                    ) / 1e6
                 if (
                     self.decoded_image_cache_entries > 0
                     and image_inputs is not None
@@ -313,7 +337,15 @@ class JudgeFrameCollator:
         }
         if image_inputs is not None and len(image_inputs) > 0:
             processor_kwargs["images"] = image_inputs
+        probe_processor_start_ns = (
+            time.monotonic_ns() if self.probe_instrumentation else 0
+        )
         batch = self.processor(**processor_kwargs)
+        probe_processor_ms = 0.0
+        if self.probe_instrumentation:
+            probe_processor_ms = (
+                time.monotonic_ns() - probe_processor_start_ns
+            ) / 1e6
         batch.pop("video_metadata", None)
         input_tokens = int(batch["input_ids"].shape[-1])
         if input_tokens > self.max_input_tokens:
@@ -340,4 +372,23 @@ class JudgeFrameCollator:
             [self._example_fingerprint(example.example_id)],
             dtype=torch.long,
         )
+        if self.probe_instrumentation:
+            probe_end_ns = time.monotonic_ns()
+            batch["_probe_meta"] = {
+                "example_id": example.example_id,
+                "rank": int(os.environ.get("RANK", "0")),
+                "worker_id": probe_worker_id,
+                "worker_pid": os.getpid(),
+                "frame_count": int(example.frame_count),
+                "input_tokens": input_tokens,
+                "effective_max_pixels": int(effective_max_pixels),
+                "cache_hit": bool(probe_cache_hit),
+                "collate_start_ns": probe_start_ns,
+                "collate_end_ns": probe_end_ns,
+                "collate_ms": (probe_end_ns - probe_start_ns) / 1e6,
+                "worker_idle_before_ms": probe_worker_idle_before_ms,
+                "vision_info_ms": probe_vision_info_ms,
+                "processor_ms": probe_processor_ms,
+            }
+            self._probe_worker_last_end_ns = probe_end_ns
         return dict(batch)

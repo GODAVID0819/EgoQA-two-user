@@ -91,7 +91,8 @@ def class_weights_by_task(
     for task in JudgeTask:
         targets = [row.target for row in rows if row.task is task]
         if not targets:
-            raise ValueError(f"training manifest has no {task.value} examples")
+            # Single-task training may legitimately omit other judge tasks.
+            continue
         result[task] = balanced_binary_class_weights(
             targets,
             smoothing=smoothing,

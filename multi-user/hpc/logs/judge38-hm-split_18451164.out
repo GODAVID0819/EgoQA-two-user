@@ -1,0 +1,4 @@
+train_candidates=176
+train_packets=32
+heldout_candidates=46
+heldout_packets=8

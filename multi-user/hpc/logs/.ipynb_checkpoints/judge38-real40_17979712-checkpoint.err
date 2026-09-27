@@ -1,0 +1,185 @@
+W0919 01:55:50.417000 1465241 site-packages/torch/distributed/run.py:874] 
+W0919 01:55:50.417000 1465241 site-packages/torch/distributed/run.py:874] *****************************************
+W0919 01:55:50.417000 1465241 site-packages/torch/distributed/run.py:874] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0919 01:55:50.417000 1465241 site-packages/torch/distributed/run.py:874] *****************************************
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+[RANK 0] Gradient accumulation steps mismatch: GradientAccumulationPlugin has 1, DeepSpeed config has 16. Using DeepSpeed's value.
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 144, in __strict_setattr__
+[rank1]:     validator(value)
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 625, in validator
+[rank1]:     type_validator(field.name, value, field.type)
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 482, in type_validator
+[rank1]:     type_validator(name, value, args[0])
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 470, in type_validator
+[rank1]:     validator(name, value, args)
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 507, in _validate_union
+[rank1]:     raise TypeError(
+[rank1]: TypeError: Field 'fps' with value [] doesn't match any type in (<class 'int'>, <class 'float'>, <class 'NoneType'>). Errors: Field 'fps' expected int, got list (value: []); Field 'fps' expected float, got list (value: []); Field 'fps' expected NoneType, got list (value: [])
+
+[rank1]: The above exception was the direct cause of the following exception:
+
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "<frozen runpy>", line 198, in _run_module_as_main
+[rank1]:   File "<frozen runpy>", line 88, in _run_code
+[rank1]:   File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/train.py", line 462, in <module>
+[rank1]:     main()
+[rank1]:   File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/train.py", line 454, in main
+[rank1]:     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 1458, in train
+[rank1]:     return inner_training_loop(
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 1540, in _inner_training_loop
+[rank1]:     self._run_epoch(
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 1735, in _run_epoch
+[rank1]:     batch_samples, num_items_in_batch = self.get_batch_samples(epoch_iterator, num_batches, self.args.device)
+[rank1]:                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 2143, in get_batch_samples
+[rank1]:     batch_samples.append(next(epoch_iterator))
+[rank1]:                          ^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/accelerate/data_loader.py", line 586, in __iter__
+[rank1]:     current_batch = next(dataloader_iter)
+[rank1]:                     ^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/data/dataloader.py", line 725, in __next__
+[rank1]:     data = self._next_data()
+[rank1]:            ^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/data/dataloader.py", line 785, in _next_data
+[rank1]:     data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/data/_utils/fetch.py", line 57, in fetch
+[rank1]:     return self.collate_fn(data)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/collator.py", line 217, in __call__
+[rank1]:     batch = self.processor(
+[rank1]:             ^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/processing_utils.py", line 669, in __call__
+[rank1]:     merged_kwargs = self._merge_kwargs(
+[rank1]:                     ^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/processing_utils.py", line 1683, in _merge_kwargs
+[rank1]:     validate_typed_dict(typed_dict_obj, output_kwargs[key])
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 333, in validate_typed_dict
+[rank1]:     strict_cls(**data)  # will raise if validation fails
+[rank1]:     ^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 275, in init_with_validate
+[rank1]:     initial_init(self, *args, **kwargs)  # type: ignore [call-arg]
+[rank1]:     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "<string>", line 21, in __init__
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 146, in __strict_setattr__
+[rank1]:     raise StrictDataclassFieldValidationError(field=name, cause=e) from e
+[rank1]: huggingface_hub.errors.StrictDataclassFieldValidationError: Validation error for field 'fps':
+[rank1]:     TypeError: Field 'fps' with value [] doesn't match any type in (<class 'int'>, <class 'float'>, <class 'NoneType'>). Errors: Field 'fps' expected int, got list (value: []); Field 'fps' expected float, got list (value: []); Field 'fps' expected NoneType, got list (value: [])
+  0%|          | 0/280 [00:00<?, ?it/s][rank0]: Traceback (most recent call last):
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 144, in __strict_setattr__
+[rank0]:     validator(value)
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 625, in validator
+[rank0]:     type_validator(field.name, value, field.type)
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 482, in type_validator
+[rank0]:     type_validator(name, value, args[0])
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 470, in type_validator
+[rank0]:     validator(name, value, args)
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 507, in _validate_union
+[rank0]:     raise TypeError(
+[rank0]: TypeError: Field 'fps' with value [] doesn't match any type in (<class 'int'>, <class 'float'>, <class 'NoneType'>). Errors: Field 'fps' expected int, got list (value: []); Field 'fps' expected float, got list (value: []); Field 'fps' expected NoneType, got list (value: [])
+
+[rank0]: The above exception was the direct cause of the following exception:
+
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "<frozen runpy>", line 198, in _run_module_as_main
+[rank0]:   File "<frozen runpy>", line 88, in _run_code
+[rank0]:   File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/train.py", line 462, in <module>
+[rank0]:     main()
+[rank0]:   File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/train.py", line 454, in main
+[rank0]:     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 1458, in train
+[rank0]:     return inner_training_loop(
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 1540, in _inner_training_loop
+[rank0]:     self._run_epoch(
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 1735, in _run_epoch
+[rank0]:     batch_samples, num_items_in_batch = self.get_batch_samples(epoch_iterator, num_batches, self.args.device)
+[rank0]:                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 2143, in get_batch_samples
+[rank0]:     batch_samples.append(next(epoch_iterator))
+[rank0]:                          ^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/accelerate/data_loader.py", line 586, in __iter__
+[rank0]:     current_batch = next(dataloader_iter)
+[rank0]:                     ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/data/dataloader.py", line 725, in __next__
+[rank0]:     data = self._next_data()
+[rank0]:            ^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/data/dataloader.py", line 785, in _next_data
+[rank0]:     data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/data/_utils/fetch.py", line 57, in fetch
+[rank0]:     return self.collate_fn(data)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/collator.py", line 217, in __call__
+[rank0]:     batch = self.processor(
+[rank0]:             ^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/processing_utils.py", line 669, in __call__
+[rank0]:     merged_kwargs = self._merge_kwargs(
+[rank0]:                     ^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/processing_utils.py", line 1683, in _merge_kwargs
+[rank0]:     validate_typed_dict(typed_dict_obj, output_kwargs[key])
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 333, in validate_typed_dict
+[rank0]:     strict_cls(**data)  # will raise if validation fails
+[rank0]:     ^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 275, in init_with_validate
+[rank0]:     initial_init(self, *args, **kwargs)  # type: ignore [call-arg]
+[rank0]:     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "<string>", line 21, in __init__
+[rank0]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/huggingface_hub/dataclasses.py", line 146, in __strict_setattr__
+[rank0]:     raise StrictDataclassFieldValidationError(field=name, cause=e) from e
+[rank0]: huggingface_hub.errors.StrictDataclassFieldValidationError: Validation error for field 'fps':
+[rank0]:     TypeError: Field 'fps' with value [] doesn't match any type in (<class 'int'>, <class 'float'>, <class 'NoneType'>). Errors: Field 'fps' expected int, got list (value: []); Field 'fps' expected float, got list (value: []); Field 'fps' expected NoneType, got list (value: [])
+  0%|          | 0/280 [00:00<?, ?it/s]
+W0919 02:00:12.730000 1465241 site-packages/torch/distributed/elastic/multiprocessing/api.py:1028] Sending process 1465294 closing signal SIGTERM
+E0919 02:00:13.397000 1465241 site-packages/torch/distributed/elastic/multiprocessing/api.py:1002] failed (exitcode: 1) local_rank: 1 (pid: 1465295) of binary: /scratch/hm2991/conda/envs/qwen38-vllm/bin/python
+Traceback (most recent call last):
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/bin/torchrun", line 10, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 367, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/run.py", line 1028, in main
+    run(args)
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/run.py", line 1019, in run
+    elastic_launch(
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 194, in __call__
+    return launch_agent(
+           ^^^^^^^^^^^^^
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 383, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+training.judge_sft.train FAILED
+------------------------------------------------------------
+Failures:
+[1]:
+  time      : 2026-09-19_02:00:13
+  host      : gh130.hpc.nyu.edu
+  rank      : 0 (local_rank: 0)
+  exitcode  : -15 (pid: 1465294)  (SIGTERM)
+  error_file: <N/A>
+  traceback : Signal 15 (SIGTERM) received by PID 1465294
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-09-19_02:00:12
+  host      : gh130.hpc.nyu.edu
+  rank      : 1 (local_rank: 1)
+  exitcode  : 1 (pid: 1465295) 
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
+judge real40 training failed stage=train exit_code=1

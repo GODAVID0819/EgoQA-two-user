@@ -1,0 +1,225 @@
+W0919 16:36:00.117000 1709812 site-packages/torch/distributed/run.py:874] 
+W0919 16:36:00.117000 1709812 site-packages/torch/distributed/run.py:874] *****************************************
+W0919 16:36:00.117000 1709812 site-packages/torch/distributed/run.py:874] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0919 16:36:00.117000 1709812 site-packages/torch/distributed/run.py:874] *****************************************
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+[RANK 0] Gradient accumulation steps mismatch: GradientAccumulationPlugin has 1, DeepSpeed config has 16. Using DeepSpeed's value.
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/c10d_logger.py:83: FutureWarning: `torch.distributed.all_gather_into_tensor` is deprecated. Please use `torch.distributed.all_gather_single` instead.
+  return func(*args, **kwargs)
+  0%|          | 0/280 [00:00<?, ?it/s][transformers] `use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`.
+[transformers] `use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`.
+[rank1]:[W919 16:49:32.295095584 CUDACachingAllocator.cpp:508] expandable_segments: memory mapping failed with OOM on device 1 while trying to map 20971520 bytes (free: 18546688, total: 150101688320).
+[rank0]:[W919 16:49:32.318759367 CUDACachingAllocator.cpp:508] expandable_segments: memory mapping failed with OOM on device 0 while trying to map 20971520 bytes (free: 18546688, total: 150101688320).
+[rank1]:[W919 16:49:35.864018849 CUDACachingAllocator.cpp:508] expandable_segments: memory mapping failed with OOM on device 1 while trying to map 20971520 bytes (free: 16449536, total: 150101688320).
+[rank0]:[W919 16:49:39.618051321 CUDACachingAllocator.cpp:508] expandable_segments: memory mapping failed with OOM on device 0 while trying to map 20971520 bytes (free: 16449536, total: 150101688320).
+[rank1]:[W919 16:49:41.855254313 CUDACachingAllocator.cpp:508] expandable_segments: memory mapping failed with OOM on device 1 while trying to map 20971520 bytes (free: 16449536, total: 150101688320).
+[rank0]:[W919 16:49:41.863484363 CUDACachingAllocator.cpp:508] expandable_segments: memory mapping failed with OOM on device 0 while trying to map 20971520 bytes (free: 16449536, total: 150101688320).
+[rank1]:[W919 16:49:42.103053646 CUDACachingAllocator.cpp:508] expandable_segments: memory mapping failed with OOM on device 1 while trying to map 20971520 bytes (free: 16449536, total: 150101688320).
+[rank1]:[W919 16:49:42.163453015 CUDACachingAllocator.cpp:508] expandable_segments: memory mapping failed with OOM on device 1 while trying to map 20971520 bytes (free: 18546688, total: 150101688320).
+[rank1]:[W919 16:49:42.169852273 CUDACachingAllocator.cpp:508] expandable_segments: memory mapping failed with OOM on device 1 while trying to map 20971520 bytes (free: 18546688, total: 150101688320).
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "<frozen runpy>", line 198, in _run_module_as_main
+[rank1]:   File "<frozen runpy>", line 88, in _run_code
+[rank1]:   File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/train.py", line 516, in <module>
+[rank1]:     main()
+[rank1]:   File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/train.py", line 508, in main
+[rank1]:     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 1458, in train
+[rank1]:     return inner_training_loop(
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 1540, in _inner_training_loop
+[rank1]:     self._run_epoch(
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 1768, in _run_epoch
+[rank1]:     tr_loss_step = self.training_step(model, inputs, num_items_in_batch)
+[rank1]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/trainer.py", line 1940, in training_step
+[rank1]:     loss = self.compute_loss(model, inputs, num_items_in_batch=num_items_in_batch)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/trainer.py", line 227, in compute_loss
+[rank1]:     loss, pair_logits, _ = self._verdict_forward(model, inputs)
+[rank1]:                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/training/judge_sft/trainer.py", line 206, in _verdict_forward
+[rank1]:     outputs = model(**model_inputs, return_dict=True)
+[rank1]:               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1789, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/utils/nvtx.py", line 33, in wrapped_fn
+[rank1]:     ret_val = func(*args, **kwargs)
+[rank1]:               ^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/deepspeed/runtime/engine.py", line 3047, in forward
+[rank1]:     loss = self.module(*inputs, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1884, in _call_impl
+[rank1]:     return inner()
+[rank1]:            ^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1832, in inner
+[rank1]:     result = forward_call(*args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/peft/peft_model.py", line 2120, in forward
+[rank1]:     return self.base_model(
+[rank1]:            ^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1884, in _call_impl
+[rank1]:     return inner()
+[rank1]:            ^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1832, in inner
+[rank1]:     result = forward_call(*args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/peft/tuners/tuners_utils.py", line 359, in forward
+[rank1]:     return self.model(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1884, in _call_impl
+[rank1]:     return inner()
+[rank1]:            ^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1832, in inner
+[rank1]:     result = forward_call(*args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/generic.py", line 939, in wrapper
+[rank1]:     output = func(self, *args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py", line 1769, in forward
+[rank1]:     outputs = self.model(
+[rank1]:               ^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1884, in _call_impl
+[rank1]:     return inner()
+[rank1]:            ^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1832, in inner
+[rank1]:     result = forward_call(*args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/generic.py", line 939, in wrapper
+[rank1]:     output = func(self, *args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py", line 1562, in forward
+[rank1]:     outputs = self.language_model(
+[rank1]:               ^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1884, in _call_impl
+[rank1]:     return inner()
+[rank1]:            ^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1832, in inner
+[rank1]:     result = forward_call(*args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/generic.py", line 1068, in wrapper
+[rank1]:     output = func(self, *args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/utils/output_capturing.py", line 262, in wrapper
+[rank1]:     outputs = func(self, *args, **kwargs)
+[rank1]:               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py", line 1206, in forward
+[rank1]:     hidden_states = decoder_layer(
+[rank1]:                     ^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/modeling_layers.py", line 113, in __call__
+[rank1]:     return self._gradient_checkpointing_func(partial(super().__call__, **kwargs), *args)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/_compile.py", line 54, in inner
+[rank1]:     return disable_fn(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1446, in _fn
+[rank1]:     return fn(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/checkpoint.py", line 522, in checkpoint
+[rank1]:     gen.throw(e)
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/checkpoint.py", line 1706, in _checkpoint_without_reentrant_generator
+[rank1]:     yield
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/utils/checkpoint.py", line 519, in checkpoint
+[rank1]:     ret = function(*args, **kwargs)
+[rank1]:           ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1884, in _call_impl
+[rank1]:     return inner()
+[rank1]:            ^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1832, in inner
+[rank1]:     result = forward_call(*args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py", line 771, in forward
+[rank1]:     hidden_states = self.linear_attn(
+[rank1]:                     ^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1884, in _call_impl
+[rank1]:     return inner()
+[rank1]:            ^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1832, in inner
+[rank1]:     result = forward_call(*args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/integrations/accelerate.py", line 1010, in wrapped
+[rank1]:     output = forward_func(self, *args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py", line 522, in forward
+[rank1]:     core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+[rank1]:                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/integrations/hub_kernels.py", line 861, in wrapped
+[rank1]:     return implementation(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/transformers/models/qwen3_5/modeling_qwen3_5.py", line 326, in torch_chunk_gated_delta_rule
+[rank1]:     core_attn_out = core_attn_out.transpose(1, 2).contiguous().to(initial_dtype)
+[rank1]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.75 GiB. GPU 1 has a total capacity of 139.79 GiB of which 1.54 GiB is free. Process 1709789 has 788.00 MiB memory in use. Including non-PyTorch memory, this process has 137.37 GiB memory in use. Of the allocated memory 135.37 GiB is allocated by PyTorch, and 254.18 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+W0919 16:49:58.905000 1709812 site-packages/torch/distributed/elastic/multiprocessing/api.py:1028] Sending process 1709855 closing signal SIGTERM
+E0919 16:50:07.733000 1709812 site-packages/torch/distributed/elastic/multiprocessing/api.py:1002] failed (exitcode: 1) local_rank: 1 (pid: 1709856) of binary: /scratch/hm2991/conda/envs/qwen38-vllm/bin/python
+Traceback (most recent call last):
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/bin/torchrun", line 10, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 367, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/run.py", line 1028, in main
+    run(args)
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/run.py", line 1019, in run
+    elastic_launch(
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 194, in __call__
+    return launch_agent(
+           ^^^^^^^^^^^^^
+  File "/scratch/hm2991/conda/envs/qwen38-vllm/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 383, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+training.judge_sft.train FAILED
+------------------------------------------------------------
+Failures:
+[1]:
+  time      : 2026-09-19_16:50:07
+  host      : gh131.hpc.nyu.edu
+  rank      : 0 (local_rank: 0)
+  exitcode  : -15 (pid: 1709855)  (SIGTERM)
+  error_file: <N/A>
+  traceback : Signal 15 (SIGTERM) received by PID 1709855
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-09-19_16:49:58
+  host      : gh131.hpc.nyu.edu
+  rank      : 1 (local_rank: 1)
+  exitcode  : 1 (pid: 1709856) 
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
+judge real40 training failed stage=train exit_code=1

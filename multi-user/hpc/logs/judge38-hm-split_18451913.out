@@ -1,0 +1,11 @@
+train_candidates=176
+train_packets=32
+heldout_candidates=46
+heldout_packets=8
+
+========================================
+PREPARATION COMPLETE
+OUTPUT_ROOT=/scratch/hm2991/egolife_judge_sft/hm2991_small_split_manifests_18451913
+TRAIN=/scratch/hm2991/egolife_judge_sft/hm2991_small_split_manifests_18451913/train/train.jsonl
+TEST=/scratch/hm2991/egolife_judge_sft/hm2991_small_split_manifests_18451913/test.jsonl
+========================================

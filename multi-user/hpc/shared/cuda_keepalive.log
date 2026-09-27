@@ -1,0 +1,5 @@
+Please install NVML bindings: pip install nvidia-ml-py3
+Traceback (most recent call last):
+  File "/scratch/hm2991/Long-video-understanding-clip/egolife_two_user_qa/multi-user/hpc/shared/cuda.py", line 11, in <module>
+    import pynvml as nvml
+ModuleNotFoundError: No module named 'pynvml'

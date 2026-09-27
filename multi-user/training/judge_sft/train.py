@@ -825,7 +825,11 @@ def _training_argument_kwargs(
         "dataloader_num_workers": args.dataloader_num_workers,
         "dataloader_pin_memory": True,
         "logging_steps": 1,
-        "save_strategy": "steps" if args.max_steps > 0 else "epoch",
+        "save_strategy": (
+            "no"
+            if args.probe_skip_save
+            else ("steps" if args.max_steps > 0 else "epoch")
+        ),
         "save_steps": args.max_steps if args.max_steps > 0 else 500,
         "max_steps": args.max_steps,
         "seed": args.seed,
@@ -950,6 +954,30 @@ def build_parser() -> argparse.ArgumentParser:
             "manifest. Intended for deterministic one-example smoke runs."
         ),
     )
+    parser.add_argument(
+        "--task",
+        choices=["all", *(task.value for task in JudgeTask)],
+        default="all",
+        help=(
+            "Restrict optimization and weighting to one judge task. "
+            "Single-task runs bypass cross-judge F/G/A weighting."
+        ),
+    )
+    parser.add_argument(
+        "--probe-instrumentation",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Synchronize CUDA at phase boundaries and emit per-rank timing/memory "
+            "JSONL. Intended only for short probes because synchronization reduces throughput."
+        ),
+    )
+    parser.add_argument(
+        "--probe-skip-save",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Skip Trainer state/checkpoint/final-adapter saves for a timing-only probe.",
+    )
     parser.add_argument("--warmup-ratio", type=float, default=DEFAULTS.warmup_ratio)
     parser.add_argument("--lr-scheduler-type", default=DEFAULTS.lr_scheduler_type)
     parser.add_argument(
@@ -1007,19 +1035,45 @@ def main() -> None:
         raise ValueError("max_steps must be -1 or a positive integer")
     if args.tensor_parallel_size != 2:
         raise ValueError("this launcher is intentionally a pure two-GPU TP job")
-    train_examples = load_normalized_manifest(args.train_manifest)
-    task_weights = {
-        JudgeTask.FORMALITY: args.formality_weight,
-        JudgeTask.GROUNDEDNESS: args.groundedness_weight,
-        JudgeTask.ANSWERABILITY: args.answerability_weight,
-    }
-    task_weights = validate_task_weights(task_weights)
-    class_weights = class_weights_by_task(
-        train_examples,
+    manifest_examples = load_normalized_manifest(args.train_manifest)
+    selected_task = None if args.task == "all" else JudgeTask(args.task)
+    train_examples = manifest_examples
+    if selected_task is not None:
+        train_examples = [
+            example
+            for example in manifest_examples
+            if example.task is selected_task
+        ]
+        if not train_examples:
+            raise ValueError(
+                f"manifest contains no examples for requested task={selected_task.value!r}"
+            )
+
+    class_weight_examples = load_normalized_manifest(args.train_manifest)
+    all_class_weights = class_weights_by_task(
+        class_weight_examples,
         smoothing=args.class_weight_smoothing,
         max_weight=args.max_class_weight,
     )
-    task_scales = task_sampling_scales(train_examples, task_weights)
+    class_weights = (
+        all_class_weights
+        if selected_task is None
+        else {selected_task: all_class_weights[selected_task]}
+    )
+    if selected_task is None:
+        task_weights = {
+            JudgeTask.FORMALITY: args.formality_weight,
+            JudgeTask.GROUNDEDNESS: args.groundedness_weight,
+            JudgeTask.ANSWERABILITY: args.answerability_weight,
+        }
+        task_weights = validate_task_weights(task_weights)
+        task_scales = task_sampling_scales(train_examples, task_weights)
+    else:
+        # A single-judge run has no cross-task objective. Keep class balancing
+        # inside the selected task, but make the task scale exactly one.
+        task_weights = {selected_task: 1.0}
+        task_scales = {selected_task: 1.0}
+
     optimization_examples = train_examples
     if args.train_example_id:
         optimization_examples = [
@@ -1100,10 +1154,11 @@ def main() -> None:
         image_text_token_reserve=args.image_text_token_reserve,
         image_item_token_overhead=args.image_item_token_overhead,
         decoded_image_cache_entries=args.decoded_image_cache_entries,
+        probe_instrumentation=args.probe_instrumentation,
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     run_contract = {
-        "contract_version": "verdict_token_bce_independent_images_tp2_upper16_v8",
+        "contract_version": "verdict_token_bce_independent_images_tp2_upper16_v9_probe",
         "model_id": args.model_id,
         "media_contract": (
             "packet-owned 300-frame user timelines sampled at 0.5 FPS; every "
@@ -1132,9 +1187,15 @@ def main() -> None:
                 "frozen_prefix_autograd_guard"
             ]
         },
+        "objective_scope": (
+            "all_judges_weighted"
+            if selected_task is None
+            else f"single_task::{selected_task.value}"
+        ),
         "task_weights": _jsonable_weights(task_weights),
         "class_weights": _jsonable_weights(class_weights),
         "task_sampling_scales": _jsonable_weights(task_scales),
+        "manifest_all_tasks": manifest_summary(manifest_examples),
         "train": manifest_summary(train_examples),
         "optimization_train": manifest_summary(optimization_examples),
         "internal_validation": None,
@@ -1164,6 +1225,8 @@ def main() -> None:
         data_collator=collator,
         verdict_token_ids=token_ids,
         tensor_parallel_size=args.tensor_parallel_size,
+        probe_instrumentation=args.probe_instrumentation,
+        probe_log_dir=str(args.output_dir),
         optimizer_cls_and_kwargs=(
             __import__("torch").optim.AdamW,
             {
@@ -1176,10 +1239,17 @@ def main() -> None:
         ),
     )
     trainer.train()
-    trainer.save_state()
-    trainer.save_model(str(args.output_dir / "final_adapter"))
-    if trainer.is_world_process_zero():
-        processor.save_pretrained(str(args.output_dir / "final_adapter"))
+    probe_summary = trainer.finalize_probe()
+    if probe_summary is not None:
+        print(
+            "probe_summary=" + json.dumps(probe_summary, sort_keys=True),
+            flush=True,
+        )
+    if not args.probe_skip_save:
+        trainer.save_state()
+        trainer.save_model(str(args.output_dir / "final_adapter"))
+        if trainer.is_world_process_zero():
+            processor.save_pretrained(str(args.output_dir / "final_adapter"))
 
 
 if __name__ == "__main__":

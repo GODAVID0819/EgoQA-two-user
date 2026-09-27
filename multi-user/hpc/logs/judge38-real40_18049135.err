@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "<stdin>", line 27, in <module>
+AssertionError: PEFT lacks TP-aware LoRA hooks
+judge real40 training failed stage=environment_preflight exit_code=1

@@ -416,10 +416,28 @@ def _qa_from_label(label: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_join_field(field: str, value: Any) -> Any:
+    """Canonicalize harmless schema differences before QA provenance checks."""
+    if field == "options":
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return value
+            if isinstance(parsed, list):
+                return parsed
+        if isinstance(value, list):
+            return value
+    return value
+
+
 def _validate_qa_join(label: dict[str, Any], attempt: AttemptRecord) -> None:
     expected = _qa_from_label(label)
     for field, value in expected.items():
-        if attempt.qa.get(field) != value:
+        actual = attempt.qa.get(field)
+        if _normalize_join_field(field, actual) != _normalize_join_field(field, value):
             raise ValueError(
                 f"{attempt.candidate_id}: human label and generation trajectory "
                 f"disagree on {field}"
@@ -586,7 +604,7 @@ def build_records(
         )
         validated_views.add(key)
 
-        qa = dict(attempt.qa)
+        qa = _qa_from_label(label)
         formality_errors = prompts.qa_formality_errors(
             qa,
             list(attempt.schema_errors),
