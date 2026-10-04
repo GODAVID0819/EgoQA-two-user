@@ -1180,6 +1180,7 @@ def prepare_packet(
     media_prepare_workers: int = DEFAULT_MEDIA_PREPARE_WORKERS,
     overwrite_stale: bool = False,
     encoder: Any | None = None,
+    materialized_packet: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     dataset_root = Path(dataset_root)
     cache_dir = Path(cache_dir)
@@ -1214,19 +1215,37 @@ def prepare_packet(
     started = time.monotonic()
     try:
         print(f"rlhf_preprocess packet={packet_id} status=preparing_media", flush=True)
-        evidence_packet = build_evidence_packet(
-            _canonical_group(group),
-            cache_dir=cache_dir,
-            output_root=stage / "transient_evidence",
-            users_per_case=USER_COUNT,
-            frames_per_clip=0,
-            download_media=True,
-            download_gaze=False,
-            media_prepare_workers=media_prepare_workers,
-            assemble_long_video=False,
-            defer_gaze_summary=True,
-            extract_preview_frames=False,
-        )
+        if materialized_packet is not None:
+            # 已有同步成片直接进入原采样流程，不重新下载或改写历史媒体。
+            evidence_packet = _canonical_group(materialized_packet)
+            expected = _canonical_group(group)
+            if len(evidence_packet["clips"]) != USER_COUNT or evidence_packet["agents"] != expected["agents"]:
+                raise ValueError("materialized packet 用户集合与 source group 不一致")
+            if any(evidence_packet.get(key) != expected.get(key) for key in ("day", "time_token")):
+                raise ValueError("materialized packet 时间窗口与 source group 不一致")
+            for clip in evidence_packet["clips"]:
+                full_video = clip.get("full_local_video") or clip.get("original_local_video") or clip.get("local_video")
+                if not full_video:
+                    raise ValueError("materialized packet 缺少成片路径")
+                # 只修改采样副本；原 group 的来源分段继续进入 source_identity。
+                clip["local_video"] = str(full_video)
+                clip["source_segments"] = [{"segment_index": 0, "local_video": str(full_video),
+                    "window_start_seconds": 0., "window_end_seconds": float(config["duration_seconds"])}]
+            evidence_packet["required_users"] = [str(c["agent_name"]) for c in evidence_packet["clips"]]
+        else:
+            evidence_packet = build_evidence_packet(
+                _canonical_group(group),
+                cache_dir=cache_dir,
+                output_root=stage / "transient_evidence",
+                users_per_case=USER_COUNT,
+                frames_per_clip=0,
+                download_media=True,
+                download_gaze=False,
+                media_prepare_workers=media_prepare_workers,
+                assemble_long_video=False,
+                defer_gaze_summary=True,
+                extract_preview_frames=False,
+            )
         sample_interval_seconds = float(config["sampling"]["interval_seconds"])
         sampled_users = group_clip_frames(
             evidence_packet,

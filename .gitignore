@@ -20,6 +20,10 @@ data/processed/
 artifacts/
 /hpc/*
 !/hpc/cuda.py
+!/hpc/shared/
+/hpc/shared/*
+!/hpc/shared/cuda.py
+!/hpc/shared/cuda_device_identity.py
 !/hpc/qa/
 /hpc/qa/*
 !/hpc/qa/production/
