@@ -3,6 +3,107 @@
 This package trains the existing language-model vocabulary logits directly. It
 adds no classification head and supervises no scalar score.
 
+## 在其他机器上复现训练
+
+以下步骤复现当前的 groundedness 训练（0.25 FPS、batch 1、GA=4、cosine、
+warmup 0.05、不做类别加权）。
+
+### 1. 硬件
+
+| 项 | 要求 |
+|---|---|
+| GPU | 2 × H200（141 GB）。单卡峰值约 137 GB，80 GB 显卡放不下 |
+| CUDA 驱动 | 支持 CUDA 13.0（环境里是 `torch 2.13.0+cu130`） |
+| 内存 / CPU | 256 GB 内存，约 16 核（两个 dataloader worker 负责解码 900 张图） |
+| 磁盘 | 约 200 GB：模型 52 GB，数据 tar 75 GB，解压后 75 GB |
+
+### 2. 代码
+
+```bash
+git clone -b xth https://github.com/GODAVID0819/EgoQA-two-user.git
+cd EgoQA-two-user/multi-user      # 必须从这个目录启动：入口是 -m training.judge_sft.<module>
+```
+
+### 3. Python 环境
+
+环境文件在 `multi-user/requirements/`：`qwen38-vllm.conda-explicit.txt`、
+`qwen38-vllm.environment.yml`、`qwen38-vllm.pip-freeze.txt`。
+
+```bash
+conda create -y -p ./qwen38-vllm --file requirements/qwen38-vllm.conda-explicit.txt
+grep -v "^-e \|^# " requirements/qwen38-vllm.pip-freeze.txt > /tmp/pip-reqs.txt
+./qwen38-vllm/bin/pip install --no-deps \
+  --extra-index-url https://download.pytorch.org/whl/cu130 \
+  --extra-index-url https://flashinfer.ai/whl \
+  -r /tmp/pip-reqs.txt
+```
+
+两个额外 index 都是必需的：`torch==2.13.0+cu130` 只在 PyTorch 源上有，
+`flashinfer-cubin==0.6.16.post3` 只在 FlashInfer 源上有（PyPI 没有）。
+`--no-deps` 保证装出来的版本与 freeze 完全一致。
+
+### 4. 模型
+
+```bash
+hf download Qwen/Qwen3.8-27B --revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 \
+  --local-dir ./Qwen3.8-27B
+```
+
+### 5. 数据
+
+数据集是私有的 HuggingFace dataset
+`tianxia2/egolife-judge-sft-842-question-split`，需要有访问权限并先 `hf auth login`。
+
+```bash
+hf download tianxia2/egolife-judge-sft-842-question-split --repo-type dataset --local-dir ./judge_data
+cd judge_data
+mkdir -p packets_extracted && for t in packets/*.tar; do tar -xf "$t" -C packets_extracted; done
+```
+
+manifest 里的 `frame_packet` 是原集群的绝对路径
+（`/scratch/hm2991/egolife_rlhf_evidence_v1/packets/<packet_id>`）。运行数据集
+README 里的那段 Python，把它改写为 `packets_extracted/<packet_id>`，生成
+`manifests/{train,test}/train.local.jsonl`。
+
+数据量：train 2694 行（groundedness 674：456 pass / 218 fail），test 672 行
+（groundedness 168：117 pass / 51 fail）。按问题切分，test 复用训练集中的视频
+packet。
+
+### 6. 启动训练
+
+不依赖 SLURM 的启动脚本：`hpc/judge_sft/run_groundedness_portable.sh`。
+
+```bash
+REPO=$PWD \
+ENV=/path/to/qwen38-vllm \
+MODEL=/path/to/Qwen3.8-27B \
+DATA=/path/to/judge_data/manifests \
+bash hpc/judge_sft/run_groundedness_portable.sh
+```
+
+可选环境变量：`OUT`（输出目录）、`TASK`（默认 `groundedness`）、`EPOCHS`
+（默认 10）、`EVAL=0`（关闭每个 epoch 的 test 评估）、`CUDA_VISIBLE_DEVICES`。
+
+先跑一步冒烟测试，确认环境、显存和数据路径：
+
+```bash
+MAX_STEPS=1 EVAL=0 REPO=$PWD ENV=... MODEL=... DATA=... bash hpc/judge_sft/run_groundedness_portable.sh
+```
+
+在原集群上使用的 SLURM 版本是
+`hpc/judge_sft/train_groundedness_025fps_mb1_ga4_noclassw.sbatch`（路径写死为
+集群路径）。
+
+### 7. 运行时间与输出
+
+- 每个优化步（4 条样本）约 63 秒，每个 epoch 169 步约 3 小时；每次 test 评估
+  （168 题）约 45–50 分钟；10 个 epoch 合计约 40 小时。
+- 启动时会逐个检查所有帧文件是否存在，在网络文件系统上可能需要几分钟。
+- 输出：`$OUT/trainer/checkpoint-<step>/`（每个 epoch 一个，含 LoRA adapter 与
+  优化器状态）、`$OUT/trainer/training_contract.json`（全部超参与类别权重）、
+  `$OUT/train.log`（训练 loss 与每个 epoch 的 test 指标）。
+- 离线评估（逐题 margin、AUROC、阈值分析）见 `hpc/judge_sft/eval_margin/`。
+
 ## Exact target and media contract
 
 Every invocation ends at the fixed assistant prefix:
