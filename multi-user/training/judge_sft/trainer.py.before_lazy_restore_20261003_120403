@@ -35,33 +35,6 @@ def media_locality_key(
     )
 
 
-class _LazyBatchWindow:
-    """Stream one GA window without materializing all microbatches."""
-
-    def __init__(self, epoch_iterator, count: int) -> None:
-        self._epoch_iterator = epoch_iterator
-        self._count = int(count)
-
-        if self._count < 1:
-            raise ValueError(
-                "lazy batch window requires a positive count"
-            )
-
-    def __len__(self) -> int:
-        return self._count
-
-    def __iter__(self):
-        for index in range(self._count):
-            try:
-                yield next(self._epoch_iterator)
-            except StopIteration as error:
-                raise RuntimeError(
-                    "epoch iterator ended before expected GA window "
-                    f"completed: expected={self._count}, "
-                    f"observed={index}"
-                ) from error
-
-
 class TensorParallelReplicatedSampler:
     """Emit one deterministic order identically on every tensor-parallel rank."""
 
@@ -613,28 +586,6 @@ def build_verdict_trainer_class() -> type:
                 encoding="utf-8",
             )
             return summary
-
-        def get_batch_samples(
-            self,
-            epoch_iterator,
-            num_batches: int,
-            device,
-        ):
-            """
-            Preserve GA semantics while streaming microbatches lazily.
-
-            Transformers 5.16 normally materializes the entire
-            gradient-accumulation window before training it. For our
-            1,800-frame batches that is unsafe for CPU/GPU memory.
-
-            num_items_in_batch is intentionally None because this
-            custom verdict loss does not use it.
-            """
-            del device
-            return _LazyBatchWindow(
-                epoch_iterator,
-                num_batches,
-            ), None
 
         def get_train_dataloader(self):
             """

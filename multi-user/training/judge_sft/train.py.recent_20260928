@@ -664,7 +664,7 @@ def load_model_and_processor(
 ) -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
     import torch
     import transformers
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, PeftModel, get_peft_model
     from transformers import AutoConfig, AutoProcessor, DistributedConfig, set_seed
 
     processor = AutoProcessor.from_pretrained(
@@ -733,23 +733,35 @@ def load_model_and_processor(
     # Trainer seeds itself only after the model already exists. Reset every TP
     # process here so PEFT's random LoRA-A initialization is deterministic.
     set_seed(args.seed)
-    model = get_peft_model(
-        model,
-        LoraConfig(
-            r=args.lora_rank,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=args.lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-            target_modules=list(args.lora_target_modules),
-            layers_to_transform=trainable_layer_indices,
-            layers_pattern="layers",
-        ),
-        # PEFT otherwise promotes BF16 adapters to FP32. For a long sequence,
-        # that doubles the full LoRA-B output activation and caused the
-        # observed 5.51 GiB up_proj allocation failure.
-        autocast_adapter_dtype=False,
-    )
+    if args.init_adapter_dir is not None:
+        if not args.init_adapter_dir.is_dir():
+            raise FileNotFoundError(args.init_adapter_dir)
+
+        model = PeftModel.from_pretrained(
+            model,
+            str(args.init_adapter_dir),
+            is_trainable=True,
+            autocast_adapter_dtype=False,
+        )
+        print(f"initialized_lora_from={args.init_adapter_dir}", flush=True)
+    else:
+        model = get_peft_model(
+            model,
+            LoraConfig(
+                r=args.lora_rank,
+                lora_alpha=args.lora_alpha,
+                lora_dropout=args.lora_dropout,
+                bias="none",
+                task_type="CAUSAL_LM",
+                target_modules=list(args.lora_target_modules),
+                layers_to_transform=trainable_layer_indices,
+                layers_pattern="layers",
+            ),
+            # PEFT otherwise promotes BF16 adapters to FP32. For a long sequence,
+            # that doubles the full LoRA-B output activation and caused the
+            # observed 5.51 GiB up_proj allocation failure.
+            autocast_adapter_dtype=False,
+        )
     tp_plan_audit["lora_initialization"] = synchronize_lora_initialization(
         model,
         tp_mesh=tp_mesh,
@@ -986,6 +998,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--warmup-ratio", type=float, default=DEFAULTS.warmup_ratio)
     parser.add_argument("--lr-scheduler-type", default=DEFAULTS.lr_scheduler_type)
+    parser.add_argument("--init-adapter-dir", type=Path, default=None)
     parser.add_argument(
         "--gradient-accumulation-steps",
         type=int,
@@ -1024,6 +1037,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULTS.decoded_image_cache_entries,
     )
+    parser.add_argument("--resume-from-checkpoint", type=Path, default=None)
+    parser.add_argument("--stop-after-one-epoch", action="store_true")
     return parser
 
 
@@ -1224,8 +1239,24 @@ def main() -> None:
             encoding="utf-8",
         )
     TrainerClass = build_verdict_trainer_class()
+
+    callbacks = []
+    if args.stop_after_one_epoch:
+        from transformers import TrainerCallback
+
+        class StopAfterOneEpochCallback(TrainerCallback):
+            def on_epoch_end(self, args, state, control, **kwargs):
+                # Force a full Trainer checkpoint at the epoch boundary,
+                # then return control to the orchestration script.
+                control.should_save = True
+                control.should_training_stop = True
+                return control
+
+        callbacks.append(StopAfterOneEpochCallback())
+
     trainer = TrainerClass(
         model=model,
+        callbacks=callbacks,
         args=hf_training_args,
         train_dataset=JudgeDataset(optimization_examples),
         data_collator=collator,
@@ -1244,7 +1275,14 @@ def main() -> None:
             },
         ),
     )
-    trainer.train()
+    resume_checkpoint = (
+        str(args.resume_from_checkpoint.expanduser().resolve())
+        if args.resume_from_checkpoint is not None
+        else None
+    )
+    if trainer.is_world_process_zero():
+        print(f"resume_from_checkpoint={resume_checkpoint}", flush=True)
+    trainer.train(resume_from_checkpoint=resume_checkpoint)
     probe_summary = trainer.finalize_probe()
     if probe_summary is not None:
         print(
