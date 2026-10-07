@@ -101,14 +101,17 @@ MAX_STEPS=1 EVAL=0 REPO=$PWD ENV=... MODEL=... DATA=... bash hpc/judge_sft/run_g
 
 **线性注意力 LoRA**：在 `--lora-target-modules` 里加上 Qwen3.5 Gated DeltaNet 的五个
 投影即可。底座的线性注意力层在两张卡上是复制而非切分，所以这些 LoRA 也保持两卡各
-一份完整参数（反向时对梯度做 all-reduce 平均）。两卡必须算出完全相同的激活，因此要求
-`--lora-dropout 0`，否则启动时报错。
+一份完整参数（反向时对梯度做 all-reduce 平均）。
 
 ```bash
   --lora-target-modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj \
-                        in_proj_qkv in_proj_z in_proj_a in_proj_b out_proj \
-  --lora-dropout 0
+                        in_proj_qkv in_proj_z in_proj_a in_proj_b out_proj
 ```
+
+**两卡 dropout 一致性检查**：两卡复制计算的激活（按列切分层的 LoRA 输入、线性注意力层）
+只有在两卡抽到相同 dropout 掩码时才一致，也就是两卡的 CUDA 随机数状态必须相同。训练时
+每个 micro-batch 前都会收集两卡的 CUDA RNG 状态（seed + offset，16 字节）比较，不一致
+立即报错；第一次检查通过时日志打印 `tp_cuda_rng_check=identical`。
 
 r=16、训练最上面 8 层时，LoRA 参数从 996 万增加到 1459 万。
 
@@ -128,7 +131,7 @@ checkpoint 必须是完整状态（含 `optimizer.pt`、`scheduler.pt`、`traine
 `training_contract.json`），等价于以前的 `--class-weight-smoothing 1e9`。
 
 用 `hpc/judge_sft/run_groundedness_portable.sh` 时：`LINEAR_ATTN=1` 打开线性注意力
-LoRA（自动设 dropout 为 0）；`RESUME=<checkpoint 目录>` 续训，此时把 `OUT` 设为原运行的
+LoRA；`RESUME=<checkpoint 目录>` 续训，此时把 `OUT` 设为原运行的
 目录，新的 checkpoint 和日志会接着写在那里：
 
 ```bash

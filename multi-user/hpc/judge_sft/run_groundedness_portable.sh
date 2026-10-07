@@ -14,14 +14,13 @@ EPOCHS=${EPOCHS:-10}
 MAX_STEPS=${MAX_STEPS:--1}     # e.g. MAX_STEPS=1 for a smoke test
 TRAIN_MANIFEST=${TRAIN_MANIFEST:-$DATA/train/train.local.jsonl}
 TEST_MANIFEST=${TEST_MANIFEST:-$DATA/test/train.local.jsonl}
-LINEAR_ATTN=${LINEAR_ATTN:-0}   # 1 = also put LoRA on the 5 linear-attention projections (forces dropout 0)
+LINEAR_ATTN=${LINEAR_ATTN:-0}   # 1 = also put LoRA on the 5 linear-attention projections
 RESUME=${RESUME:-}             # path to trainer/checkpoint-<step> to resume from
 
 TARGETS=(q_proj k_proj v_proj o_proj gate_proj up_proj down_proj)
-LORA_DROPOUT=0.05
+LORA_DROPOUT=${LORA_DROPOUT:-0.05}
 if [ "$LINEAR_ATTN" = "1" ]; then
   TARGETS+=(in_proj_qkv in_proj_z in_proj_a in_proj_b out_proj)
-  LORA_DROPOUT=0
 fi
 EXTRA_ARGS=()
 if [ -n "$RESUME" ]; then EXTRA_ARGS+=(--resume-from-checkpoint "$RESUME"); fi

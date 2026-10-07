@@ -213,6 +213,24 @@ def logits_to_keep_argument(model: Any) -> str:
     )
 
 
+def describe_cuda_rng_state(state: Any) -> dict[str, int]:
+    """Decode a Philox CUDA RNG state (8-byte seed + 8-byte offset)."""
+
+    raw = bytes(int(value) for value in state.reshape(-1).tolist())
+    return {
+        "seed": int.from_bytes(raw[:8], "little"),
+        "offset": int.from_bytes(raw[8:16], "little"),
+    }
+
+
+def cuda_rng_states_agree(states: list[Any]) -> bool:
+    """True when every TP rank holds the identical CUDA RNG state."""
+
+    import torch
+
+    return all(torch.equal(states[0], state) for state in states[1:])
+
+
 def final_logits(outputs: Any) -> Any:
     logits = outputs.logits
 
@@ -933,6 +951,44 @@ def build_verdict_trainer_class() -> type:
                     f"fingerprints={values}"
                 )
 
+        def _assert_replicated_cuda_rng(self, device: Any) -> None:
+            """Fail if TP ranks would draw different LoRA dropout masks.
+
+            Replicated activations (colwise LoRA inputs, linear-attention
+            layers) are only consistent across ranks when every rank draws the
+            same dropout mask, i.e. holds the same CUDA RNG state.
+            """
+
+            import torch
+
+            if (
+                not torch.distributed.is_available()
+                or not torch.distributed.is_initialized()
+            ):
+                return
+
+            local = torch.cuda.get_rng_state(device).to(device=device)
+            gathered = [
+                torch.empty_like(local)
+                for _ in range(torch.distributed.get_world_size())
+            ]
+            torch.distributed.all_gather(gathered, local)
+            states = [state.cpu() for state in gathered]
+            if not cuda_rng_states_agree(states):
+                raise RuntimeError(
+                    "TP ranks hold different CUDA RNG states, so LoRA dropout "
+                    "masks differ across ranks: "
+                    + json.dumps([describe_cuda_rng_state(s) for s in states])
+                )
+            if not getattr(self, "_cuda_rng_check_logged", False):
+                self._cuda_rng_check_logged = True
+                if self.is_world_process_zero():
+                    print(
+                        "tp_cuda_rng_check=identical "
+                        + json.dumps(describe_cuda_rng_state(states[0])),
+                        flush=True,
+                    )
+
         def _verdict_forward(
             self,
             model: Any,
@@ -951,6 +1007,10 @@ def build_verdict_trainer_class() -> type:
             self._assert_replicated_tp_example(
                 fingerprint
             )
+            if model.training:
+                self._assert_replicated_cuda_rng(
+                    model_inputs["input_ids"].device
+                )
 
             model_inputs[
                 self._logits_to_keep_name

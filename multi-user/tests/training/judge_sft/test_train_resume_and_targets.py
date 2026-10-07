@@ -13,6 +13,7 @@ from peft import LoraConfig, PeftModel, get_peft_model
 from training.judge_sft import train
 from training.judge_sft.contracts import JudgeTask
 from training.judge_sft.loss import BinaryClassWeights
+from training.judge_sft.trainer import cuda_rng_states_agree, describe_cuda_rng_state
 
 
 class _LinearAttention(torch.nn.Module):
@@ -83,17 +84,36 @@ class LoraTargetPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "no TP-aware LoRA factor policy"):
             train.split_lora_targets(["q_proj", "conv1d"])
 
-    def test_linear_attention_lora_requires_zero_dropout(self) -> None:
+    def test_main_rejects_unknown_target_before_loading_data(self) -> None:
         argv = [
             "train.py",
-            "--train-manifest", "unused.jsonl",
+            "--train-manifest", "does-not-exist.jsonl",
             "--output-dir", "unused",
-            "--lora-target-modules", "q_proj", "in_proj_qkv",
-            "--lora-dropout", "0.05",
+            "--lora-target-modules", "q_proj", "conv1d",
         ]
         with patch.object(sys, "argv", argv):
-            with self.assertRaisesRegex(ValueError, "--lora-dropout 0"):
+            with self.assertRaisesRegex(RuntimeError, "no TP-aware LoRA factor policy"):
                 train.main()
+
+
+class CudaRngConsistencyTests(unittest.TestCase):
+    @staticmethod
+    def _state(seed: int, offset: int) -> torch.Tensor:
+        raw = seed.to_bytes(8, "little") + offset.to_bytes(8, "little")
+        return torch.tensor(list(raw), dtype=torch.uint8)
+
+    def test_identical_states_agree(self) -> None:
+        states = [self._state(17, 4096), self._state(17, 4096)]
+        self.assertTrue(cuda_rng_states_agree(states))
+        self.assertEqual(
+            describe_cuda_rng_state(states[0]), {"seed": 17, "offset": 4096}
+        )
+
+    def test_diverged_offsets_disagree(self) -> None:
+        # Same seed but different consumption -> different dropout masks.
+        self.assertFalse(
+            cuda_rng_states_agree([self._state(17, 4096), self._state(17, 0)])
+        )
 
 
 class UnitClassWeightTests(unittest.TestCase):

@@ -1339,13 +1339,8 @@ def main() -> None:
         raise ValueError("max_steps must be -1 or a positive integer")
     if args.tensor_parallel_size != 2:
         raise ValueError("this launcher is intentionally a pure two-GPU TP job")
-    _, replicated_lora_targets = split_lora_targets(args.lora_target_modules)
-    if replicated_lora_targets and args.lora_dropout != 0.0:
-        raise ValueError(
-            "linear-attention LoRA targets "
-            f"{replicated_lora_targets} run replicated on both TP ranks; set "
-            "--lora-dropout 0 so both ranks compute identical activations"
-        )
+    # Fail fast on unsupported LoRA targets before loading data or the model.
+    split_lora_targets(args.lora_target_modules)
     if args.resume_from_checkpoint is not None:
         args.resume_from_checkpoint = args.resume_from_checkpoint.expanduser().resolve()
         if not args.resume_from_checkpoint.is_dir():
