@@ -236,10 +236,16 @@ def build_verdict_trainer_class() -> type:
             tensor_parallel_size: int,
             probe_instrumentation: bool = False,
             probe_log_dir: str | os.PathLike[str] | None = None,
+            preloaded_adapter_checkpoint: str | os.PathLike[str] | None = None,
             **kwargs: Any,
         ) -> None:
             super().__init__(*args, **kwargs)
 
+            self.preloaded_adapter_checkpoint = (
+                None
+                if preloaded_adapter_checkpoint is None
+                else Path(preloaded_adapter_checkpoint).resolve()
+            )
             self.verdict_token_ids = verdict_token_ids
             self.tensor_parallel_size = int(tensor_parallel_size)
             self._logits_to_keep_name = logits_to_keep_argument(
@@ -355,6 +361,32 @@ def build_verdict_trainer_class() -> type:
                 optimizer.step = timed_optimizer_step
                 self._probe_optimizer_wrapped = True
             return optimizer
+
+        def _load_from_checkpoint(
+            self,
+            resume_from_checkpoint: str,
+            model: Any | None = None,
+        ) -> None:
+            """Skip Trainer's adapter reload: train.py already loaded it pre-shard.
+
+            Reloading through Trainer would copy full tensors into TP-sharded
+            LoRA factors after sharding, which fails. Optimizer, scheduler, RNG
+            and trainer state are still restored by Trainer as usual.
+            """
+
+            requested = Path(resume_from_checkpoint).resolve()
+            if self.preloaded_adapter_checkpoint != requested:
+                raise RuntimeError(
+                    "TP resume must load the adapter before sharding; pass "
+                    "--resume-from-checkpoint to train.py instead of calling "
+                    f"Trainer.train(resume_from_checkpoint={requested}) directly "
+                    f"(preloaded={self.preloaded_adapter_checkpoint})"
+                )
+            if self.is_world_process_zero():
+                print(
+                    f"resume_skip_trainer_adapter_reload={requested}",
+                    flush=True,
+                )
 
         def _prepare_inputs(self, inputs: dict[str, Any]) -> dict[str, Any]:
             if not self.probe_instrumentation:

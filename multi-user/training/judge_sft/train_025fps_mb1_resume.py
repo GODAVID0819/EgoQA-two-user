@@ -1,67 +1,25 @@
+"""Deprecated resume entry point; kept so existing launch scripts still work.
+
+Resume is now built into train.py: ``--resume-from-checkpoint DIR`` loads the
+LoRA adapter before TP sharding, verifies it against the checkpoint file, and
+lets Trainer restore optimizer/scheduler/RNG/trainer state. This module simply
+forwards to train_025fps_mb1 with the original command line.
+
+The previous implementation patched ``train.get_peft_model``, but train.py
+imports ``get_peft_model`` from peft inside the function, so the patch never
+applied: runs "resumed" from freshly initialized LoRA (B = 0) while restoring
+the old optimizer state.
+"""
+
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 
-def pop_resume_checkpoint() -> str:
-    flag = "--resume-from-checkpoint"
-
-    if flag not in sys.argv:
-        raise RuntimeError(
-            "--resume-from-checkpoint is required"
-        )
-
-    i = sys.argv.index(flag)
-
-    if i + 1 >= len(sys.argv):
-        raise RuntimeError(
-            "--resume-from-checkpoint requires a path"
-        )
-
-    checkpoint = str(
-        Path(sys.argv[i + 1])
-        .expanduser()
-        .resolve()
-    )
-
-    del sys.argv[i:i + 2]
-
-    return checkpoint
-
-
-def main():
-    checkpoint = pop_resume_checkpoint()
-
-    if not Path(checkpoint).is_dir():
-        raise RuntimeError(
-            f"checkpoint not found: {checkpoint}"
-        )
-
-    # Inject true HF Trainer resume without modifying
-    # the already-working launcher.
-    from transformers import Trainer
-
-    original_train = Trainer.train
-
-    def resume_train(self, *args, **kwargs):
-        kwargs["resume_from_checkpoint"] = checkpoint
-
-        if self.is_world_process_zero():
-            print(
-                f"AUTO_RESUME_CHECKPOINT={checkpoint}",
-                flush=True,
-            )
-
-        return original_train(
-            self,
-            *args,
-            **kwargs,
-        )
-
-    Trainer.train = resume_train
-
-    from training.judge_sft import train_025fps_mb1
+def main() -> None:
+    if "--resume-from-checkpoint" not in sys.argv:
+        raise RuntimeError("--resume-from-checkpoint is required")
+    from . import train_025fps_mb1
 
     train_025fps_mb1.main()
 

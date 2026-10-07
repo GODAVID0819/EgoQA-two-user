@@ -94,7 +94,54 @@ MAX_STEPS=1 EVAL=0 REPO=$PWD ENV=... MODEL=... DATA=... bash hpc/judge_sft/run_g
 `hpc/judge_sft/train_groundedness_025fps_mb1_ga4_noclassw.sbatch`（路径写死为
 集群路径）。
 
-### 7. 运行时间与输出
+### 7. 线性注意力 LoRA、续训与不加权
+
+这三项都是 `train.py` 的命令行参数，入口统一用 `training.judge_sft.train_025fps_mb1`，
+不再需要为每种组合单独写入口文件。
+
+**线性注意力 LoRA**：在 `--lora-target-modules` 里加上 Qwen3.5 Gated DeltaNet 的五个
+投影即可。底座的线性注意力层在两张卡上是复制而非切分，所以这些 LoRA 也保持两卡各
+一份完整参数（反向时对梯度做 all-reduce 平均）。两卡必须算出完全相同的激活，因此要求
+`--lora-dropout 0`，否则启动时报错。
+
+```bash
+  --lora-target-modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj \
+                        in_proj_qkv in_proj_z in_proj_a in_proj_b out_proj \
+  --lora-dropout 0
+```
+
+r=16、训练最上面 8 层时，LoRA 参数从 996 万增加到 1459 万。
+
+**续训**：`--resume-from-checkpoint <output_dir>/trainer/checkpoint-<step>`。其余参数必须
+与原运行一致；LoRA 配置（r、alpha、dropout、目标模块、层）不一致时直接报错。流程：
+
+1. 在 TP 切分之前用 `PeftModel.from_pretrained` 加载 adapter，并逐个张量与
+   `adapter_model.safetensors` 比对，完全一致才继续（日志里打印
+   `resume_adapter_preloaded=`）；
+2. 跳过 Trainer 自带的 adapter 重载（TP 切分后重载会失败）；
+3. 由 Trainer 恢复优化器、学习率调度、随机数状态和训练进度。
+
+checkpoint 必须是完整状态（含 `optimizer.pt`、`scheduler.pt`、`trainer_state.json`）；
+`train_025fps_mb1` 默认就这样保存。
+
+**不加权**：`--no-class-weights` 把 PASS/FAIL 类别权重都设为 1.0（类别计数仍记录在
+`training_contract.json`），等价于以前的 `--class-weight-smoothing 1e9`。
+
+用 `hpc/judge_sft/run_groundedness_portable.sh` 时：`LINEAR_ATTN=1` 打开线性注意力
+LoRA（自动设 dropout 为 0）；`RESUME=<checkpoint 目录>` 续训，此时把 `OUT` 设为原运行的
+目录，新的 checkpoint 和日志会接着写在那里：
+
+```bash
+OUT=/path/to/runs/<原运行> RESUME=/path/to/runs/<原运行>/trainer/checkpoint-338 \
+REPO=$PWD ENV=... MODEL=... DATA=... bash hpc/judge_sft/run_groundedness_portable.sh
+```
+
+**旧入口**：`train_025fps_mb1_resume.py`、`train_025fps_mb1_resume_tp.py` 现在只是转发到
+上面的实现。旧版 `train_025fps_mb1_resume_tp` 替换的是 `train.get_peft_model`，但
+`train.py` 在函数内部从 peft 导入 `get_peft_model`，替换从未生效：续训实际从全新初始化的
+LoRA（B = 0）开始，却恢复了旧的优化器状态。用旧版续训得到的结果不能当作续训结果。
+
+### 8. 运行时间与输出
 
 - 每个优化步（4 条样本）约 63 秒，每个 epoch 169 步约 3 小时；每次 test 评估
   （168 题）约 45–50 分钟；10 个 epoch 合计约 40 小时。

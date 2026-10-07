@@ -55,6 +55,52 @@ LORA_TP_STYLE_BY_TARGET = {
     target: "colwise" if factor == "lora_B" else "rowwise"
     for target, factor in LORA_TP_FACTOR_BY_TARGET.items()
 }
+# Qwen3.5 hybrid linear-attention (Gated DeltaNet) projections. The safe TP
+# plan keeps these base layers replicated on every TP rank, so their LoRA
+# factors stay replicated local tensors instead of being DTensor-sharded.
+LORA_REPLICATED_TARGETS = (
+    "in_proj_qkv",
+    "in_proj_z",
+    "in_proj_a",
+    "in_proj_b",
+    "out_proj",
+)
+RESUME_CHECKPOINT_FILES = (
+    "adapter_config.json",
+    "adapter_model.safetensors",
+    "optimizer.pt",
+    "scheduler.pt",
+    "trainer_state.json",
+)
+
+
+def unit_class_weights(class_weights: dict[Any, Any]) -> dict[Any, Any]:
+    """Keep the class counts for bookkeeping but set both multipliers to 1.0."""
+
+    from dataclasses import replace
+
+    return {
+        task: replace(weights, fail=1.0, passed=1.0)
+        for task, weights in class_weights.items()
+    }
+
+
+def split_lora_targets(
+    requested_targets: list[str] | tuple[str, ...],
+) -> tuple[list[str], list[str]]:
+    """Return (TP-sharded targets, replicated linear-attention targets)."""
+
+    requested = list(requested_targets)
+    unsupported = sorted(
+        set(requested) - set(LORA_TP_FACTOR_BY_TARGET) - set(LORA_REPLICATED_TARGETS)
+    )
+    if unsupported:
+        raise RuntimeError(
+            "no TP-aware LoRA factor policy for targets: " + ",".join(unsupported)
+        )
+    sharded = [target for target in requested if target in LORA_TP_FACTOR_BY_TARGET]
+    replicated = [target for target in requested if target in LORA_REPLICATED_TARGETS]
+    return sharded, replicated
 
 
 def _matches_any(name: str, markers: tuple[str, ...]) -> bool:
@@ -225,33 +271,57 @@ def audit_trainable_lora_layers(
     }
 
 
-def audit_lora_tensor_parallel_materialization(model: Any) -> dict[str, Any]:
-    """Require TP-sharded LoRA factors on every selected projection family."""
+def audit_lora_tensor_parallel_materialization(
+    model: Any,
+    requested_targets: list[str] | tuple[str, ...],
+) -> dict[str, Any]:
+    """Require TP-sharded LoRA factors on every requested sharded family and
+    local (replicated) LoRA factors on every requested linear-attention family."""
 
     from torch.distributed.tensor import DTensor
 
-    sharded_counts = {target: 0 for target in LORA_TP_FACTOR_BY_TARGET}
+    sharded_targets, replicated_targets = split_lora_targets(requested_targets)
+    sharded_counts = {target: 0 for target in sharded_targets}
+    replicated_counts = {target: 0 for target in replicated_targets}
     unsharded: list[str] = []
+    unexpectedly_sharded: list[str] = []
     for name, parameter in model.named_parameters():
         if not parameter.requires_grad:
             continue
-        for target, factor in LORA_TP_FACTOR_BY_TARGET.items():
+        for target in sharded_targets:
+            factor = LORA_TP_FACTOR_BY_TARGET[target]
             if f".{target}." not in name or f".{factor}." not in name:
                 continue
             if isinstance(parameter, DTensor):
                 sharded_counts[target] += _parameter_count(parameter)
             else:
                 unsharded.append(name)
-    missing = [target for target, count in sharded_counts.items() if count <= 0]
-    if missing or unsharded:
+        for target in replicated_targets:
+            if f".{target}." not in name or "lora_" not in name.lower():
+                continue
+            replicated_counts[target] += _parameter_count(parameter)
+            if isinstance(parameter, DTensor):
+                unexpectedly_sharded.append(name)
+    missing = [
+        target
+        for counts in (sharded_counts, replicated_counts)
+        for target, count in counts.items()
+        if count <= 0
+    ]
+    if missing or unsharded or unexpectedly_sharded:
         raise RuntimeError(
             "PEFT did not materialize TP-aware LoRA factors: "
-            f"missing_targets={missing} unsharded={unsharded[:20]}. "
+            f"missing_targets={missing} unsharded={unsharded[:20]} "
+            f"unexpectedly_sharded_replicated={unexpectedly_sharded[:20]}. "
             "The local PEFT/Transformers TP compatibility sharder did not apply."
         )
     return {
-        "policy": "colwise LoRA-B and rowwise LoRA-A factors are DTensors",
+        "policy": (
+            "colwise LoRA-B and rowwise LoRA-A factors are DTensors; "
+            "linear-attention LoRA factors are replicated local tensors"
+        ),
         "sharded_parameter_counts_by_target": sharded_counts,
+        "replicated_parameter_counts_by_target": replicated_counts,
     }
 
 
@@ -353,20 +423,32 @@ def audit_tensor_parallel_materialization(
 
     from torch.distributed.tensor import DTensor
 
-    sharded_counts = {target: 0 for target in requested_targets}
+    sharded_targets, replicated_targets = split_lora_targets(requested_targets)
+    sharded_counts = {target: 0 for target in sharded_targets}
+    replicated_counts = {target: 0 for target in replicated_targets}
     accidentally_sharded_hybrid: list[str] = []
     for name, parameter in model.named_parameters():
+        if ".linear_attn." in name:
+            for target in replicated_targets:
+                if f".{target}.weight" in name:
+                    replicated_counts[target] += _parameter_count(parameter)
         if not isinstance(parameter, DTensor):
             continue
         if ".linear_attn." in name:
             accidentally_sharded_hybrid.append(name)
-        for target in requested_targets:
+        for target in sharded_targets:
             if f".{target}.weight" in name:
                 sharded_counts[target] += _parameter_count(parameter)
-    missing = [target for target, count in sharded_counts.items() if count <= 0]
+    missing = [
+        target
+        for counts in (sharded_counts, replicated_counts)
+        for target, count in counts.items()
+        if count <= 0
+    ]
     if missing:
         raise RuntimeError(
-            "requested TP projection families were not materialized as DTensors: "
+            "requested projection families were not found (sharded families must "
+            "be DTensors; linear-attention families must exist under .linear_attn.): "
             + ",".join(missing)
         )
     if accidentally_sharded_hybrid:
@@ -376,6 +458,7 @@ def audit_tensor_parallel_materialization(
         )
     return {
         "sharded_parameter_counts_by_target": sharded_counts,
+        "replicated_linear_attention_parameter_counts_by_target": replicated_counts,
         "hybrid_linear_attention_is_replicated": True,
     }
 
@@ -489,13 +572,8 @@ def materialize_lora_tensor_parallelism(
     model._device_mesh = tp_mesh
     model._tp_plan = base_tp_plan
 
-    requested = set(requested_targets)
-    unsupported = requested - set(LORA_TP_FACTOR_BY_TARGET)
-    if unsupported:
-        raise RuntimeError(
-            "no TP-aware LoRA factor policy for targets: "
-            + ",".join(sorted(unsupported))
-        )
+    sharded_targets, replicated_targets = split_lora_targets(requested_targets)
+    requested = set(sharded_targets)
     applied = {target: 0 for target in requested}
     already_sharded = {target: 0 for target in requested}
     seen = {target: 0 for target in requested}
@@ -550,11 +628,98 @@ def materialize_lora_tensor_parallelism(
         raise RuntimeError(
             "LoRA injection omitted requested TP targets: " + ",".join(missing)
         )
+    replicated = keep_linear_attention_lora_replicated(
+        model,
+        tp_mesh=tp_mesh,
+        tp_size=tp_size,
+        replicated_targets=replicated_targets,
+    )
     return {
-        "policy": "DTensor-shard colwise LoRA-B and rowwise LoRA-A",
+        "policy": (
+            "DTensor-shard colwise LoRA-B and rowwise LoRA-A; keep linear-attention "
+            "LoRA replicated with averaged gradients"
+        ),
         "applied_module_counts_by_target": applied,
         "already_sharded_module_counts_by_target": already_sharded,
         "seen_module_counts_by_target": seen,
+        "replicated_linear_attention": replicated,
+    }
+
+
+def keep_linear_attention_lora_replicated(
+    model: Any,
+    *,
+    tp_mesh: Any,
+    tp_size: int,
+    replicated_targets: list[str],
+) -> dict[str, Any]:
+    """Leave linear-attention LoRA factors as local tensors on every TP rank.
+
+    Both ranks run the replicated linear-attention layer on identical inputs, so
+    their gradients already agree; averaging them each backward is a cheap
+    guard that keeps the replicas bitwise synchronized.
+    """
+
+    if not replicated_targets:
+        return {"modules_by_target": {}, "parameter_counts_by_target": {}}
+
+    import torch.distributed as dist
+    from peft.tuners.lora.layer import LoraLayer
+    from torch.distributed.tensor import DTensor
+
+    process_group = tp_mesh.get_group()
+    world_size = dist.get_world_size(process_group)
+    if world_size != tp_size:
+        raise RuntimeError(
+            f"TP group size mismatch: group={world_size} expected={tp_size}"
+        )
+
+    def average_replicated_grad(grad: Any) -> Any:
+        dist.all_reduce(grad, op=dist.ReduceOp.SUM, group=process_group)
+        return grad.div_(world_size)
+
+    seen = {target: 0 for target in replicated_targets}
+    parameter_counts = {target: 0 for target in replicated_targets}
+    handles = []
+    for module_name, module in model.named_modules():
+        if not isinstance(module, LoraLayer):
+            continue
+        target = module_name.rsplit(".", 1)[-1]
+        if target not in seen:
+            continue
+        if ".linear_attn." not in module_name:
+            raise RuntimeError(
+                f"replicated LoRA target {target!r} matched a module outside "
+                f"linear attention: {module_name}"
+            )
+        seen[target] += 1
+        for factor_name in ("lora_A", "lora_B"):
+            for factor_module in getattr(module, factor_name).values():
+                for _, parameter in factor_module.named_parameters(recurse=False):
+                    if isinstance(parameter, DTensor):
+                        raise RuntimeError(
+                            "linear-attention LoRA factor unexpectedly became a "
+                            f"DTensor: {module_name}.{factor_name}"
+                        )
+                    if not parameter.requires_grad:
+                        raise RuntimeError(
+                            "linear-attention LoRA factor is not trainable: "
+                            f"{module_name}.{factor_name}"
+                        )
+                    parameter_counts[target] += parameter.numel()
+                    handles.append(parameter.register_hook(average_replicated_grad))
+    missing = [target for target, count in seen.items() if count <= 0]
+    if missing:
+        raise RuntimeError(
+            "no linear-attention LoRA modules were created for requested targets: "
+            + ",".join(missing)
+        )
+    # Keep the hook handles alive for the whole run.
+    model._judge_replicated_lora_grad_hooks = handles
+    return {
+        "modules_by_target": seen,
+        "parameter_counts_by_target": parameter_counts,
+        "gradient_sync": "all_reduce_mean_each_backward",
     }
 
 
@@ -659,6 +824,95 @@ def synchronize_lora_initialization(
     }
 
 
+def validate_resume_checkpoint(
+    checkpoint: Path,
+    *,
+    lora_rank: int,
+    lora_alpha: int,
+    lora_dropout: float,
+    lora_target_modules: list[str] | tuple[str, ...],
+    trainable_layer_indices: list[int],
+) -> dict[str, Any]:
+    """Refuse to resume from an incomplete checkpoint or a mismatched adapter."""
+
+    missing = [name for name in RESUME_CHECKPOINT_FILES if not (checkpoint / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"resume checkpoint {checkpoint} is missing {missing}; a full-state "
+            "checkpoint (adapter + optimizer + scheduler + trainer state) is required"
+        )
+    saved = json.loads((checkpoint / "adapter_config.json").read_text(encoding="utf-8"))
+    expected = {
+        "r": int(lora_rank),
+        "lora_alpha": int(lora_alpha),
+        "lora_dropout": float(lora_dropout),
+        "target_modules": sorted(lora_target_modules),
+        "layers_to_transform": sorted(trainable_layer_indices),
+    }
+    observed = {
+        "r": int(saved.get("r", -1)),
+        "lora_alpha": int(saved.get("lora_alpha", -1)),
+        "lora_dropout": float(saved.get("lora_dropout", -1.0)),
+        "target_modules": sorted(saved.get("target_modules") or []),
+        "layers_to_transform": sorted(saved.get("layers_to_transform") or []),
+    }
+    mismatched = {
+        key: {"checkpoint": observed[key], "command_line": expected[key]}
+        for key in expected
+        if observed[key] != expected[key]
+    }
+    if mismatched:
+        raise ValueError(
+            "resume checkpoint LoRA config differs from the command line: "
+            + json.dumps(mismatched)
+        )
+    return {"checkpoint": str(checkpoint), "adapter_config": observed}
+
+
+def verify_resumed_adapter_weights(model: Any, checkpoint: Path) -> dict[str, Any]:
+    """Prove every saved LoRA tensor was loaded into the model bit-for-bit.
+
+    This guards against a silent resume from freshly initialized adapters
+    (LoRA-B = 0) while the optimizer state is restored from the checkpoint.
+    """
+
+    import torch
+    from peft.utils import get_peft_model_state_dict
+    from safetensors.torch import load_file
+
+    saved = load_file(str(checkpoint / "adapter_model.safetensors"))
+    current = get_peft_model_state_dict(model)
+    if set(saved) != set(current):
+        raise RuntimeError(
+            "resumed adapter keys differ from the checkpoint: "
+            f"only_in_checkpoint={sorted(set(saved) - set(current))[:10]} "
+            f"only_in_model={sorted(set(current) - set(saved))[:10]}"
+        )
+    mismatched = [
+        key
+        for key in saved
+        if not torch.equal(current[key].detach().to("cpu").float(), saved[key].float())
+    ]
+    if mismatched:
+        raise RuntimeError(
+            f"{len(mismatched)} resumed LoRA tensors differ from the checkpoint, "
+            f"e.g. {mismatched[:5]}"
+        )
+    lora_b_norm = float(
+        sum(value.float().pow(2).sum() for key, value in saved.items() if "lora_B" in key)
+        ** 0.5
+    )
+    if lora_b_norm == 0.0:
+        raise RuntimeError(
+            f"checkpoint {checkpoint} has all-zero LoRA-B; it is an untrained adapter"
+        )
+    return {
+        "tensors_verified": len(saved),
+        "parameters_verified": int(sum(value.numel() for value in saved.values())),
+        "lora_B_norm": lora_b_norm,
+    }
+
+
 def load_model_and_processor(
     args: argparse.Namespace,
 ) -> tuple[Any, Any, dict[str, Any], dict[str, Any]]:
@@ -733,23 +987,51 @@ def load_model_and_processor(
     # Trainer seeds itself only after the model already exists. Reset every TP
     # process here so PEFT's random LoRA-A initialization is deterministic.
     set_seed(args.seed)
-    model = get_peft_model(
-        model,
-        LoraConfig(
-            r=args.lora_rank,
+    resume_audit = None
+    if args.resume_from_checkpoint is not None:
+        from peft import PeftModel
+
+        resume_audit = validate_resume_checkpoint(
+            args.resume_from_checkpoint,
+            lora_rank=args.lora_rank,
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-            target_modules=list(args.lora_target_modules),
-            layers_to_transform=trainable_layer_indices,
-            layers_pattern="layers",
-        ),
-        # PEFT otherwise promotes BF16 adapters to FP32. For a long sequence,
-        # that doubles the full LoRA-B output activation and caused the
-        # observed 5.51 GiB up_proj allocation failure.
-        autocast_adapter_dtype=False,
-    )
+            lora_target_modules=args.lora_target_modules,
+            trainable_layer_indices=trainable_layer_indices,
+        )
+        # Load the adapter while its factors are still ordinary tensors; the
+        # sync/shard steps below then treat it exactly like a fresh adapter.
+        model = PeftModel.from_pretrained(
+            model,
+            str(args.resume_from_checkpoint),
+            is_trainable=True,
+            autocast_adapter_dtype=False,
+        )
+        resume_audit["weights"] = verify_resumed_adapter_weights(
+            model, args.resume_from_checkpoint
+        )
+        print(
+            "resume_adapter_preloaded=" + json.dumps(resume_audit, sort_keys=True),
+            flush=True,
+        )
+    else:
+        model = get_peft_model(
+            model,
+            LoraConfig(
+                r=args.lora_rank,
+                lora_alpha=args.lora_alpha,
+                lora_dropout=args.lora_dropout,
+                bias="none",
+                task_type="CAUSAL_LM",
+                target_modules=list(args.lora_target_modules),
+                layers_to_transform=trainable_layer_indices,
+                layers_pattern="layers",
+            ),
+            # PEFT otherwise promotes BF16 adapters to FP32. For a long sequence,
+            # that doubles the full LoRA-B output activation and caused the
+            # observed 5.51 GiB up_proj allocation failure.
+            autocast_adapter_dtype=False,
+        )
     tp_plan_audit["lora_initialization"] = synchronize_lora_initialization(
         model,
         tp_mesh=tp_mesh,
@@ -782,8 +1064,9 @@ def load_model_and_processor(
         trainable_layer_indices,
     )
     counts["lora_tensor_parallel_audit"] = (
-        audit_lora_tensor_parallel_materialization(model)
+        audit_lora_tensor_parallel_materialization(model, args.lora_target_modules)
     )
+    counts["resume"] = resume_audit
     counts["lora_dtype_audit"] = audit_trainable_lora_dtypes(model, dtype)
     counts["decoder_layer_selection"] = {
         "total_decoder_layers": total_decoder_layers,
@@ -1000,6 +1283,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-class-weight", type=float, default=DEFAULTS.max_class_weight
     )
+    parser.add_argument(
+        "--no-class-weights",
+        action="store_true",
+        help="Use PASS and FAIL class weights of exactly 1.0 (plain BCE).",
+    )
+    parser.add_argument(
+        "--resume-from-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Resume from a full-state Trainer checkpoint directory: the LoRA adapter "
+            "is loaded before TP sharding and the optimizer, scheduler, RNG and "
+            "trainer state are restored by Trainer."
+        ),
+    )
     parser.add_argument("--formality-weight", type=float, default=0.2)
     parser.add_argument("--groundedness-weight", type=float, default=0.4)
     parser.add_argument("--answerability-weight", type=float, default=0.4)
@@ -1041,6 +1339,19 @@ def main() -> None:
         raise ValueError("max_steps must be -1 or a positive integer")
     if args.tensor_parallel_size != 2:
         raise ValueError("this launcher is intentionally a pure two-GPU TP job")
+    _, replicated_lora_targets = split_lora_targets(args.lora_target_modules)
+    if replicated_lora_targets and args.lora_dropout != 0.0:
+        raise ValueError(
+            "linear-attention LoRA targets "
+            f"{replicated_lora_targets} run replicated on both TP ranks; set "
+            "--lora-dropout 0 so both ranks compute identical activations"
+        )
+    if args.resume_from_checkpoint is not None:
+        args.resume_from_checkpoint = args.resume_from_checkpoint.expanduser().resolve()
+        if not args.resume_from_checkpoint.is_dir():
+            raise FileNotFoundError(
+                f"resume checkpoint does not exist: {args.resume_from_checkpoint}"
+            )
     manifest_examples = load_normalized_manifest(args.train_manifest)
     selected_task = None if args.task == "all" else JudgeTask(args.task)
     train_examples = manifest_examples
@@ -1066,6 +1377,8 @@ def main() -> None:
         if selected_task is None
         else {selected_task: all_class_weights[selected_task]}
     )
+    if args.no_class_weights:
+        class_weights = unit_class_weights(class_weights)
     if selected_task is None:
         task_weights = {
             JudgeTask.FORMALITY: args.formality_weight,
@@ -1233,6 +1546,11 @@ def main() -> None:
         tensor_parallel_size=args.tensor_parallel_size,
         probe_instrumentation=args.probe_instrumentation,
         probe_log_dir=str(args.output_dir),
+        preloaded_adapter_checkpoint=(
+            None
+            if args.resume_from_checkpoint is None
+            else str(args.resume_from_checkpoint)
+        ),
         optimizer_cls_and_kwargs=(
             __import__("torch").optim.AdamW,
             {
@@ -1244,7 +1562,13 @@ def main() -> None:
             },
         ),
     )
-    trainer.train()
+    trainer.train(
+        resume_from_checkpoint=(
+            None
+            if args.resume_from_checkpoint is None
+            else str(args.resume_from_checkpoint)
+        )
+    )
     probe_summary = trainer.finalize_probe()
     if probe_summary is not None:
         print(

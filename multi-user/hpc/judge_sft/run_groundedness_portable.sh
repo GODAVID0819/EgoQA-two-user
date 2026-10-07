@@ -14,6 +14,17 @@ EPOCHS=${EPOCHS:-10}
 MAX_STEPS=${MAX_STEPS:--1}     # e.g. MAX_STEPS=1 for a smoke test
 TRAIN_MANIFEST=${TRAIN_MANIFEST:-$DATA/train/train.local.jsonl}
 TEST_MANIFEST=${TEST_MANIFEST:-$DATA/test/train.local.jsonl}
+LINEAR_ATTN=${LINEAR_ATTN:-0}   # 1 = also put LoRA on the 5 linear-attention projections (forces dropout 0)
+RESUME=${RESUME:-}             # path to trainer/checkpoint-<step> to resume from
+
+TARGETS=(q_proj k_proj v_proj o_proj gate_proj up_proj down_proj)
+LORA_DROPOUT=0.05
+if [ "$LINEAR_ATTN" = "1" ]; then
+  TARGETS+=(in_proj_qkv in_proj_z in_proj_a in_proj_b out_proj)
+  LORA_DROPOUT=0
+fi
+EXTRA_ARGS=()
+if [ -n "$RESUME" ]; then EXTRA_ARGS+=(--resume-from-checkpoint "$RESUME"); fi
 
 mkdir -p "$OUT"
 cd "$REPO"
@@ -30,7 +41,6 @@ mkdir -p "$TRITON_CACHE_DIR"
 # Evaluate on the held-out test split after every epoch; set EVAL=0 to skip.
 if [ "${EVAL:-1}" = "1" ]; then export JUDGE_EVAL_MANIFEST="$TEST_MANIFEST"; fi
 
-# --class-weight-smoothing 1e9 makes the pass/fail class weights ~1 (no class weighting).
 "$ENV/bin/torchrun" --standalone --nproc_per_node=2 \
   -m training.judge_sft.train_025fps_mb1 \
   --train-manifest "$TRAIN_MANIFEST" \
@@ -46,9 +56,9 @@ if [ "${EVAL:-1}" = "1" ]; then export JUDGE_EVAL_MANIFEST="$TEST_MANIFEST"; fi
   --image-context-target-fraction 0.85 \
   --lora-rank 16 \
   --lora-alpha 16 \
-  --lora-dropout 0.05 \
+  --lora-dropout "$LORA_DROPOUT" \
   --trainable-decoder-layers 8 \
-  --lora-target-modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj \
+  --lora-target-modules "${TARGETS[@]}" \
   --learning-rate 3e-5 \
   --weight-decay 0.01 \
   --adam-beta1 0.9 \
@@ -59,13 +69,14 @@ if [ "${EVAL:-1}" = "1" ]; then export JUDGE_EVAL_MANIFEST="$TEST_MANIFEST"; fi
   --gradient-accumulation-steps 4 \
   --warmup-ratio 0.05 \
   --lr-scheduler-type cosine \
-  --class-weight-smoothing 1e9 \
+  --no-class-weights \
   --max-grad-norm 1.0 \
   --seed 17 \
   --gradient-checkpointing \
   --dataloader-num-workers 2 \
   --dataloader-prefetch-factor 1 \
   --decoded-image-cache-entries 2 \
-  2>&1 | tee "$OUT/train.log"
+  "${EXTRA_ARGS[@]}" \
+  2>&1 | tee -a "$OUT/train.log"
 
 echo "RUN=$OUT"
