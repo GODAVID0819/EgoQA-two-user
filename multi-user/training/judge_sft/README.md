@@ -60,14 +60,18 @@ cd judge_data
 mkdir -p packets_extracted && for t in packets/*.tar; do tar -xf "$t" -C packets_extracted; done
 ```
 
+数据集里有两种切分，题目完全相同，只是 train/test 的分配不同（见第 8 节）：
+
+- `manifests/`：按问题切分，test 复用训练集中的视频 packet；
+- `manifests_video_split/`：按视频切分，train 和 test 不共用任何视频。
+
 manifest 里的 `frame_packet` 是原集群的绝对路径
 （`/scratch/hm2991/egolife_rlhf_evidence_v1/packets/<packet_id>`）。运行数据集
-README 里的那段 Python，把它改写为 `packets_extracted/<packet_id>`，生成
-`manifests/{train,test}/train.local.jsonl`。
+README 里的那段 Python，把它改写为 `packets_extracted/<packet_id>`，两种切分都会
+生成 `{train,test}/train.local.jsonl`。
 
-数据量：train 2694 行（groundedness 674：456 pass / 218 fail），test 672 行
-（groundedness 168：117 pass / 51 fail）。按问题切分，test 复用训练集中的视频
-packet。
+数据量（两种切分相同）：train 2694 行（groundedness 674：456 pass / 218 fail），
+test 672 行（groundedness 168：117 pass / 51 fail）。
 
 ### 6. 启动训练
 
@@ -77,9 +81,12 @@ packet。
 REPO=$PWD \
 ENV=/path/to/qwen38-vllm \
 MODEL=/path/to/Qwen3.8-27B \
-DATA=/path/to/judge_data/manifests \
+DATA=/path/to/judge_data/manifests_video_split \
 bash hpc/judge_sft/run_groundedness_portable.sh
 ```
+
+`DATA` 决定用哪种切分：`.../manifests_video_split`（按视频切分）或
+`.../manifests`（按问题切分）。
 
 可选环境变量：`OUT`（输出目录）、`TASK`（默认 `groundedness`）、`EPOCHS`
 （默认 10）、`EVAL=0`（关闭每个 epoch 的 test 评估）、`CUDA_VISIBLE_DEVICES`。
@@ -144,7 +151,62 @@ REPO=$PWD ENV=... MODEL=... DATA=... bash hpc/judge_sft/run_groundedness_portabl
 `train.py` 在函数内部从 peft 导入 `get_peft_model`，替换从未生效：续训实际从全新初始化的
 LoRA（B = 0）开始，却恢复了旧的优化器状态。用旧版续训得到的结果不能当作续训结果。
 
-### 8. 运行时间与输出
+### 8. 按视频切分的 train/test
+
+按问题切分时，test 的 168 道 groundedness 题全部来自训练集中出现过的视频，
+147 道与训练题共用同一个 `source_evidence_id`（同一 packet、同一提问者），所以 test
+衡量的是"同一批视频上的新问题"。按视频切分用来衡量对新视频的泛化。
+
+| 切分 | train packet | test packet | 共用 packet | train evidence_id | test evidence_id | 共用 evidence_id |
+|---|---|---|---|---|---|---|
+| 按问题（`manifests/`） | 120 | 94 | 94 | 357 | 148 | 130 |
+| 按视频（`manifests_video_split/`） | 96 | 24 | 0 | 301 | 74 | 0 |
+
+切分规则：
+
+- 以 packet（一段 10 分钟、六人同步的视频）为单位分配；
+- 时间窗口重叠的 packet（同一天、窗口有交集；共 29 对，最多重叠 7 分钟）必须在同一边，
+  因此任何一段画面都不会同时出现在 train 和 test；
+- test 的题数与按问题切分完全一致，细到每个任务、每种标签（含 answerability 的两种条件）；
+- 每天（DAY1–DAY7）都有 test packet，占当天 groundedness 题数的 18%–22%；
+- 每个 test packet 在 train 中都有画面相似的 packet：test 帧在 train 帧中的最相似 CLIP
+  余弦中位数为 0.917，train packet 对其他重叠组之外的 train packet 为 0.906。
+
+只保证"不重叠"，没有要求间隔，所以首尾相接的窗口可能分在两边（例如 test 11:20–11:30、
+train 11:30–11:40），同一活动可能跨越两侧。
+
+**在集群上使用**：
+
+```bash
+# 新切分在 /scratch/tx856/multi_user_qa/video_split/manifests_842_video_split
+sbatch --export=ALL,MANIFESTS=/scratch/tx856/multi_user_qa/video_split/manifests_842_video_split,LORA_RANK=128,LR=1e-4 \
+  hpc/judge_sft/train_groundedness_linattn.sbatch
+```
+
+`train_groundedness_linattn.sbatch` 的 `MANIFESTS` 默认仍是按问题切分；训练集取
+`$MANIFESTS/train/train.jsonl`，每个 epoch 的 test 评估取 `$MANIFESTS/test/train.jsonl`。
+
+**可视化检查**：`manifests_video_split/split_report.html`（单文件，图片已内嵌），包含
+新旧切分的题数对比、每天的分布、按天的时间轴（train/test 着色，重叠的 packet 叠放）、
+packet CLIP 特征的 PCA 散点图、最相似帧相似度直方图，以及每个 test packet 与最相似
+train packet 的画面对照。
+
+**重新生成**（脚本在 `training/judge_sft/video_split/`，在一个工作目录中依次运行；
+`QUESTION_SPLIT` 指向按问题切分的 manifest 目录）：
+
+```bash
+export QUESTION_SPLIT=/path/to/manifests_842_question_split
+python packet_stats.py      # packet 时间窗口、重叠组、题数、CLIP 特征 -> packet_stats.json
+python make_split.py        # 搜索满足约束的 test packet 集合 -> split_assignment.json
+python write_manifests.py   # 写 manifests_842_video_split/{train,test}/train.jsonl 和 split_audit.json
+python visualize_split.py manifests_842_video_split   # 写 split_report.html
+```
+
+本次使用的切分记录在 `video_split/split_assignment.json`（24 个 test packet）。
+`make_split.py` 的随机搜索使用固定种子，`write_manifests.py` 会断言重叠组未被拆开、
+train/test 无共用 packet 和题目。
+
+### 9. 运行时间与输出
 
 - 每个优化步（4 条样本）约 63 秒，每个 epoch 169 步约 3 小时；每次 test 评估
   （168 题）约 45–50 分钟；10 个 epoch 合计约 40 小时。
