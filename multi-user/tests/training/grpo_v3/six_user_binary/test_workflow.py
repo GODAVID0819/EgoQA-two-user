@@ -8,6 +8,14 @@ from test_pipeline import require_module
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_cold_judge_startup_timeout_reaches_runtime_configuration(self):
+        workflow = require_module(self, 'workflow')
+        c = {'project_root': '/scratch/a/project', 'model': '/scratch/a/models/Qwen3.8-27B',
+             'train_python': '/scratch/a/train/bin/python', 'judge_python': '/scratch/a/judge/bin/python',
+             'judge_startup_timeout_seconds': 1800}
+        run = workflow.training_config(c, job_id='1002', phase='formal', max_steps=200)
+        self.assertEqual(run.get('judge_startup_timeout_seconds'), 1800)
+
     def test_resume_selects_only_complete_formal_checkpoint(self):
         resume = require_module(self, "resume")
         with tempfile.TemporaryDirectory() as tmp:
@@ -43,6 +51,17 @@ class WorkflowTests(unittest.TestCase):
         smoke = workflow.training_config(c, job_id="1000", phase="smoke", max_steps=1)
         self.assertNotIn("resume_from_checkpoint", smoke)
         self.assertNotIn("baseline_validation_source", smoke)
+
+    def test_policy_allocator_option_survives_workflow_without_changing_training(self):
+        workflow = require_module(self, "workflow")
+        c = {"project_root": "/scratch/a/project", "model": "/scratch/a/models/Qwen3.8-27B",
+             "train_python": "/scratch/a/train/bin/python", "judge_python": "/scratch/a/judge/bin/python",
+             "policy_allocator_config": "expandable_segments:True"}
+        run = workflow.training_config(c, job_id="1000", phase="formal", max_steps=200)
+        self.assertEqual(run['policy_allocator_config'], 'expandable_segments:True')
+        self.assertEqual(run['num_generations'], 4)
+        self.assertEqual(run['per_device_train_batch_size'], 1)
+        self.assertEqual(run['gradient_accumulation_steps'], 4)
 
     def test_training_config_uses_actual_allocation_walltime(self):
         workflow = require_module(self, "workflow")

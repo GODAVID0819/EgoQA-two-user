@@ -21,6 +21,20 @@ def run_config():
 
 
 class LaunchTests(unittest.TestCase):
+    def test_policy_allocator_is_explicit_and_does_not_change_judge_or_parent(self):
+        launch = require_module(self, "launch")
+        base = {'PATH': '/usr/bin', 'PYTORCH_ALLOC_CONF': 'expandable_segments:False'}
+        policy = launch.role_environment('/scratch/train/bin/python', base,
+                                        allocator_config='expandable_segments:True')
+        self.assertEqual(policy['PYTORCH_CUDA_ALLOC_CONF'], 'expandable_segments:True')
+        self.assertNotIn('PYTORCH_ALLOC_CONF', policy)
+        self.assertEqual(base['PYTORCH_ALLOC_CONF'], 'expandable_segments:False')
+        judge = launch.role_environment('/scratch/judge/bin/python', base)
+        self.assertEqual(judge['PYTORCH_ALLOC_CONF'], 'expandable_segments:False')
+        self.assertNotIn('PYTORCH_CUDA_ALLOC_CONF', judge)
+        with self.assertRaises(ValueError):
+            launch.role_environment('/scratch/train/bin/python', base, allocator_config='backend:cudaMallocAsync')
+
     def test_synthetic_gpu_load_is_not_an_execution_option(self):
         launch = require_module(self, "launch")
         c = run_config()

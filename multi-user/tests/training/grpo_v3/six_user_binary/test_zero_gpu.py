@@ -7,6 +7,16 @@ from test_pipeline import require_module
 
 
 class ZeroGPUTests(unittest.TestCase):
+    def test_cli_scheduler_json_is_normalized_without_ignoring_invalid_values(self):
+        zero_gpu = require_module(self, 'zero_gpu')
+        self.assertEqual(zero_gpu.normalize_scheduler_kwargs('{"min_lr_rate": 0.1}'), {'min_lr_rate': 0.1})
+        value = {'min_lr_rate': 0.1}
+        self.assertIs(zero_gpu.normalize_scheduler_kwargs(value), value)
+        self.assertEqual(zero_gpu.normalize_scheduler_kwargs(None), {})
+        for bad in ('[]', 'true', 'not-json', [], True):
+            with self.assertRaises(ValueError):
+                zero_gpu.normalize_scheduler_kwargs(bad)
+
     def test_truncated_jpeg_with_valid_header_fails_full_decode(self):
         module=require_module(self,'zero_gpu')
         from PIL import Image

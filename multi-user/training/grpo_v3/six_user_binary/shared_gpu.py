@@ -17,6 +17,8 @@ def audit(event, **values):
 @contextmanager
 def judge_window(client, suspend_policy, resume_policy):
     suspend_policy()
+    from .utilization_runtime import rearm_training_guard
+    rearm_training_guard()
     audit('policy_offloaded')
     try:
         state = client.resource('wake')

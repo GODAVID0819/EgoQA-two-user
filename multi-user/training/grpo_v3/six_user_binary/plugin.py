@@ -12,6 +12,10 @@ from training.grpo_v3.six_user_binary.data import validate_row
 from training.grpo_v3.six_user_binary.reward import MODES, aggregate
 from training.grpo_v3.six_user_binary.service import JudgeClient, validate_response
 
+if os.environ.get('EGOQA_QWEN_PARTIAL_PACKED_LORA') == '1':
+    from training.grpo_v3.six_user_binary.packed_lora_compat import install
+    install()
+
 try:
     from swift.rewards import ORM, orms
 except ModuleNotFoundError as exc:
@@ -52,6 +56,8 @@ class SixUserBinaryReward(ORM):
         self.trace.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()
         self.validated = set()
+        from training.grpo_v3.six_user_binary.utilization_runtime import enable_training_guard
+        self.utilization_guard = enable_training_guard()
         from training.grpo_v3.six_user_binary.policy_image_cache import enable_from_environment
         self.policy_image_cache = enable_from_environment()
         if os.environ.get('EGOQA_SHARED_GPU') == '1':
@@ -127,3 +133,6 @@ class SixUserBinaryReward(ORM):
 
 
 orms["egoqa_six_user_binary_v1"] = SixUserBinaryReward
+
+# 外部插件导入时注册正常结束筛选阶段的回调，不改变奖励或调度器。
+from training.grpo_v3.six_user_binary import stage_stop as _stage_stop

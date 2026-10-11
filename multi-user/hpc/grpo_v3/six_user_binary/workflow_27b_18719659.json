@@ -1,0 +1,10 @@
+{
+  "project_root": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929",
+  "model": "/scratch/xl6775/models/Qwen3.8-27B",
+  "train_python": "/scratch/xl6775/envs/egoqa-ms-swift-v4.2.2/bin/python",
+  "judge_python": "/scratch/xl6775/conda/envs/qwen38-vllm/bin/python",
+  "candidates": "/scratch/xl6775/datasets/egoqa_fps_newprompt_20260918/base_candidates.jsonl",
+  "clip_model": "/scratch/xl6775/hf_cache/hub/models--openai--clip-vit-base-patch32/snapshots/3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
+  "ffmpeg": "/scratch/xl6775/envs/egoqa-ffmpeg-runtime/bin/ffmpeg",
+  "ffprobe": "/scratch/xl6775/envs/egoqa-ffmpeg-runtime/bin/ffprobe"
+}

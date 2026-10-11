@@ -7,6 +7,49 @@ from test_pipeline import require_module
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_partial_qkv_evaluation_uses_isolated_patched_worker(self):
+        module=require_module(self,'evaluation')
+        environ={'VLLM_ENABLE_V1_MULTIPROCESSING':'1','OTHER':'keep'}
+        module.configure_engine_process({'lora_target_modules':['q_proj','v_proj','in_proj_qkv']},environ)
+        self.assertEqual(environ,{'VLLM_ENABLE_V1_MULTIPROCESSING':'1','OTHER':'keep'})
+        options=module.configure_engine_kwargs({'lora_target_modules':['q_proj','v_proj','in_proj_qkv']},
+                                               {'enable_chunked_prefill':True})
+        self.assertTrue(options['enable_chunked_prefill'])
+        self.assertEqual(options['worker_extension_cls'],
+            'training.grpo_v3.six_user_binary.packed_worker_extension.PartialPackedLoRAWorkerExtension')
+
+    def test_original_qv_evaluation_preserves_process_setting(self):
+        module=require_module(self,'evaluation')
+        environ={'VLLM_ENABLE_V1_MULTIPROCESSING':'1'}
+        module.configure_engine_process({'lora_target_modules':['q_proj','v_proj']},environ)
+        self.assertEqual(environ,{'VLLM_ENABLE_V1_MULTIPROCESSING':'1'})
+        self.assertEqual(module.configure_engine_kwargs({'lora_target_modules':['q_proj','v_proj']},
+                                                       {'enable_chunked_prefill':True}),
+                         {'enable_chunked_prefill':True})
+
+    def test_saved_adapter_validation_does_not_require_training_result(self):
+        launch=require_module(self,'launch')
+        calls=[]
+        c={'validation_only_adapter':'/scratch/checkpoint-3','paired_validation':True,
+           'baseline_validation_source':'/scratch/validation_baseline.json'}
+        self.assertTrue(launch.run_validation_only(c,lambda adapter:calls.append(adapter)))
+        self.assertEqual(calls,['/scratch/checkpoint-3'])
+        self.assertFalse(launch.run_validation_only({},lambda adapter:self.fail('不应触发评分')))
+
+    def test_validation_only_requires_existing_paired_baseline(self):
+        launch=require_module(self,'launch')
+        for c in ({'validation_only_adapter':'/scratch/checkpoint-3'},
+                  {'validation_only_adapter':'/scratch/checkpoint-3','paired_validation':True}):
+            with self.assertRaises(ValueError):launch.run_validation_only(c,lambda adapter:self.fail('不应评分'))
+
+    def test_workflow_forwards_validation_only_adapter(self):
+        workflow=require_module(self,'workflow')
+        c={'project_root':'/scratch/project','train_python':'/scratch/train/bin/python',
+           'judge_python':'/scratch/judge/bin/python','model':'/scratch/model',
+           'validation_only_adapter':'/scratch/source/checkpoint-3'}
+        run=workflow.training_config(c,job_id='1',phase='formal',max_steps=200)
+        self.assertEqual(run.get('validation_only_adapter'),c['validation_only_adapter'])
+
     def test_deferred_baseline_uses_base_model_then_final_adapter(self):
         launch=require_module(self,'launch')
         with tempfile.TemporaryDirectory() as tmp:

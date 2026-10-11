@@ -5,6 +5,7 @@ from contextlib import nullcontext
 from copy import deepcopy
 import json
 import math
+import os
 from pathlib import Path
 import statistics
 import time
@@ -12,6 +13,20 @@ import time
 from .data import read_rows
 from .reward import aggregate
 from .service import JudgeClient
+
+
+def configure_engine_process(c, environ):
+    """评分引擎保留隔离进程，避免与父进程保护线程并发捕获。"""
+    if 'in_proj_qkv' in c.get('lora_target_modules', []):
+        environ['VLLM_ENABLE_V1_MULTIPROCESSING'] = '1'
+
+
+def configure_engine_kwargs(c, options):
+    options = dict(options)
+    if 'in_proj_qkv' in c.get('lora_target_modules', []):
+        options['worker_extension_cls'] = (
+            'training.grpo_v3.six_user_binary.packed_worker_extension.PartialPackedLoRAWorkerExtension')
+    return options
 
 
 def same_frozen_judge(baseline, current):
@@ -70,6 +85,12 @@ def main():
     parser.add_argument('--baseline',type=Path)
     args=parser.parse_args()
     c=json.loads(args.config.read_text(encoding='utf-8'))
+    configure_engine_process(c, os.environ)
+    if 'in_proj_qkv' in c.get('lora_target_modules', []):
+        from .packed_lora_compat import install
+        install()
+    from .utilization_runtime import enable_training_guard
+    enable_training_guard()
     rows=read_rows(c['val_dataset'])
     template=policy_template(c)
     from swift.infer_engine import VllmEngine, InferRequest, RequestConfig
@@ -81,6 +102,8 @@ def main():
     bindings=[{k:r[k] for k in ('evidence_id','source_packet_id','asker_index','messages','images')} for r in rows]
     record={'status':'running','settings':settings,'input_bindings':bindings,'adapter':str(args.adapter) if args.adapter else None,
             'started_epoch':time.time(),'rows':[]}
+    record['runtime']={'partial_qkv_compat':'in_proj_qkv' in c.get('lora_target_modules', []),
+                       'v1_multiprocessing_environment':os.environ.get('VLLM_ENABLE_V1_MULTIPROCESSING')}
     args.output.parent.mkdir(parents=True,exist_ok=True)
     client=JudgeClient(args.judge_url,expected_instance=args.judge_instance)
     record['judge']=client.health()
@@ -93,8 +116,11 @@ def main():
             max_model_len=c['max_length'],max_num_seqs=c['num_generations_eval'],
             gpu_memory_utilization=c.get('vllm_gpu_memory_utilization',.55),tensor_parallel_size=1,
             enable_prefix_caching=True,mm_processor_cache_gb=4,limit_mm_per_prompt={'image':1800},
-            seed=settings['validation_seed'],engine_kwargs={'enable_chunked_prefill':True,'max_num_batched_tokens':8192,
-                'additional_config':{'gdn_prefill_backend':'triton'}})
+            seed=settings['validation_seed'],engine_kwargs=configure_engine_kwargs(c,
+                {'enable_chunked_prefill':True,'max_num_batched_tokens':8192,
+                 'additional_config':{'gdn_prefill_backend':'triton'}}))
+        record['runtime']['engine_core_client_class']=type(engine.engine.engine_core).__name__
+        save()
         for index,row in enumerate(rows):
             seed=settings['validation_seed']+index
             request=InferRequest(messages=deepcopy(row['messages']),images=list(row['images']))

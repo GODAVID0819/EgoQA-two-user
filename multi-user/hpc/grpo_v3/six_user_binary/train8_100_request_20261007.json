@@ -1,0 +1,47 @@
+{
+  "status": "用户已确认学习率1e-5，待补齐媒体；不是可直接提交的workflow",
+  "scope": "下一轮仅运行学习率1e-5的一组，扩大到8个训练视频窗口",
+  "approved_training_settings": {
+    "train_window_count": 8,
+    "askers_per_window": 6,
+    "expected_train_rows": 48,
+    "stop_after_steps": 100,
+    "complete_input_passes": 2,
+    "additional_input_visits": 4,
+    "num_learning_rate_trials": 1,
+    "initialization": "同一Qwen3.8-27B基座的新LoRA，不从旧小数据实验断点续训",
+    "learning_rate": 0.00001,
+    "learning_rate_selection": "用户明确指定峰值学习率1e-5，本轮不再等待四组完整结果选择学习率；不重跑四个学习率，沿用原余弦调度",
+    "validation": "保留独立于8个训练窗口的验证窗口，不把验证数据并入训练",
+    "other_settings": "继承所采用配置中已批准的G、微批、累积、LoRA范围、Judge、媒体预算和学习率曲线；本次不另改这些设置"
+  },
+  "verified_existing_data": {
+    "observed_beijing": "2026-10-07 23:44",
+    "candidate_source": "/scratch/xl6775/datasets/egoqa_fps_newprompt_20260918/base_candidates.jsonl",
+    "candidate_row_count": 5,
+    "distinct_video_window_count": 4,
+    "existing_training_windows": [
+      "DAY1_11400000",
+      "DAY1_17200000",
+      "DAY3_17000000"
+    ],
+    "existing_validation_window": "DAY4_21400000",
+    "prepared_dataset_root": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/data/frames_18719659",
+    "additional_training_windows_required": 5,
+    "boundary": "已检查的成片和分段缓存没有确认出另外5个完整六用户十分钟窗口；不据此断言整个Torch没有其他媒体"
+  },
+  "implementation_requirements": [
+    "先为新增5个窗口确认真实六用户同步成片或完整分段及来源映射；不按文件名猜测缺失媒体",
+    "优先复用现有3个训练窗口和独立验证窗口的已处理图片，只补齐新增窗口的抽帧和六种提问者输入",
+    "训练数据按packet去重并核验48个不同packet/asker输入，验证窗口和重叠片段不得泄漏到训练",
+    "现有workflow.main写死4个窗口，不能仅改expected_train_rows就启动；采用独立数据准备和新的prepared_data_root",
+    "核验实际采样器每优化器步对应一个4候选组，并记录每个输入的实际使用次数；100步不能宣称严格每个输入只用两次",
+    "新数据实验与原四组小数据实验分别记录；如果同时采用扩展LoRA，结果不能单独归因为LoRA覆盖变化",
+    "保留当前作业、checkpoint、提交清单及防重记录，不覆盖主任务活动代码或自动取消任务"
+  ],
+  "execution_status": {
+    "new_training_dataset_ready": false,
+    "new_training_job_submitted": false,
+    "parent_thread_schedule_modified": false
+  }
+}

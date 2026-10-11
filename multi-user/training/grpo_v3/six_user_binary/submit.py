@@ -20,7 +20,7 @@ def parse_job_id(text):
 def sbatch_command(c, config_path, task_dir):
     validate_config(c)
     resources = c["slurm"]
-    for key in ("account", "partition", "qos", "gres", "cpus", "mem"):
+    for key in ("account", "gres", "cpus", "mem"):
         if not resources.get(key):
             raise ValueError(f"必须提供已核验的 Slurm {key}")
     if not c.get("walltime_basis"):
@@ -28,8 +28,8 @@ def sbatch_command(c, config_path, task_dir):
     seconds = c["walltime_seconds"]
     if any("," in str(c[k]) for k in ("project_root", "train_python")) or "," in config_path:
         raise ValueError("Slurm export 路径不得包含逗号")
-    return ["sbatch", "--parsable", "--job-name=egoqa-six-user-grpo", "--nodes=1", "--ntasks=1",
-        f"--account={resources['account']}", f"--partition={resources['partition']}", f"--qos={resources['qos']}",
+    command = ["sbatch", "--parsable", "--job-name=egoqa-six-user-grpo", "--nodes=1", "--ntasks=1",
+        f"--account={resources['account']}",
         f"--gres={resources['gres']}", f"--cpus-per-task={resources['cpus']}", f"--mem={resources['mem']}",
         f"--time={seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}",
         f"--output={task_dir}/slurm-%j.out", f"--error={task_dir}/slurm-%j.err",
@@ -37,6 +37,11 @@ def sbatch_command(c, config_path, task_dir):
         f"--export=ALL,PROJECT_ROOT={c['project_root']},TRAIN_PYTHON={c['train_python']},RUN_CONFIG={config_path}",
         str(PurePosixPath(c["project_root"]) / "multi-user/hpc/grpo_v3/six_user_binary" /
             ("train_direct.sbatch" if c.get("execution_mode") == "direct" else "train.sbatch"))]
+    # 当前Torch普通作业由站点自动路由分区；旧明确配置仍兼容历史路径。
+    for key in ('partition', 'qos', 'constraint'):
+        if resources.get(key):
+            command.insert(-1, '--' + key + '=' + resources[key])
+    return command
 
 
 def main():

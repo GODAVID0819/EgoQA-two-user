@@ -34,6 +34,7 @@ def validate(output, *, adapter_check=finite_updated_adapter):
     allowed_sizes = {config["num_generations"], config["num_generations_eval"]}
     nonconstant = sum(len(values) > 1 and max(values) > min(values) for values in groups.values()) if finite else 0
     adapter = checkpoint / "adapter_model.safetensors"
+    target = config.get('stop_after_steps', config['max_steps'])
     checks = {
         "nonempty_reward_trace": bool(rows),
         "finite_rewards": finite,
@@ -41,15 +42,21 @@ def validate(output, *, adapter_check=finite_updated_adapter):
         "complete_observed_groups": bool(groups) and all(len(v) in allowed_sizes for v in groups.values()),
         "observed_group_variance_positive": nonconstant > 0,
         "at_least_two_judged_candidates": sum(r["judge_result"]["status"] == "scored" for r in rows) >= 2,
-        "requested_steps_reached": int(state.get("global_step", 0)) >= config["max_steps"],
+        "requested_steps_reached": int(state.get("global_step", 0)) >= target,
         "finite_nonzero_gradient": any(isinstance(r.get("grad_norm"), (int, float)) and math.isfinite(r["grad_norm"]) and r["grad_norm"] > 0 for r in history),
         "finite_reported_metrics": all(math.isfinite(v) for row in history for v in row.values() if isinstance(v, (int, float))),
         "validation_metrics_present": any(any(k.startswith("eval_") for k in row) for row in history),
         "finite_nonzero_lora_b": adapter.is_file() and adapter_check(adapter),
     }
+    if 'stop_after_steps' in config:
+        required = ('adapter_model.safetensors', 'adapter_config.json', 'optimizer.pt', 'scheduler.pt',
+                    'rng_state.pth', 'args.json', 'training_args.bin')
+        checks['complete_stage_checkpoint'] = all((checkpoint / name).is_file() and (checkpoint / name).stat().st_size > 0 for name in required)
+        checks['schedule_horizon_preserved'] = state.get('max_steps') == config['max_steps']
     return {"status": "passed" if all(checks.values()) else "failed", "checks": checks,
         "failed_checks": [key for key, value in checks.items() if not value], "global_step": state.get("global_step", 0),
-        "checkpoint": str(checkpoint), "candidate_count": len(rows), "observed_group_count": len(groups),
+        "checkpoint": str(checkpoint), "schedule_max_steps": config['max_steps'], "stage_target_steps": target,
+        "candidate_count": len(rows), "observed_group_count": len(groups),
         "nonconstant_group_count": nonconstant, "source_packet_count": len({r["source_packet_id"] for r in rows}),
         "candidate_scope": "训练和验证评分合计；不将该计数称为终态 QA 数",
         "evidence_boundary": "仅训练工程证据；不证明固定测试集、人类 QA 质量或跨视频泛化"}

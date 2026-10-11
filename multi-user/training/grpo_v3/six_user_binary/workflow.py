@@ -51,7 +51,14 @@ def training_config(workflow, *, job_id, phase, max_steps):
         "max_length": 65536, "max_completion_length": workflow.get("max_completion_length", 1024), "max_pixels": 24576,
         "judge_port": 8766, "learning_rate": 1e-5, "beta": .04, "temperature": .85,
         "top_p": .95, "top_k": 40, "lora_rank": 8, "lora_alpha": 16}
-    for key in ("use_vllm", "attn_impl", "vllm_gpu_memory_utilization", "acceleration_packages", "compiler_environment", "policy_cuda_home", "policy_image_cache_gb"):
+    for key in ("use_vllm", "attn_impl", "vllm_gpu_memory_utilization", "acceleration_packages", "compiler_environment", "policy_cuda_home", "policy_image_cache_gb", "judge_startup_timeout_seconds", "utilization_guard", "policy_allocator_config"):
+        if key in workflow:
+            result[key] = workflow[key]
+    for key in ("learning_rate", "beta", "temperature", "top_p", "top_k", "num_generations",
+                "num_generations_eval", "per_device_train_batch_size", "gradient_accumulation_steps",
+                "per_device_eval_batch_size", "lora_rank", "lora_alpha", "reward_mode",
+                "lora_target_modules",
+                "lr_scheduler_type", "lr_scheduler_kwargs", "seed", "data_seed"):
         if key in workflow:
             result[key] = workflow[key]
     if workflow.get("judge_config"):
@@ -66,7 +73,7 @@ def training_config(workflow, *, job_id, phase, max_steps):
         result.pop("allocation_manifest", None)
     if phase == "formal":
         for key in ("eval_steps", "save_steps", "save_total_limit", "paired_validation", "validation_seed",
-                    "resume_from_checkpoint", "baseline_validation_source", "baseline_after_training"):
+                    "resume_from_checkpoint", "baseline_validation_source", "baseline_after_training", "stop_after_steps", "warmup_steps", "validation_only_adapter"):
             if key in workflow:
                 result[key] = workflow[key]
     return result

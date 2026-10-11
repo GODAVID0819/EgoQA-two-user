@@ -12,6 +12,15 @@ import uuid
 CHECKS=('train_environment','judge_environment','train_data','train_processor','judge_processor')
 
 
+def validate_submission_config(c):
+    steps = c.get('formal_max_steps')
+    stop = c.get('stop_after_steps', steps)
+    if (isinstance(steps, bool) or not isinstance(steps, int) or steps <= 0
+            or isinstance(stop, bool) or not isinstance(stop, int) or not 0 < stop <= steps
+            or not c.get('paired_validation') or c.get('execution_mode') != 'direct'):
+        raise ValueError('提交必须明确正整数训练目标、合法阶段终点及固定验证对比')
+
+
 def direct_submit_command(config, workflow_path, task_dir):
     from .workflow import training_config
     from .submit import sbatch_command
@@ -22,7 +31,7 @@ def direct_submit_command(config, workflow_path, task_dir):
     return sbatch_command(run,str(workflow_path),str(task_dir))
 
 
-def verify_checks(directory, *, require_checkpoint=False):
+def verify_checks(directory, *, require_checkpoint=False, expected_run=None, expected_split_counts=None):
     directory=Path(directory)
     status=json.loads((directory/'status.json').read_text())
     if status['status']!='passed':raise ValueError('零GPU检查尚未全部通过')
@@ -33,8 +42,19 @@ def verify_checks(directory, *, require_checkpoint=False):
         if checks['pip_check']['returncode']!=0:raise ValueError('pip check未通过')
         if not all(checks['host_compilers'][key]['shared_library_loaded'] for key in ('CC','CXX')):
             raise ValueError('实际编译/加载未通过')
-    if reports['train_data']['checks']['rows']!={'train':18,'validation':6}:
-        raise ValueError('训练/验证数量不符')
+    expected_counts={'train':18,'validation':6} if expected_split_counts is None else expected_split_counts
+    if (not isinstance(expected_counts,dict) or not {'train','validation'} <= set(expected_counts)
+            or any(isinstance(n,bool) or not isinstance(n,int) or n<=0 for n in expected_counts.values())):
+        raise ValueError('预期划分计数必须包含正整数训练和验证数量')
+    if reports['train_data']['checks']['rows']!=expected_counts:
+        raise ValueError(f'训练/验证数量不符：实际{reports["train_data"]["checks"]["rows"]}，期望{expected_counts}')
+    if expected_run is not None:
+        typed = reports['train_environment']['checks'].get('typed_cli', {})
+        for key in ('max_steps', 'eval_steps', 'learning_rate', 'lr_scheduler_type', 'lr_scheduler_kwargs', 'warmup_steps'):
+            if key in expected_run and typed.get(key) != expected_run[key]:
+                raise ValueError(f'当前配置与实际CLI检查不一致：{key} actual={typed.get(key)!r} expected={expected_run[key]!r}')
+        if 'stop_after_steps' in expected_run and 'egoqa_stage_stop' not in typed.get('callbacks', []):
+            raise ValueError('当前阶段缺少实际CLI回调检查')
     if require_checkpoint:
         resume=json.loads((directory/'train_checkpoint.json').read_text())
         if resume.get('status')!='passed' or not resume.get('checks',{}).get('finite_updated_adapter'):
@@ -50,16 +70,15 @@ def main():
     args=parser.parse_args()
     if args.cpu_job_id and not args.cpu_job_id.isdigit():raise ValueError('CPU JobID必须是数字')
     c=json.loads(args.config.read_text())
-    if c.get('formal_max_steps')!=60 or not c.get('paired_validation') or c.get('execution_mode')!='direct':
-        raise ValueError('本次提交必须为60步及固定验证对比')
+    validate_submission_config(c)
     root=Path(c['project_root'])
     stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'_'+uuid.uuid4().hex[:8]
-    task=root/'submissions'/('grpo60_'+stamp)
+    task=root/'submissions'/('grpo'+str(c['formal_max_steps'])+'_'+stamp)
     task.mkdir(parents=True,exist_ok=False)
     with (args.preflight/'submission.claim').open('x') as f:f.write(str(task))
     record={'status':'waiting_for_cpu_validation','task_dir':str(task),'preflight_dir':str(args.preflight),
-            'config':c,'cpu_preflight_job_id':args.cpu_job_id,'failed_job_ids':['18719659','18790400'],'cancelled_job_id':'18837514',
-            'data_provenance_job_id':'18719659','created_at_utc':stamp}
+            'config':c,'cpu_preflight_job_id':args.cpu_job_id,
+            'data_provenance_job_id':c.get('data_provenance_job_id'),'created_at_utc':stamp}
     def save():(task/'submission.json').write_text(json.dumps(record,indent=2),encoding='utf-8')
     save()
     try:
@@ -76,14 +95,17 @@ def main():
                 last_scheduler_check=time.time()
             if time.time()>deadline:raise TimeoutError('等待零GPU结果超时，不提交GPU')
             time.sleep(15)
-        verify_checks(args.preflight,require_checkpoint=bool(c.get('resume_from_checkpoint')))
+        from .workflow import training_config
+        expected_run=training_config(c,job_id='0',phase='formal',max_steps=c['formal_max_steps'])
+        verify_checks(args.preflight,require_checkpoint=bool(c.get('resume_from_checkpoint')),expected_run=expected_run,
+                      expected_split_counts=c.get('expected_split_counts'))
         if json.loads(args.config.read_text())!=c:raise ValueError('检查期间配置发生变化，不提交GPU')
         if subprocess.check_output(['whoami'],text=True).strip()!='xl6775':raise RuntimeError('用户身份不符')
         assoc=subprocess.check_output(['sacctmgr','-nP','show','assoc','user=xl6775','format=User,Account,Partition,QOS'],text=True)
         if c['slurm']['account'] not in assoc:raise RuntimeError('当前account不可用')
-        partition=subprocess.check_output(['scontrol','show','partition',c['slurm']['partition']],text=True)
-        qos=subprocess.check_output(['sacctmgr','-nP','show','qos',c['slurm']['qos'],'format=Name,MaxTRESPU,GrpTRES'],text=True)
-        if 'State=UP' not in partition or c['slurm']['qos'] not in qos:raise RuntimeError('partition或QOS不可用')
+        partition=subprocess.check_output(['scontrol','show','partition'] + ([c['slurm']['partition']] if c['slurm'].get('partition') else []),text=True)
+        qos=subprocess.check_output(['sacctmgr','-nP','show','qos'] + ([c['slurm']['qos']] if c['slurm'].get('qos') else []) + ['format=Name,MaxTRESPU,GrpTRES'],text=True)
+        if 'State=UP' not in partition or (c['slurm'].get('qos') and c['slurm']['qos'] not in qos):raise RuntimeError('partition或QOS不可用')
         (task/'scheduler_check.txt').write_text(assoc+'\n'+partition+'\n'+qos)
         script=root/'multi-user/hpc/grpo_v3/six_user_binary/train_direct.sbatch'
         subprocess.run(['bash','-n',str(script)],check=True)

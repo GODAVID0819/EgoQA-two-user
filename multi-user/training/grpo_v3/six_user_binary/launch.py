@@ -15,8 +15,18 @@ import uuid
 
 
 def validate_config(c):
+    if c.get('policy_allocator_config') not in (None, 'expandable_segments:True'):
+        raise ValueError('Policy分配器只支持已核验的expandable_segments:True')
     from .policy_image_cache import configured_cache_bytes
     configured_cache_bytes(c.get('policy_image_cache_gb'))
+    modules = c.get('lora_target_modules', ['q_proj', 'v_proj'])
+    if (not isinstance(modules, list) or not modules or any(not isinstance(v, str) for v in modules)
+            or len(set(modules)) != len(modules)
+            or set(modules) not in ({'q_proj', 'v_proj'}, {'q_proj', 'v_proj', 'in_proj_qkv'})):
+        raise ValueError('LoRA覆盖必须为原q_proj/v_proj或已确认的q_proj/v_proj/in_proj_qkv')
+    if c.get('utilization_guard'):
+        from .utilization_guard import checked_config
+        checked_config(c['utilization_guard'])
     for key in ("project_root", "train_python", "judge_python", "policy_model", "judge_config",
                 "train_dataset", "val_dataset", "output_root", "scratch_root"):
         if not isinstance(c.get(key), str) or not PurePosixPath(c[key]).is_absolute():
@@ -57,6 +67,21 @@ def validate_config(c):
         raise ValueError("beta 必须显式提供非负有限数")
     if not 0 < c["top_p"] <= 1 or not isinstance(c.get("top_k"), int):
         raise ValueError("top_p 或 top_k 不合法")
+    stop = c.get("stop_after_steps", c["max_steps"])
+    if isinstance(stop, bool) or not isinstance(stop, int) or not 0 < stop <= c["max_steps"]:
+        raise ValueError("分阶段终点必须是正整数且不超过调度总步数")
+    warmup = c.get("warmup_steps", 0)
+    if isinstance(warmup, bool) or not isinstance(warmup, int) or not 0 <= warmup < c["max_steps"]:
+        raise ValueError("预热步数必须小于调度总步数")
+    if c.get("lr_scheduler_type", "constant") not in {"constant", "linear", "cosine", "cosine_with_min_lr"}:
+        raise ValueError("不支持的学习率调度方式")
+    scheduler_kwargs = c.get("lr_scheduler_kwargs", {})
+    if not isinstance(scheduler_kwargs, dict):
+        raise ValueError("学习率调度附加参数必须是字典")
+    if c.get("lr_scheduler_type") == "cosine_with_min_lr":
+        rate = scheduler_kwargs.get("min_lr_rate")
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not math.isfinite(rate) or not 0 <= rate < 1:
+            raise ValueError("余弦学习率下限比例必须位于[0,1)")
 
 
 def swift_command(c, output):
@@ -71,10 +96,10 @@ def swift_command(c, output):
         "lora_alpha": c.get("lora_alpha", 16), "use_vllm": str(c.get("use_vllm", False)).lower(), "num_generations": c["num_generations"],
         "num_generations_eval": c["num_generations_eval"], "per_device_train_batch_size": c.get("per_device_train_batch_size", c["num_generations"]),
         "per_device_eval_batch_size": c.get("per_device_eval_batch_size", c["num_generations_eval"]), "gradient_accumulation_steps": c.get("gradient_accumulation_steps", 1),
-        "gradient_checkpointing": "true", "max_steps": c["max_steps"], "seed": 42, "data_seed": 42,
+        "gradient_checkpointing": "true", "max_steps": c["max_steps"], "seed": c.get("seed", 42), "data_seed": c.get("data_seed", 42),
         "max_length": c["max_length"], "max_completion_length": c["max_completion_length"], "max_pixels": c["max_pixels"],
         "learning_rate": c["learning_rate"], "beta": c["beta"], "temperature": c["temperature"],
-        "top_p": c["top_p"], "top_k": c["top_k"], "lr_scheduler_type": "constant",
+        "top_p": c["top_p"], "top_k": c["top_k"], "lr_scheduler_type": c.get("lr_scheduler_type", "constant"),
         "save_strategy": "steps", "save_steps": c.get("save_steps", c["max_steps"]),
         "eval_strategy": "steps", "eval_steps": c.get("eval_steps", c["max_steps"]),
         "save_total_limit": c.get("save_total_limit", 2), "logging_steps": 1, "log_completions": "true", "dataset_shuffle": "true",
@@ -93,9 +118,15 @@ def swift_command(c, output):
                 "additional_config": {"gdn_prefill_backend": "triton"}}))
     if c.get("resume_from_checkpoint"):
         options["resume_from_checkpoint"] = c["resume_from_checkpoint"]
+    if "warmup_steps" in c:
+        options["warmup_steps"] = c["warmup_steps"]
+    if "lr_scheduler_kwargs" in c:
+        options["lr_scheduler_kwargs"] = json.dumps(c["lr_scheduler_kwargs"])
+    if "stop_after_steps" in c:
+        options["callbacks"] = "egoqa_stage_stop"
     for key, value in options.items():
         cmd.extend(["--" + key, str(value)])
-    return cmd + ["--target_modules", "q_proj", "v_proj"]
+    return cmd + ["--target_modules", *c.get('lora_target_modules', ['q_proj', 'v_proj'])]
 
 
 def checked_baseline_source(path, judge_health, candidates_per_input):
@@ -119,6 +150,17 @@ def final_validation(c, output, evaluate):
     evaluate(checked['checkpoint'])
 
 
+def run_validation_only(c, evaluate):
+    """只恢复已保存adapter的固定评分，不重新执行优化器更新。"""
+    adapter = c.get('validation_only_adapter')
+    if not adapter:
+        return False
+    if not c.get('paired_validation') or not c.get('baseline_validation_source'):
+        raise ValueError('独立评分恢复必须沿用已有完整基座配对验证')
+    evaluate(adapter)
+    return True
+
+
 def scratch_environment(c, job_id):
     from training.torch_storage_preflight import REQUIRED_STORAGE_VARIABLES
     scratch = Path(c["scratch_root"]) / ("six_user_grpo_" + job_id)
@@ -131,10 +173,17 @@ def scratch_environment(c, job_id):
     return scratch, env
 
 
-def role_environment(python, base):
+def role_environment(python, base, *, allocator_config=None):
     # 绝对 Python 路径不会激活环境；ninja 等子进程仍通过 PATH 寻找。
-    return {**base, "PATH": str(PurePosixPath(python).parent) + os.pathsep + base.get("PATH", ""),
-            "VLLM_USE_FLASHINFER_SAMPLER": "0"}
+    env = {**base, "PATH": str(PurePosixPath(python).parent) + os.pathsep + base.get("PATH", ""),
+           "VLLM_USE_FLASHINFER_SAMPLER": "0"}
+    if allocator_config is not None:
+        if allocator_config != 'expandable_segments:True':
+            raise ValueError('未核验的Policy分配器配置')
+        # Swift按旧变量启用原生分阶段切换；避免新别名优先级遮蔽该切换。
+        env.pop('PYTORCH_ALLOC_CONF', None)
+        env['PYTORCH_CUDA_ALLOC_CONF'] = allocator_config
+    return env
 
 
 def select_master_port():
@@ -248,6 +297,23 @@ def main():
         child(["nvidia-smi", "--id=" + ",".join(allocation),
             "--query-gpu=timestamp,index,uuid,name,memory.total,memory.used,utilization.gpu",
             "--format=csv", "-l", "1"], "gpu_metrics.csv", env)
+        startup_guard = None
+        guard_environment = {}
+        if c.get('utilization_guard'):
+            if not c.get('shared_gpu'):
+                raise ValueError('当前利用率保护交接只适用于已验证的单GPU模式')
+            guard_config = json.dumps(c['utilization_guard'])
+            handoff = str(output/'utilization_handoff.signal')
+            guard_environment = {'EGOQA_UTILIZATION_GUARD': guard_config,
+                'EGOQA_UTILIZATION_HANDOFF': handoff,
+                'EGOQA_UTILIZATION_LOG': str(output/'utilization_trainer.jsonl'),
+                'EGOQA_UTILIZATION_METRICS': str(output/'gpu_metrics.csv')}
+            guard_env = {**role_environment(c['train_python'],env),
+                **guard_environment, 'CUDA_VISIBLE_DEVICES': allocation[0]}
+            guard_env['PYTHONPATH'] += os.pathsep+c['project_root']
+            startup_guard = child([c['train_python'],'-m','training.grpo_v3.six_user_binary.utilization_runtime',
+                '--config',guard_config,'--log',str(output/'utilization_startup.jsonl'),
+                '--handoff',handoff],'utilization_startup.log',guard_env)
         judge_config = json.loads(Path(c["judge_config"]).read_text(encoding="utf-8"))
         judge_config['shared_gpu'] = bool(c.get('shared_gpu'))
         if judge_config.get("tensor_parallel_size", 1) != len(c["judge_gpu_indices"]):
@@ -260,6 +326,8 @@ def main():
         client = JudgeClient(f"http://127.0.0.1:{c['judge_port']}", timeout_seconds=2., expected_instance=instance_id)
         deadline = time.monotonic() + c.get("judge_startup_timeout_seconds", 900)
         while True:
+            if startup_guard is not None and startup_guard.poll() not in (None,0):
+                raise RuntimeError('启动期利用率保护退出，见utilization_startup.log')
             if service.poll() is not None:
                 raise RuntimeError("Judge 服务提前退出，见 judge_service.log")
             try:
@@ -270,13 +338,20 @@ def main():
                     raise RuntimeError("Judge 服务启动超时")
                 time.sleep(2.)
         (output / "judge_health.json").write_text(json.dumps(health, indent=2), encoding="utf-8")
-        policy_env = {**role_environment(c["train_python"], env), "CUDA_VISIBLE_DEVICES": allocation[c["policy_gpu_indices"][0]],
+        policy_env = {**role_environment(c["train_python"], env, allocator_config=c.get('policy_allocator_config')), "CUDA_VISIBLE_DEVICES": allocation[c["policy_gpu_indices"][0]],
+            "EGOQA_GRPO_STOP_AT_STEP": str(c.get("stop_after_steps", c["max_steps"])),
+            "EGOQA_GRPO_STAGE_AUDIT": str(output / "stage_state.json"),
             "EGOQA_POLICY_IMAGE_CACHE_GB": str(c.get("policy_image_cache_gb", 0)),
             "EGOQA_SHARED_GPU": '1' if c.get('shared_gpu') else '0',
             "EGOQA_SHARED_GPU_TRACE": str(output / 'gpu_phase_trace.jsonl'),
             "NPROC_PER_NODE": "1", "EGOQA_SIX_USER_JUDGE_URL": client.base_url,
             "EGOQA_SIX_USER_JUDGE_INSTANCE": instance_id,
             "EGOQA_SIX_USER_REWARD_MODE": c["reward_mode"], "EGOQA_GRPO_V3_REWARD_TRACE": str(output / "reward_trace.jsonl")}
+        policy_env['EGOQA_QWEN_PARTIAL_PACKED_LORA'] = (
+            '1' if 'in_proj_qkv' in c.get('lora_target_modules', []) else '0')
+        if guard_environment:
+            policy_env.update(guard_environment)
+            policy_env['PYTHONPATH'] += os.pathsep+c['project_root']
         if c.get("acceleration_packages"):
             policy_env["PYTHONPATH"] += os.pathsep + c["acceleration_packages"]
         if c.get("policy_cuda_home"):
@@ -304,6 +379,10 @@ def main():
             children.remove(process)
             if process.returncode or errors:
                 raise RuntimeError(f"固定验证 {label} 失败：exit={process.returncode}, cleanup={errors}")
+        if run_validation_only(c, evaluate_policy):
+            result.update(status='completed', phase='validation_only',
+                          source_checkpoint=c['validation_only_adapter'])
+            return
         if c.get("paired_validation") and not c.get("baseline_validation_source") and not c.get("baseline_after_training"):
             evaluate_policy()
         selected_port = select_master_port()
@@ -314,6 +393,9 @@ def main():
         (output / "train_command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")
         trainer = child(command, "trainer.log", policy_env)
         while trainer.poll() is None:
+            if startup_guard is not None:
+                if startup_guard.poll() not in (None,0):
+                    raise RuntimeError('启动期利用率保护交接失败')
             if service.poll() is not None:
                 raise RuntimeError("训练期间 Judge 服务退出")
             time.sleep(2.)
