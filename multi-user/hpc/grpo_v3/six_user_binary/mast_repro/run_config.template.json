@@ -1,0 +1,53 @@
+{
+  "execution_mode": "direct",
+  "project_root": "__PROJECT_ROOT__",
+  "train_python": "__TRAIN_PYTHON__",
+  "judge_python": "__JUDGE_PYTHON__",
+  "policy_model": "__MODEL__",
+  "judge_config": "__PROJECT_ROOT__/multi-user/hpc/grpo_v3/six_user_binary/mast_repro/judge_config.json",
+  "train_dataset": "__DATA_DIR__/train.jsonl",
+  "val_dataset": "__DATA_DIR__/validation.jsonl",
+  "output_root": "__OUTPUT_ROOT__",
+  "scratch_root": "__SCRATCH_ROOT__",
+  "reward_mode": "continuous",
+  "policy_gpu_indices": [
+    0
+  ],
+  "judge_gpu_indices": [
+    1
+  ],
+  "use_vllm": true,
+  "walltime_seconds": 172740,
+  "max_steps": 900,
+  "eval_steps": 100,
+  "save_steps": 50,
+  "save_total_limit": 20,
+  "num_generations": 4,
+  "num_generations_eval": 4,
+  "per_device_train_batch_size": 1,
+  "gradient_accumulation_steps": 16,
+  "per_device_eval_batch_size": 4,
+  "max_length": 71680,
+  "max_completion_length": 2048,
+  "max_pixels": 65536,
+  "judge_port": 8766,
+  "learning_rate": 2e-05,
+  "lr_scheduler_type": "constant",
+  "warmup_steps": 0,
+  "beta": 0.04,
+  "temperature": 0.85,
+  "top_p": 0.95,
+  "top_k": 40,
+  "seed": 42,
+  "data_seed": 42,
+  "lora_rank": 64,
+  "lora_alpha": 64,
+  "lora_dropout": 0,
+  "lora_target_regex": "^model\\.language_model\\.layers\\.(4[89]|5[0-9]|6[0-3])\\.(self_attn\\.(q_proj|k_proj|v_proj|o_proj)|linear_attn\\.(in_proj_qkv|in_proj_z|in_proj_a|in_proj_b|out_proj)|mlp\\.(gate_proj|up_proj|down_proj))$",
+  "swift_overrides": {
+    "weight_decay": 0,
+    "epsilon": 0.2,
+    "loss_type": "grpo",
+    "vllm_enable_lora": false
+  }
+}

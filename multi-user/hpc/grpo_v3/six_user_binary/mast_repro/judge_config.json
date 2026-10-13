@@ -1,0 +1,11 @@
+{
+  "model_id": "__MODEL__",
+  "judge_mode": "baseline",
+  "tensor_parallel_size": 1,
+  "frame_stride": 2,
+  "max_pixels": 119808,
+  "min_pixels": 3136,
+  "max_input_tokens": 262144,
+  "max_num_seqs": 4,
+  "gpu_memory_utilization": 0.85
+}

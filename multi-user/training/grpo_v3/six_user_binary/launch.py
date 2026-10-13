@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path, PurePosixPath
+import re
 import signal
 import shutil
 import socket
@@ -14,16 +15,45 @@ import time
 import uuid
 
 
+# 只透传已核对语义的 ms-swift 参数；未设置时沿用 ms-swift 默认值（4.2.2：weight_decay 0.1、
+# epsilon 0.2、loss_type grpo、colocate 时由本入口设 vllm_enable_lora true）。
+SWIFT_OVERRIDE_TYPES = {"weight_decay": (int, float), "epsilon": (int, float),
+                        "loss_type": str, "vllm_enable_lora": bool}
+
+
 def validate_config(c):
     if c.get('policy_allocator_config') not in (None, 'expandable_segments:True'):
         raise ValueError('Policy分配器只支持已核验的expandable_segments:True')
     from .policy_image_cache import configured_cache_bytes
     configured_cache_bytes(c.get('policy_image_cache_gb'))
-    modules = c.get('lora_target_modules', ['q_proj', 'v_proj'])
-    if (not isinstance(modules, list) or not modules or any(not isinstance(v, str) for v in modules)
-            or len(set(modules)) != len(modules)
-            or set(modules) not in ({'q_proj', 'v_proj'}, {'q_proj', 'v_proj', 'in_proj_qkv'})):
-        raise ValueError('LoRA覆盖必须为原q_proj/v_proj或已确认的q_proj/v_proj/in_proj_qkv')
+    if 'lora_target_regex' in c:
+        regex = c['lora_target_regex']
+        if not isinstance(regex, str) or not regex or 'lora_target_modules' in c:
+            raise ValueError('lora_target_regex 必须是非空字符串，且不能与 lora_target_modules 同时设置')
+        re.compile(regex)
+    else:
+        modules = c.get('lora_target_modules', ['q_proj', 'v_proj'])
+        if (not isinstance(modules, list) or not modules or any(not isinstance(v, str) for v in modules)
+                or len(set(modules)) != len(modules)
+                or set(modules) not in ({'q_proj', 'v_proj'}, {'q_proj', 'v_proj', 'in_proj_qkv'})):
+            raise ValueError('LoRA覆盖必须为原q_proj/v_proj或已确认的q_proj/v_proj/in_proj_qkv')
+    dropout = c.get('lora_dropout', 0.05)
+    if isinstance(dropout, bool) or not isinstance(dropout, (int, float)) or not 0 <= dropout < 1:
+        raise ValueError('lora_dropout 必须位于 [0, 1)')
+    overrides = c.get('swift_overrides', {})
+    if not isinstance(overrides, dict) or set(overrides) - set(SWIFT_OVERRIDE_TYPES):
+        raise ValueError('swift_overrides 只允许：' + ','.join(sorted(SWIFT_OVERRIDE_TYPES)))
+    for key, value in overrides.items():
+        if isinstance(value, bool) is not (SWIFT_OVERRIDE_TYPES[key] is bool) or not isinstance(value, SWIFT_OVERRIDE_TYPES[key]):
+            raise ValueError(f'swift_overrides.{key} 类型不合法')
+    for key in ('weight_decay', 'epsilon'):
+        if key in overrides and (not math.isfinite(overrides[key]) or overrides[key] < 0
+                                 or (key == 'epsilon' and overrides[key] == 0)):
+            raise ValueError(f'swift_overrides.{key} 数值不合法')
+    if overrides.get('loss_type', 'grpo') not in {'grpo', 'bnpo', 'dr_grpo', 'dapo'}:
+        raise ValueError('不支持的 GRPO loss_type')
+    if 'vllm_enable_lora' in overrides and not c.get('use_vllm'):
+        raise ValueError('vllm_enable_lora 只在 use_vllm 时有意义')
     if c.get('utilization_guard'):
         from .utilization_guard import checked_config
         checked_config(c['utilization_guard'])
@@ -124,8 +154,14 @@ def swift_command(c, output):
         options["lr_scheduler_kwargs"] = json.dumps(c["lr_scheduler_kwargs"])
     if "stop_after_steps" in c:
         options["callbacks"] = "egoqa_stage_stop"
+    if "lora_dropout" in c:
+        options["lora_dropout"] = c["lora_dropout"]
+    for key, value in c.get("swift_overrides", {}).items():
+        options[key] = str(value).lower() if isinstance(value, bool) else value
     for key, value in options.items():
         cmd.extend(["--" + key, str(value)])
+    if "lora_target_regex" in c:
+        return cmd + ["--target_regex", c["lora_target_regex"]]
     return cmd + ["--target_modules", *c.get('lora_target_modules', ['q_proj', 'v_proj'])]
 
 

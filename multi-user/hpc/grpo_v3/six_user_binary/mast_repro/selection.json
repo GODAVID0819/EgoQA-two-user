@@ -1,0 +1,270 @@
+{
+ "train": [
+  {
+   "source_packet_id": "RLHF6U_DAY1_17200000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 0
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY1_17200000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 1
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY1_17200000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 2
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY1_17200000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 3
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY1_17200000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 4
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY1_17200000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 5
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY3_17000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 0
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY3_17000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 1
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY3_17000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 2
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY3_17000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 3
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY3_17000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 4
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY3_17000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 5
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 0
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 1
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 2
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 3
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 4
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 5
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 0
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 1
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 2
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 3
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 4
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 5
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY4_12000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 0
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY4_12000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 1
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY4_12000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 2
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY4_12000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 3
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY4_12000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 4
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY4_12000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 5
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY5_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 0
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY5_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 1
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY5_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 2
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY5_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 3
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY5_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 4
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY5_16000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 5
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_15300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 0
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_15300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 1
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_15300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 2
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_15300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 3
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_15300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 4
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_15300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 5
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY7_14000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 0
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY7_14000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 1
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY7_14000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 2
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY7_14000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 3
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY7_14000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 4
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY7_14000000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 5
+  }
+ ],
+ "validation": [
+  {
+   "source_packet_id": "RLHF6U_DAY4_21400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 0
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY4_21400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 1
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY4_21400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 2
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY4_21400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 3
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY4_21400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 4
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY4_21400000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 5
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_17300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 0
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_17300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 1
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_17300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 2
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_17300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 3
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_17300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 4
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY2_17300000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 5
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_20100000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 0
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_20100000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 1
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_20100000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 2
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_20100000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 3
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_20100000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 4
+  },
+  {
+   "source_packet_id": "RLHF6U_DAY6_20100000_A1_A2_A3_A4_A5_A6",
+   "asker_index": 5
+  }
+ ]
+}

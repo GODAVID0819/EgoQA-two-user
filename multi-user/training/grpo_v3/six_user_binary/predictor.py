@@ -12,6 +12,7 @@ from training.judge_sft.collator import (
     _apply_chat_template, _assert_thinking_disabled, adaptive_image_max_pixels,
     model_visible_prompt, qwen_vision_geometry,
 )
+from training.judge_sft.collator_025fps_mb2 import _prompt_025fps
 from training.judge_sft.contracts import VERDICT_ASSISTANT_PREFIX
 
 TASKS = ("formality", "groundedness", "answerability")
@@ -60,6 +61,8 @@ def validate_config(config: dict) -> dict:
     model = Path(config["model_id"]).expanduser().resolve()
     if not (model / "config.json").is_file():
         raise FileNotFoundError(model / "config.json")
+    if config.get("frame_stride", 1) not in (1, 2):
+        raise ValueError("frame_stride 只支持 1（0.5 FPS 全部帧）或 2（与 judge SFT 的 0.25 FPS collator 一致）")
     mode = config.get("judge_mode", "adapter")
     if mode not in {"baseline", "adapter"}:
         raise ValueError("judge_mode 必须为 baseline 或 adapter")
@@ -116,6 +119,18 @@ def media_uuids(frames, *, effective, min_pixels, patch_size, namespace):
             for path in frames]
 
 
+def judge_frames(example, stride):
+    """stride=2 与 collator_025fps_mb2 相同：每个 frame_set 各自隔帧。"""
+    if stride == 1:
+        return list(example.frames)
+    return [frame for frame_set in example.frame_sets for frame in frame_set.frames[::stride]]
+
+
+def judge_prompt(example, stride):
+    """与训练 judge 时的 collator 使用同一份可见文本。"""
+    return model_visible_prompt(example) if stride == 1 else _prompt_025fps(example)
+
+
 def binary_decision(output, *, pass_id: int, fail_id: int) -> dict:
     if pass_id == fail_id:
         raise ValueError("pass/fail token 必须不同")
@@ -152,6 +167,7 @@ class VllmJudge:
         self.max_tokens = int(self.config.get("max_input_tokens", 262144))
         self.min_pixels = int(self.config.get("min_pixels", 3136))
         self.max_pixels = int(self.config.get("max_pixels", 262144))
+        self.frame_stride = int(self.config.get("frame_stride", 1))
         unique_paths = list(dict.fromkeys(self.config["adapters"].values()))
         self.llm = LLM(**engine_options(self.config))
         self.sleeping = False
@@ -177,7 +193,8 @@ class VllmJudge:
             "backend": "vllm_raw_verdict_logprobs", "max_input_tokens": self.max_tokens,
             "min_pixels": self.min_pixels, "max_pixels": self.max_pixels,
             "tensor_parallel_size": self.config.get("tensor_parallel_size", 1),
-            "max_num_seqs": self.config.get("max_num_seqs", 4), "media_uuid_cache": True}
+            "max_num_seqs": self.config.get("max_num_seqs", 4), "media_uuid_cache": True,
+            "frame_stride": self.frame_stride}
 
     def predict(self, example):
         return self.predict_many([example])[0]
@@ -200,18 +217,20 @@ class VllmJudge:
 
     def prepare(self, example):
         start = time.perf_counter()
+        # 像素上限按原始 0.5 FPS 帧数计算；frame_stride=2 时与 collator_025fps_mb2 相同，隔帧不提高分辨率。
         effective = adaptive_image_max_pixels(image_count=example.frame_count,
             configured_max_pixels=self.max_pixels, min_pixels=self.min_pixels,
             max_input_tokens=self.max_tokens, vision_token_pixel_area=self.geometry["merged_token_pixel_area"])
+        frames = judge_frames(example, self.frame_stride)
         content = [{"type": "image", "image": path, "min_pixels": self.min_pixels, "max_pixels": effective}
-                   for path in example.frames]
-        content.append({"type": "text", "text": model_visible_prompt(example)})
+                   for path in frames]
+        content.append({"type": "text", "text": judge_prompt(example, self.frame_stride)})
         messages = [{"role": "user", "content": content}]
         rendered = _apply_chat_template(self.processor, messages)
         _assert_thinking_disabled(rendered)
         payload = {"prompt": rendered + VERDICT_ASSISTANT_PREFIX}
         cache_audit = {}
-        if example.frames:
+        if frames:
             def decode(contents):
                 images, videos = self.process_vision_info([{'role':'user','content':contents}], image_patch_size=self.geometry["patch_size"])
                 if videos is not None and len(videos):
@@ -219,12 +238,12 @@ class VllmJudge:
                 if images is None or len(images) != len(contents):
                     raise RuntimeError("Judge 解码帧数不匹配")
                 return list(images)
-            keys = [(str(path), effective, self.min_pixels, self.geometry['patch_size']) for path in example.frames]
+            keys = [(str(path), effective, self.min_pixels, self.geometry['patch_size']) for path in frames]
             images, cache_audit = self.image_cache.get_many(keys, content[:-1], decode)
             payload["multi_modal_data"] = {"image": images}
-            payload["multi_modal_uuids"] = {"image": media_uuids(example.frames, effective=effective,
+            payload["multi_modal_uuids"] = {"image": media_uuids(frames, effective=effective,
                 min_pixels=self.min_pixels, patch_size=self.geometry["patch_size"], namespace=self.cache_namespace)}
-        audit = {"frame_count": example.frame_count, "effective_max_pixels": effective,
+        audit = {"frame_count": example.frame_count, "input_frame_count": len(frames), "effective_max_pixels": effective,
                 "frame_order": [f.label for f in example.frame_sets], "prompt": example.prompt,
                 "prepare_seconds": time.perf_counter() - start, **cache_audit}
         return payload, audit

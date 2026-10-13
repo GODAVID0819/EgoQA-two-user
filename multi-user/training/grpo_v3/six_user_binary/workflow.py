@@ -57,7 +57,7 @@ def training_config(workflow, *, job_id, phase, max_steps):
     for key in ("learning_rate", "beta", "temperature", "top_p", "top_k", "num_generations",
                 "num_generations_eval", "per_device_train_batch_size", "gradient_accumulation_steps",
                 "per_device_eval_batch_size", "lora_rank", "lora_alpha", "reward_mode",
-                "lora_target_modules",
+                "lora_target_modules", "lora_target_regex", "lora_dropout", "swift_overrides",
                 "lr_scheduler_type", "lr_scheduler_kwargs", "seed", "data_seed"):
         if key in workflow:
             result[key] = workflow[key]

@@ -22,11 +22,44 @@ def checked_packet(dataset_root: str | Path, packet_id: str, asker_index: int) -
     return path
 
 
-def make_row(dataset_root: str | Path, packet_id: str, asker_index: int, *, generation_profile=None) -> dict[str, Any]:
+GENERATOR_VIEWS = (None, "full_025fps")
+FULL_025FPS_FRAME_STRIDE = 2
+
+
+def full_025fps_view(dataset_root: str | Path, packet_id: str, asker_index: int) -> dict[str, Any]:
+    """六人完整时间线隔帧（0.25 FPS、不剪枝），与 MAST mast_inputs.policy_row 相同。
+
+    model_input_* 改为实际送入模型的帧数；source_* 保留 packet 原始 0.5 FPS 帧数。
+    prompts.py 中写死的说明文字不改。
+    """
+    from training.judge_sft.prepare_real_data import _load_full_judge_view
+    view = _load_full_judge_view(dataset_root, packet_id, asker_index)
+    counts = []
+    for clip in view["clips"]:
+        frames = clip["full_frames"][::FULL_025FPS_FRAME_STRIDE]
+        clip["frames"] = frames
+        clip["retained_frame_count"] = len(frames)
+        clip["context_sampling"] = {**clip["context_sampling"],
+            "model_input_frame_count": len(frames),
+            "effective_model_input_fps": len(frames) / float(clip["duration_seconds"])}
+        counts.append(len(frames))
+    budget = view["generator_context_budget"]
+    budget["model_input_frame_count"] = sum(counts)
+    budget["per_user_model_input_frame_counts"] = counts
+    return view
+
+
+def make_row(dataset_root: str | Path, packet_id: str, asker_index: int, *, generation_profile=None,
+             generator_view=None) -> dict[str, Any]:
+    if generator_view not in GENERATOR_VIEWS:
+        raise ValueError(f"未知生成器视角：{generator_view}")
     packet_dir = checked_packet(dataset_root, packet_id, asker_index)
-    view = _repo_module("rlhf_evidence_preprocessing").load_asker_view(
-        dataset_root, packet_id, asker_index
-    )
+    if generator_view == "full_025fps":
+        view = full_025fps_view(dataset_root, packet_id, asker_index)
+    else:
+        view = _repo_module("rlhf_evidence_preprocessing").load_asker_view(
+            dataset_root, packet_id, asker_index
+        )
     users = view["required_users"]
     if len(users) != 6 or len(set(users)) != 6 or any(not u or u == "None" for u in users):
         raise ValueError("每个 packet 必须有六个不同的真实用户")
@@ -36,7 +69,10 @@ def make_row(dataset_root: str | Path, packet_id: str, asker_index: int, *, gene
         indices = [f["frame_index"] for f in full]
         if indices != list(range(300)):
             raise ValueError("完整用户时间线必须按 0..299 排序")
-        if index == 0 and frames != full:
+        if generator_view == "full_025fps":
+            if frames != full[::FULL_025FPS_FRAME_STRIDE]:
+                raise ValueError("0.25 FPS 视角必须是每人完整时间线隔帧")
+        elif index == 0 and frames != full:
             raise ValueError("speaker 的生成输入必须保留完整采样帧")
         for frame in full:
             path = Path(frame["path"]).resolve()
@@ -59,6 +95,8 @@ def make_row(dataset_root: str | Path, packet_id: str, asker_index: int, *, gene
         "required_users": users, "generator_frame_counts": counts,
         "generation_mode": "baseline", "question_type": "neutral",
     }
+    if generator_view is not None:
+        result["generator_view"] = generator_view
     if generation_profile is not None:
         from .generation import apply_profile
         result=apply_profile(result,generation_profile)
@@ -67,7 +105,8 @@ def make_row(dataset_root: str | Path, packet_id: str, asker_index: int, *, gene
 
 def validate_row(row: dict[str, Any], *, require_prompt: bool = True) -> None:
     expected = make_row(row["dataset_root"], row["source_packet_id"], row["asker_index"],
-                        generation_profile=row.get("generation_profile"))
+                        generation_profile=row.get("generation_profile"),
+                        generator_view=row.get("generator_view"))
     if "videos" in row:
         raise ValueError("六用户 GRPO 使用独立采样图片，不接受 videos")
     for key, value in expected.items():
@@ -102,6 +141,9 @@ def main() -> None:
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--validate", type=Path, nargs="+")
+    parser.add_argument("--generator-view", choices=[v for v in GENERATOR_VIEWS if v],
+                        help="生成器视角；不指定为原 CLIP 剪枝视角")
+    parser.add_argument("--generation-profile", help="附加生成要求，如 compact_full_qa_v1")
     args = parser.parse_args()
     if args.validate:
         resolved = [path.resolve() for path in args.validate]
@@ -122,7 +164,9 @@ def main() -> None:
     if not isinstance(selection, dict) or not selection or set(selection) - {"train", "validation", "test"}:
         raise ValueError("selection 只允许 train / validation / test")
     validate_splits(selection)
-    splits = {name: [make_row(args.dataset_root, r["source_packet_id"], r["asker_index"]) for r in rows]
+    splits = {name: [make_row(args.dataset_root, r["source_packet_id"], r["asker_index"],
+                              generation_profile=args.generation_profile,
+                              generator_view=args.generator_view) for r in rows]
               for name, rows in selection.items()}
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for name in splits:
