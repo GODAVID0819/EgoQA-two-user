@@ -51,6 +51,32 @@ class FullQuarterFpsPolicyInputTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 data.validate_row(row)
 
+    def test_reward_plugin_validates_full_025fps_rows(self):
+        data = require_module(self, "data")
+        plugin = require_module(self, "plugin")
+
+        class Client:
+            def score(self, request):
+                return {"request_id": request["request_id"], "evidence_id": request["evidence_id"],
+                        "status": "scored", "probabilities": {"formality": 1., "groundedness": 1.,
+                        "speaker_only": 0., "all_six": 1.}, "judge": {"model_id": "fixture"}}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            packet_fixture(root)
+            row = data.make_row(root, "DAY1_TEST", 2, generator_view="full_025fps",
+                                generation_profile="compact_full_qa_v1")
+            orm = plugin.SixUserBinaryReward(client=Client(), trace_path=root / "trace.jsonl",
+                                             reward_mode="continuous")
+            # ms-swift 按列传入整组（同一 prompt 的 2 个候选）元数据。
+            kwargs = {k: [row[k]] * 2 for k in ("dataset_root", "source_packet_id", "asker_index", "evidence_id",
+                                                "required_users", "generator_image_paths", "generator_view")}
+            self.assertEqual(orm(["a", "b"], **kwargs), [1., 1.])
+            # 缺少视角列时按默认剪枝视角校验，路径不一致必须报错。
+            kwargs.pop("generator_view")
+            with self.assertRaisesRegex(ValueError, "generator_image_paths"):
+                plugin.SixUserBinaryReward(client=Client(), trace_path=root / "t2.jsonl",
+                                           reward_mode="continuous")(["a"], **{k: v[:1] for k, v in kwargs.items()})
+
     def test_default_view_is_unchanged(self):
         data = require_module(self, "data")
         with tempfile.TemporaryDirectory() as tmp:

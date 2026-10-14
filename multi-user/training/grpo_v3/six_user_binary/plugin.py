@@ -95,6 +95,9 @@ class SixUserBinaryReward(ORM):
             if key in {"required_users", "generator_image_paths"} and isinstance(value, (list, tuple)) and all(isinstance(x, str) for x in value):
                 value = [value]
             metadata[key] = expand(value, count, key)
+        # 非默认生成器视角（如 full_025fps）必须随行传入，否则校验会按默认剪枝视角重建。
+        if kwargs.get("generator_view") is not None:
+            metadata["generator_view"] = expand(kwargs["generator_view"], count, "generator_view")
         rewards = []
         batch_id = uuid.uuid4().hex
         requests, bindings = [], []
