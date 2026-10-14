@@ -1,0 +1,1020 @@
+{
+  "source": "当前Slurm作业结构化监控报告派生，不是远端原件下载",
+  "request_tag": "heartbeat_20261014_083858_0fbbe789",
+  "source_repair_job_id": "19754024",
+  "replacements": [
+    {
+      "old_window": "DAY1_12090000",
+      "new_window": "DAY1_12083000",
+      "old_source_packet_id": "RLHF6U_DAY1_12090000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY1_12083000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A2_ALICE",
+          "segments": [
+            {
+              "path": "A2_ALICE/DAY1/DAY1_A2_ALICE_12183000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A2_ALICE/DAY1/DAY1_A2_ALICE_12183000.mp4",
+              "bytes": 10210292,
+              "download_status": "reused",
+              "problem": "short_video",
+              "video_duration": 21.1,
+              "video_start": 0.0,
+              "format_duration": 21.13
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Jake",
+      "held_out_speaker_unchanged": true
+    },
+    {
+      "old_window": "DAY1_13280000",
+      "new_window": "DAY1_13273000",
+      "old_source_packet_id": "RLHF6U_DAY1_13280000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY1_13273000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A5_KATRINA",
+          "segments": [
+            {
+              "path": "A5_KATRINA/DAY1/DAY1_A5_KATRINA_13373000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A5_KATRINA/DAY1/DAY1_A5_KATRINA_13373000.mp4",
+              "bytes": 5528155,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 15.35,
+              "video_start": 0.0,
+              "format_duration": 17.95
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Alice",
+      "held_out_speaker_unchanged": true
+    },
+    {
+      "old_window": "DAY2_21163000",
+      "new_window": "DAY2_21160000",
+      "old_source_packet_id": "RLHF6U_DAY2_21163000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY2_21160000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A6_SHURE",
+          "segments": [
+            {
+              "path": "A6_SHURE/DAY2/DAY2_A6_SHURE_21260000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A6_SHURE/DAY2/DAY2_A6_SHURE_21260000.mp4",
+              "bytes": 12814673,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 24.95,
+              "video_start": 0.0,
+              "format_duration": 25.0
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Shure",
+      "held_out_speaker_unchanged": true
+    },
+    {
+      "old_window": "DAY2_21473000",
+      "new_window": "DAY2_21470000",
+      "old_source_packet_id": "RLHF6U_DAY2_21473000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY2_21470000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A4_LUCIA",
+          "segments": [
+            {
+              "path": "A4_LUCIA/DAY2/DAY2_A4_LUCIA_21570000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A4_LUCIA/DAY2/DAY2_A4_LUCIA_21570000.mp4",
+              "bytes": 10509231,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 16.65,
+              "video_start": 0.0,
+              "format_duration": 16.65
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 60.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Lucia",
+      "held_out_speaker_unchanged": true
+    },
+    {
+      "old_window": "DAY3_12290000",
+      "new_window": "DAY3_12283000",
+      "old_source_packet_id": "RLHF6U_DAY3_12290000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY3_12283000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A5_KATRINA",
+          "segments": [
+            {
+              "path": "A5_KATRINA/DAY3/DAY3_A5_KATRINA_12383000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A5_KATRINA/DAY3/DAY3_A5_KATRINA_12383000.mp4",
+              "bytes": 13495072,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 24.1,
+              "video_start": 0.0,
+              "format_duration": 24.1
+            }
+          ]
+        },
+        {
+          "agent_dir": "A6_SHURE",
+          "segments": [
+            {
+              "path": "A6_SHURE/DAY3/DAY3_A6_SHURE_12383000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A6_SHURE/DAY3/DAY3_A6_SHURE_12383000.mp4",
+              "bytes": 11544613,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 25.0,
+              "video_start": 0.0,
+              "format_duration": 25.0
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Alice",
+      "held_out_speaker_unchanged": true
+    },
+    {
+      "old_window": "DAY3_15543000",
+      "new_window": "DAY3_15540000",
+      "old_source_packet_id": "RLHF6U_DAY3_15543000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY3_15540000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A3_TASHA",
+          "segments": [
+            {
+              "path": "A3_TASHA/DAY3/DAY3_A3_TASHA_16040000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A3_TASHA/DAY3/DAY3_A3_TASHA_16040000.mp4",
+              "bytes": 9450192,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 12.0,
+              "video_start": 0.0,
+              "format_duration": 12.0
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Jake",
+      "held_out_speaker_unchanged": true
+    },
+    {
+      "old_window": "DAY3_20400000",
+      "new_window": "DAY3_20393000",
+      "old_source_packet_id": "RLHF6U_DAY3_20400000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY3_20393000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A1_JAKE",
+          "segments": [
+            {
+              "path": "A1_JAKE/DAY3/DAY3_A1_JAKE_20493000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A1_JAKE/DAY3/DAY3_A1_JAKE_20493000.mp4",
+              "bytes": 15017507,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 24.85,
+              "video_start": 0.0,
+              "format_duration": 24.85
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Tasha",
+      "held_out_speaker_unchanged": false
+    },
+    {
+      "old_window": "DAY4_12340000",
+      "new_window": "DAY4_12333000",
+      "old_source_packet_id": "RLHF6U_DAY4_12340000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY4_12333000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A4_LUCIA",
+          "segments": [
+            {
+              "path": "A4_LUCIA/DAY4/DAY4_A4_LUCIA_12433000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A4_LUCIA/DAY4/DAY4_A4_LUCIA_12433000.mp4",
+              "bytes": 13904415,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 24.6,
+              "video_start": 0.0,
+              "format_duration": 24.63
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Alice",
+      "held_out_speaker_unchanged": true
+    },
+    {
+      "old_window": "DAY4_22100000",
+      "new_window": "DAY4_22093000",
+      "old_source_packet_id": "RLHF6U_DAY4_22100000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY4_22093000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A3_TASHA",
+          "segments": [
+            {
+              "path": "A3_TASHA/DAY4/DAY4_A3_TASHA_22193000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A3_TASHA/DAY4/DAY4_A3_TASHA_22193000.mp4",
+              "bytes": 2286960,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 3.15,
+              "video_start": 0.0,
+              "format_duration": 3.15
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Katrina",
+      "held_out_speaker_unchanged": true
+    },
+    {
+      "old_window": "DAY5_16240000",
+      "new_window": "DAY5_16233000",
+      "old_source_packet_id": "RLHF6U_DAY5_16240000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY5_16233000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A6_SHURE",
+          "segments": [
+            {
+              "path": "A6_SHURE/DAY5/DAY5_A6_SHURE_16333000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A6_SHURE/DAY5/DAY5_A6_SHURE_16333000.mp4",
+              "bytes": 5774342,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 14.35,
+              "video_start": 0.0,
+              "format_duration": 14.35
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Lucia",
+      "held_out_speaker_unchanged": true
+    },
+    {
+      "old_window": "DAY5_19130000",
+      "new_window": "DAY5_19123000",
+      "old_source_packet_id": "RLHF6U_DAY5_19130000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY5_19123000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A2_ALICE",
+          "segments": [
+            {
+              "path": "A2_ALICE/DAY5/DAY5_A2_ALICE_19223000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A2_ALICE/DAY5/DAY5_A2_ALICE_19223000.mp4",
+              "bytes": 291091,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 0.4,
+              "video_start": 0.0,
+              "format_duration": 0.4
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Jake",
+      "held_out_speaker_unchanged": true
+    },
+    {
+      "old_window": "DAY6_11180000",
+      "new_window": "DAY6_11173000",
+      "old_source_packet_id": "RLHF6U_DAY6_11180000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY6_11173000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A5_KATRINA",
+          "segments": [
+            {
+              "path": "A5_KATRINA/DAY6/DAY6_A5_KATRINA_11273000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A5_KATRINA/DAY6/DAY6_A5_KATRINA_11273000.mp4",
+              "bytes": 2910002,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 7.0,
+              "video_start": 0.0,
+              "format_duration": 7.0
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Jake",
+      "held_out_speaker_unchanged": true
+    },
+    {
+      "old_window": "DAY6_20293000",
+      "new_window": "DAY6_20290000",
+      "old_source_packet_id": "RLHF6U_DAY6_20293000_A1_A2_A3_A4_A5_A6",
+      "new_source_packet_id": "RLHF6U_DAY6_20290000_A1_A2_A3_A4_A5_A6",
+      "reason": [
+        {
+          "agent_dir": "A5_KATRINA",
+          "segments": [
+            {
+              "path": "A5_KATRINA/DAY6/DAY6_A5_KATRINA_20390000.mp4",
+              "local_path": "/scratch/xl6775/projects/EgoQA-six-user-baseline-grpo-20260929/variants/full120-r64-lrpair-20261013/segments/A5_KATRINA/DAY6/DAY6_A5_KATRINA_20390000.mp4",
+              "bytes": 1983670,
+              "download_status": "downloaded",
+              "problem": "short_video",
+              "video_duration": 3.15,
+              "video_start": 0.0,
+              "format_duration": 3.15
+            }
+          ]
+        }
+      ],
+      "added_pairwise_overlap_seconds": 30.0,
+      "shift_seconds": 30.0,
+      "selection_order": "新增配对重叠秒数、移动距离、起点；按顺序选择实际完整候选",
+      "rejected_candidates": [],
+      "held_out_speaker": "Tasha",
+      "held_out_speaker_unchanged": true
+    }
+  ],
+  "split": {
+    "components": [
+      [
+        "RLHF6U_DAY2_21403000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY2_21440000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY2_21470000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_11110000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY1_11200000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_12000000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY1_12083000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_12333000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY1_12400000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_13200000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY1_13273000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_17113000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY1_17200000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY2_15563000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY2_16000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY2_21100000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY2_21160000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_11443000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY3_11500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_12200000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY3_12283000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_15500000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY3_15540000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_16103000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY3_16200000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_20020000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY3_20100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_20300000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY3_20393000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_21010000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY3_21100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY4_11263000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY4_11300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY4_12300000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY4_12333000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY4_13260000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY4_13300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY4_22000000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY4_22093000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY5_11410000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY5_11500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY5_15563000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY5_16000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY5_16200000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY5_16233000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY5_18323000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY5_18400000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY5_19100000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY5_19123000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_11100000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY6_11173000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_15400000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY6_15473000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_19263000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY6_19300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_20200000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY6_20290000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY7_13533000_A1_A2_A3_A4_A5_A6",
+        "RLHF6U_DAY7_14000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_11300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_11500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_12500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_13000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_13100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_17300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_17400000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_17500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_18000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_18100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_18200000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_18300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY1_20030000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY2_16100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY2_16200000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY2_16300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY2_17300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY2_17400000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY2_17500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY2_18000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_12000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_12100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_14500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_15000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_15100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_15200000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_15300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_15400000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_16300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_16400000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_16500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_17000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_17100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_17200000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY3_20200000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY4_11400000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY4_11500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY4_12000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY4_12100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY4_12200000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY4_21400000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY4_21500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY5_12000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY5_12100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY5_16100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY5_18500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY5_19000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_10300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_10400000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_10500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_11000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_15100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_15200000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_15300000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_19400000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_19500000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_20000000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY6_20100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY7_14100000_A1_A2_A3_A4_A5_A6"
+      ],
+      [
+        "RLHF6U_DAY7_14200000_A1_A2_A3_A4_A5_A6"
+      ]
+    ],
+    "component_sizes": {
+      "3": 1,
+      "2": 28,
+      "1": 61
+    },
+    "changed_holdout_windows": 4,
+    "held_out_by_source_packet": {
+      "RLHF6U_DAY7_14200000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY7_14100000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY6_20100000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY6_20000000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY6_19500000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY6_19400000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY6_15300000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY6_15200000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY6_15100000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY6_11000000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY6_10500000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY6_10400000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY6_10300000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY5_19000000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY5_18500000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY5_16100000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY5_12100000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY5_12000000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY4_21500000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY4_21400000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY4_12200000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY4_12100000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY4_12000000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY4_11500000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY4_11400000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY3_20200000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY3_17200000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY3_17100000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY3_17000000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY3_16500000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY3_16400000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY3_16300000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY3_15400000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY3_15300000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY3_15200000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY3_15100000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY3_15000000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY3_14500000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY3_12100000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY3_12000000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY2_18000000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY2_17500000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY2_17400000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY2_17300000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY2_16300000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY2_16200000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY2_16100000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY1_20030000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY1_18300000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY1_18200000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY1_18100000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY1_18000000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY1_17500000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY1_17400000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY1_17300000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY1_13100000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY1_13000000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY1_12500000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY1_11500000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY1_11400000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY1_11300000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY7_13533000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY7_14000000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY6_20200000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY6_20290000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY6_19263000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY6_19300000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY6_15400000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY6_15473000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY6_11100000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY6_11173000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY5_19100000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY5_19123000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY5_18323000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY5_18400000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY5_16200000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY5_16233000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY5_15563000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY5_16000000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY5_11410000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY5_11500000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY4_22000000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY4_22093000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY4_13260000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY4_13300000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY4_12300000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY4_12333000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY4_11263000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY4_11300000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY3_21010000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY3_21100000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY3_20300000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY3_20393000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY3_20020000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY3_20100000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY3_16103000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY3_16200000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY3_15500000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY3_15540000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY3_12200000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY3_12283000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY3_11443000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY3_11500000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY2_21100000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY2_21160000_A1_A2_A3_A4_A5_A6": "Shure",
+      "RLHF6U_DAY2_15563000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY2_16000000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY1_17113000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY1_17200000_A1_A2_A3_A4_A5_A6": "Tasha",
+      "RLHF6U_DAY1_13200000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY1_13273000_A1_A2_A3_A4_A5_A6": "Alice",
+      "RLHF6U_DAY1_12333000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY1_12400000_A1_A2_A3_A4_A5_A6": "Katrina",
+      "RLHF6U_DAY1_12000000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY1_12083000_A1_A2_A3_A4_A5_A6": "Jake",
+      "RLHF6U_DAY1_11110000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY1_11200000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY2_21403000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY2_21440000_A1_A2_A3_A4_A5_A6": "Lucia",
+      "RLHF6U_DAY2_21470000_A1_A2_A3_A4_A5_A6": "Lucia"
+    },
+    "seed": 42
+  },
+  "overlaps": [
+    {
+      "day": "DAY1",
+      "window_a": "RLHF6U_DAY1_11110000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY1_11200000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 60.0
+    },
+    {
+      "day": "DAY1",
+      "window_a": "RLHF6U_DAY1_12000000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY1_12083000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 90.0
+    },
+    {
+      "day": "DAY1",
+      "window_a": "RLHF6U_DAY1_12333000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY1_12400000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 210.0
+    },
+    {
+      "day": "DAY1",
+      "window_a": "RLHF6U_DAY1_13200000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY1_13273000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 150.0
+    },
+    {
+      "day": "DAY1",
+      "window_a": "RLHF6U_DAY1_17113000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY1_17200000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 90.0
+    },
+    {
+      "day": "DAY2",
+      "window_a": "RLHF6U_DAY2_15563000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY2_16000000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 390.0
+    },
+    {
+      "day": "DAY2",
+      "window_a": "RLHF6U_DAY2_21100000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY2_21160000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 240.0
+    },
+    {
+      "day": "DAY2",
+      "window_a": "RLHF6U_DAY2_21403000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY2_21440000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 390.0
+    },
+    {
+      "day": "DAY2",
+      "window_a": "RLHF6U_DAY2_21403000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY2_21470000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 210.0
+    },
+    {
+      "day": "DAY2",
+      "window_a": "RLHF6U_DAY2_21440000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY2_21470000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 420.0
+    },
+    {
+      "day": "DAY3",
+      "window_a": "RLHF6U_DAY3_11443000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY3_11500000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 270.0
+    },
+    {
+      "day": "DAY3",
+      "window_a": "RLHF6U_DAY3_12200000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY3_12283000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 90.0
+    },
+    {
+      "day": "DAY3",
+      "window_a": "RLHF6U_DAY3_15500000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY3_15540000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 360.0
+    },
+    {
+      "day": "DAY3",
+      "window_a": "RLHF6U_DAY3_16103000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY3_16200000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 30.0
+    },
+    {
+      "day": "DAY3",
+      "window_a": "RLHF6U_DAY3_20020000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY3_20100000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 120.0
+    },
+    {
+      "day": "DAY3",
+      "window_a": "RLHF6U_DAY3_20300000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY3_20393000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 30.0
+    },
+    {
+      "day": "DAY3",
+      "window_a": "RLHF6U_DAY3_21010000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY3_21100000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 60.0
+    },
+    {
+      "day": "DAY4",
+      "window_a": "RLHF6U_DAY4_11263000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY4_11300000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 390.0
+    },
+    {
+      "day": "DAY4",
+      "window_a": "RLHF6U_DAY4_12300000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY4_12333000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 390.0
+    },
+    {
+      "day": "DAY4",
+      "window_a": "RLHF6U_DAY4_13260000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY4_13300000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 360.0
+    },
+    {
+      "day": "DAY4",
+      "window_a": "RLHF6U_DAY4_22000000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY4_22093000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 30.0
+    },
+    {
+      "day": "DAY5",
+      "window_a": "RLHF6U_DAY5_11410000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY5_11500000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 60.0
+    },
+    {
+      "day": "DAY5",
+      "window_a": "RLHF6U_DAY5_15563000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY5_16000000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 390.0
+    },
+    {
+      "day": "DAY5",
+      "window_a": "RLHF6U_DAY5_16200000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY5_16233000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 390.0
+    },
+    {
+      "day": "DAY5",
+      "window_a": "RLHF6U_DAY5_18323000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY5_18400000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 150.0
+    },
+    {
+      "day": "DAY5",
+      "window_a": "RLHF6U_DAY5_19100000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY5_19123000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 450.0
+    },
+    {
+      "day": "DAY6",
+      "window_a": "RLHF6U_DAY6_11100000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY6_11173000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 150.0
+    },
+    {
+      "day": "DAY6",
+      "window_a": "RLHF6U_DAY6_15400000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY6_15473000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 150.0
+    },
+    {
+      "day": "DAY6",
+      "window_a": "RLHF6U_DAY6_19263000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY6_19300000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 390.0
+    },
+    {
+      "day": "DAY6",
+      "window_a": "RLHF6U_DAY6_20200000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY6_20290000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 60.0
+    },
+    {
+      "day": "DAY7",
+      "window_a": "RLHF6U_DAY7_13533000_A1_A2_A3_A4_A5_A6",
+      "window_b": "RLHF6U_DAY7_14000000_A1_A2_A3_A4_A5_A6",
+      "overlap_seconds": 210.0
+    }
+  ]
+}
