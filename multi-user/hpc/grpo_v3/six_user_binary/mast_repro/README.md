@@ -46,7 +46,7 @@ ms-swift 4.2.2 中 `loss_type` 默认 `grpo`、`epsilon` 默认 0.2，与 MAST �
    ```
 
    输出 `train.jsonl`（48 行）和 `validation.jsonl`（18 行）。启动时 `launch.py` 会再用同样方式重建并逐行比对。
-3. 把 `run_config.template.json` 和 `judge_config.json` 里的 `__XXX__` 换成本机路径，用 `hpc/grpo_v3/six_user_binary/train_direct.sbatch` 提交（2 张 GPU：policy 0、judge 1）。
+3. 把 `run_config.template.json` 和 `judge_config.json` 里的 `__XXX__` 换成本机路径。`scratch_root` 要用短路径（如 `/scratch/<user>/js`）：vLLM 在 `<scratch_root>/six_user_grpo_<JobID>/tmpdir/` 下建 Unix 套接字，路径上限 107 个字符，目录过深时 judge 服务启动即报 `ipc path ... is longer than 107 characters`。然后，用 `hpc/grpo_v3/six_user_binary/train_direct.sbatch` 提交（2 张 GPU：policy 0、judge 1）。
 
 ## 正式训练前需要确认
 
