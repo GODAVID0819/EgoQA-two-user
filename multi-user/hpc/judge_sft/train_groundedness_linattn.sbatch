@@ -7,7 +7,7 @@
 #SBATCH --time=1-23:59:00
 #SBATCH --output=/scratch/%u/multi_user_qa/logs/%x_%j.out
 # Groundedness judge with LoRA on attention, MLP and the 5 linear-attention
-# projections (upper 8 layers), 0.25 FPS, GA=4, cosine + 5% warmup, 10 epochs,
+# projections (upper TRAINABLE_LAYERS decoder layers, default 8), 0.25 FPS, GA=4, cosine + 5% warmup, 10 epochs,
 # held-out test evaluation after every epoch.
 #
 # Per-experiment knobs (pass with sbatch --export=ALL,KEY=VALUE,...):
@@ -15,6 +15,8 @@
 #   LORA_ALPHA     LoRA alpha; alpha/r is the scale  (default = LORA_RANK)
 #   LR             peak learning rate                (default 1e-4)
 #   CLASS_WEIGHTS  1 = inverse-frequency PASS/FAIL weights, 0 = plain BCE (default 0)
+#   TRAINABLE_LAYERS  number of last decoder layers with LoRA (default 8)
+#   MANIFESTS      split directory with train/ and test/ (default: question split)
 #   RESUME         full-state checkpoint dir to resume from (optional)
 set -euo pipefail
 
@@ -27,13 +29,14 @@ LORA_RANK=${LORA_RANK:-128}
 LORA_ALPHA=${LORA_ALPHA:-$LORA_RANK}
 LR=${LR:-1e-4}
 CLASS_WEIGHTS=${CLASS_WEIGHTS:-0}
+TRAINABLE_LAYERS=${TRAINABLE_LAYERS:-8}
 RESUME=${RESUME:-}
 
 if [ "$CLASS_WEIGHTS" = "1" ]; then CW_TAG=classw; CW_ARGS=(); else CW_TAG=noclassw; CW_ARGS=(--no-class-weights); fi
 RESUME_ARGS=()
 if [ -n "$RESUME" ]; then RESUME_ARGS=(--resume-from-checkpoint "$RESUME"); fi
 
-RUN_NAME=groundedness_linattn_r${LORA_RANK}_a${LORA_ALPHA}_lr${LR}_${CW_TAG}_ga4_cosine_w005_job${SLURM_JOB_ID}
+RUN_NAME=groundedness_linattn_L${TRAINABLE_LAYERS}_r${LORA_RANK}_a${LORA_ALPHA}_lr${LR}_${CW_TAG}_ga4_cosine_w005_job${SLURM_JOB_ID}
 OUT=${OUT:-/scratch/$USER/multi_user_qa/runs/$RUN_NAME}
 JOB_SCRATCH=/scratch/$USER/multi_user_qa/job_scratch/$SLURM_JOB_ID
 mkdir -p "$OUT" "$JOB_SCRATCH"/{triton,tmp,hf,torch,xdg}
@@ -57,7 +60,7 @@ cd "$REPO"
   echo "node=$(hostname)"
   echo "git_commit=$(git rev-parse HEAD)"
   echo "git_dirty=$(git status --porcelain -- training/judge_sft | wc -l)"
-  echo "lora_rank=$LORA_RANK lora_alpha=$LORA_ALPHA lr=$LR class_weights=$CLASS_WEIGHTS resume=${RESUME:-none}"
+  echo "lora_rank=$LORA_RANK lora_alpha=$LORA_ALPHA lr=$LR class_weights=$CLASS_WEIGHTS trainable_layers=$TRAINABLE_LAYERS manifests=$MANIFESTS resume=${RESUME:-none}"
 } | tee "$OUT/run_info.txt"
 
 "$ENV/bin/torchrun" --standalone --nproc_per_node=2 \
@@ -76,7 +79,7 @@ cd "$REPO"
   --lora-rank "$LORA_RANK" \
   --lora-alpha "$LORA_ALPHA" \
   --lora-dropout 0.05 \
-  --trainable-decoder-layers 8 \
+  --trainable-decoder-layers "$TRAINABLE_LAYERS" \
   --lora-target-modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj \
                         in_proj_qkv in_proj_z in_proj_a in_proj_b out_proj \
   --learning-rate "$LR" \
