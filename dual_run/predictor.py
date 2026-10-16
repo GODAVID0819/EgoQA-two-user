@@ -84,8 +84,8 @@ def validate_config(config: dict) -> dict:
     normalized, ranks = {}, []
     for task, value in adapters.items():
         if value is None:
-            if mode != 'mixed' or task != 'groundedness':
-                raise ValueError('本轮只允许尚未完成微调的groundedness显式使用基座')
+            if mode != 'mixed':
+                raise ValueError('只有 mixed 模式允许某项任务显式使用基座')
             normalized[task] = None
             continue
         path = Path(value).expanduser().resolve()
@@ -93,14 +93,14 @@ def validate_config(config: dict) -> dict:
         weights = path / "adapter_model.safetensors"
         if not weights.is_file() or weights.stat().st_size == 0:
             raise FileNotFoundError(weights)
-        if adapter_base_label(cfg.get('base_model_name_or_path', '')) != model.name:
+        if adapter_base_label(cfg.get('base_model_name_or_path', '')) not in {model.name, adapter_base_label(config["model_id"])}:
             raise ValueError(f"adapter base model 不一致：{task}")
         rank = cfg.get("r")
         if isinstance(rank, bool) or not isinstance(rank, int) or rank <= 0:
             raise ValueError("adapter rank 不合法")
         ranks.append(rank)
         normalized[task] = str(path)
-    result = {**config, "model_id": str(model), "judge_mode": mode, "adapters": normalized, "max_lora_rank": max(ranks)}
+    result = {**config, "model_id": str(model), "judge_mode": mode, "adapters": normalized, "max_lora_rank": max(ranks) if ranks else 1}
     return result
 
 

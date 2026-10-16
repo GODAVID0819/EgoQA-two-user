@@ -45,7 +45,7 @@ def validate(output, *, adapter_check=finite_updated_adapter):
         "requested_steps_reached": int(state.get("global_step", 0)) >= target,
         "finite_nonzero_gradient": any(isinstance(r.get("grad_norm"), (int, float)) and math.isfinite(r["grad_norm"]) and r["grad_norm"] > 0 for r in history),
         "finite_reported_metrics": all(math.isfinite(v) for row in history for v in row.values() if isinstance(v, (int, float))),
-        "validation_metrics_present": any(any(k.startswith("eval_") for k in row) for row in history),
+        "validation_metrics_present": target < config['max_steps'] or any(any(k.startswith("eval_") for k in row) for row in history),
         "finite_nonzero_lora_b": adapter.is_file() and adapter_check(adapter),
     }
     if 'stop_after_steps' in config:

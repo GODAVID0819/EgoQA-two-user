@@ -25,7 +25,8 @@ class StageStopCallback(TrainerCallback):
         if state.global_step >= self.stop_step:
             control.should_training_stop = True
             control.should_save = True
-            control.should_evaluate = True
+            # 只在调度终点做训练内验证；中间阶段停止只保存，避免每阶段重复完整验证。
+            control.should_evaluate = state.global_step >= args.max_steps
         return control
 
     def _audit(self, event, args, state, **kwargs):

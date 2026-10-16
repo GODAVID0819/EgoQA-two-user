@@ -14,6 +14,7 @@ def install_audit(output):
     from swift.callbacks import TrainerCallback, callbacks_map
     rank=dist.get_rank() if dist.is_initialized() else int(os.environ['RANK'])
     cache_controller=None
+    step_windows={}
     config=json.loads((Path(output)/'run_config.json').read_text())
     def record(name,values):
         p=Path(output)/('rank'+str(rank))/(name+'.jsonl')
@@ -42,8 +43,13 @@ def install_audit(output):
         dist.all_gather_object(groups,bindings)
         record('phase_timing',{'global_step':trainer.state.global_step,'phase':'generation_group_collective',
             'seconds':time.monotonic()-collective_started,'epoch':time.time()})
-        if mode=='train':validate_rank_bindings(groups)
-        if mode=='train' and trainer.state.global_step==config.get('expected_resume_step'):
+        if mode=='train':
+            windows=validate_rank_bindings(groups)
+            seen=step_windows.setdefault(trainer.state.global_step,[])
+            if set(windows)&set(seen) or len(seen)+len(windows)>4:
+                raise RuntimeError(f'第{trainer.state.global_step+1}步窗口重复或超过4个：{seen}+{windows}')
+            seen.extend(windows)
+        if mode=='train' and trainer.state.global_step==config.get('expected_resume_step') and len(step_windows[trainer.state.global_step])==2:
             from recovery import expected_resume_bindings
             actual=[(group[0]['source_packet_id'],int(group[0]['asker_index'])) for group in groups]
             if actual!=expected_resume_bindings(config):raise RuntimeError('实际恢复采样位置错误')

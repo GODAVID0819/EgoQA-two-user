@@ -10,16 +10,17 @@ def condition_binding(row):
 
 
 def validate_config(c):
+    # 每步4个不同窗口：每rank累积8微批、每4微批生成一轮（1条件×G4），每步两轮×两rank。
     expected={'world_size':2,'num_generations':4,'per_device_train_batch_size':1,
-              'gradient_accumulation_steps':4,'max_steps':300,'lora_rank':64,
+              'gradient_accumulation_steps':8,'max_steps':900,'lora_rank':128,
               'lora_alpha':128,'train_conditions':600,'validation_conditions':120}
     if any(c.get(k)!=v for k,v in expected.items()):
-        raise ValueError('双卡参数不符合已批准的两窗口G4配置')
+        raise ValueError('双卡参数不符合四窗口G4、r128、900步配置')
     if c.get('resume_from_checkpoint'):
         from recovery import validated_resume
         validated_resume(c)
-    if not 0<c.get('stop_after_steps',300)<=300:
-        raise ValueError('实际停止步数超出300步')
+    if not 0<c.get('stop_after_steps',c['max_steps'])<=c['max_steps']:
+        raise ValueError('实际停止步数超出调度总步数')
 
 
 def rank_environment(output, records, rank):
@@ -47,6 +48,42 @@ def validate_rank_bindings(groups):
         keys.append(next(iter(values)))
     if keys[0][0]==keys[1][0]:raise ValueError('同一步必须为两个不同窗口')
     return [k[0] for k in keys]
+
+
+ROWS_PER_STEP=4
+ROUNDS_PER_STEP=2
+
+
+def make_length_quads(rows,cost,seed=42):
+    """每条件恰一次；每步4个不同窗口、长度相近，两轮生成各一对(rank0,rank1)，再随机化步顺序并均衡rank。
+
+    文件顺序第4k..4k+3行为第k步：第一轮(4k→rank0, 4k+1→rank1)，第二轮(4k+2→rank0, 4k+3→rank1)。"""
+    import random
+    if len(rows)%ROWS_PER_STEP or not rows:raise ValueError('条件数必须为4的正整数倍')
+    remaining=sorted(rows,key=lambda r:(cost(r),r['source_packet_id'],int(r['asker_index'])))
+    quads=[]
+    while remaining:
+        quad=[remaining.pop(0)]
+        for i in range(len(remaining)):
+            if len(quad)==ROWS_PER_STEP:break
+            if all(remaining[i]['source_packet_id']!=q['source_packet_id'] for q in quad):quad.append(remaining[i])
+        if len(quad)<ROWS_PER_STEP:raise ValueError('无法构成4个不同窗口的更新')
+        for q in quad[1:]:remaining.remove(q)
+        quads.append(quad)
+    rng=random.Random(seed);rng.shuffle(quads)
+    totals=[0,0];ordered=[]
+    for quad in quads:
+        for a,b in (quad[0:2],quad[2:4]):
+            if (totals[0]-totals[1])*(cost(a)-cost(b))>0:a,b=b,a
+            ordered.extend([a,b]);totals[0]+=cost(a);totals[1]+=cost(b)
+    return ordered
+
+
+def check_step_order(rows):
+    if len(rows)%ROWS_PER_STEP:raise ValueError('训练行数必须为4的整数倍')
+    for start in range(0,len(rows),ROWS_PER_STEP):
+        if len({r['source_packet_id'] for r in rows[start:start+ROWS_PER_STEP]})!=ROWS_PER_STEP:
+            raise ValueError(f'第{start//ROWS_PER_STEP+1}步不是4个不同窗口')
 
 
 def validation_partition(count,rank):

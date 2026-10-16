@@ -99,6 +99,10 @@ def main():
             for rank in range(2):f.write((output/('rank'+str(rank))/'reward_trace.jsonl').read_text())
         subprocess.run([c['train_python'],'-m','training.grpo_v3.six_user_binary.validate_run','--output',str(output)],cwd=package,env=env,check=True)
         checked=json.loads((output/'training_result.json').read_text());adapter=checked['checkpoint']
+        if c['stop_after_steps']<c['max_steps']:
+            # 中间阶段只保存完整断点；120条件固定配对验证只在调度终点做一次。
+            result['status']='completed';result['stage_only']=True
+            return
         # 两卡并行固定验证，各自基座/adapter始终使用同一Judge实例和输入。
         val_rows=[json.loads(s) for s in Path(c['val_dataset']).read_text().splitlines() if s.strip()]
         eval_processes=[]

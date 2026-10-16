@@ -50,24 +50,27 @@ def validated_resume(config):
 def expected_resume_bindings(config):
     meta=validated_resume(config)
     if meta is None:return None
-    rows=head_rows(config['train_dataset'],2*meta['step']+2)
-    return [(r['source_packet_id'],int(r['asker_index'])) for r in rows[2*meta['step']:2*meta['step']+2]]
+    # 恢复后第一轮生成：第step步的前两行（rank0、rank1）。训练文件按epoch循环。
+    rows=head_rows(config['train_dataset'],config['train_conditions'])
+    start=(4*meta['step'])%len(rows)
+    return [(r['source_packet_id'],int(r['asker_index'])) for r in rows[start:start+2]]
 
 
 def seed_reward_prefix(config,output):
     meta=validated_resume(config)
     if meta is None:return None
-    output=Path(output);source=Path(meta['source_output']);g=config['num_generations'];count=meta['step']*g
-    data=head_rows(config['train_dataset'],2*meta['step'])
+    output=Path(output);source=Path(meta['source_output']);g=config['num_generations'];count=meta['step']*2*g
+    data=head_rows(config['train_dataset'],config['train_conditions'])
     prepared={};ids=set()
     for rank in [0,1]:
         rows=[json.loads(x) for x in (source/('rank'+str(rank))/'reward_trace.jsonl').read_text().splitlines() if x.strip()]
         if len(rows)<count:raise ValueError('断点来源评分前缀不完整')
         for step in range(meta['step']):
-            expected=data[2*step+rank]
-            group=rows[step*g:(step+1)*g]
-            if any((r['source_packet_id'],int(r['asker_index']))!=(expected['source_packet_id'],int(expected['asker_index'])) for r in group):
-                raise ValueError('恢复评分前缀与实际训练条件顺序不符')
+            for round_index in range(2):
+                expected=data[(4*step+2*round_index+rank)%len(data)]
+                group=rows[(2*step+round_index)*g:(2*step+round_index+1)*g]
+                if any((r['source_packet_id'],int(r['asker_index']))!=(expected['source_packet_id'],int(expected['asker_index'])) for r in group):
+                    raise ValueError('恢复评分前缀与实际训练条件顺序不符')
         prefix=rows[:count]
         for row in prefix:
             if row['request_id'] in ids:raise ValueError('恢复评分前缀request_id重复')
