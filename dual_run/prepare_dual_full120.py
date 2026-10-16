@@ -54,10 +54,12 @@ def main():
         previous=[Path(p) for p in c['reuse_frame_roots']]+[dataset]
         packets={};missing=[]
         for w in source['windows']:
-            packet=prep.packet_id_for_group(w)
             for old in previous:
+                # hm2991 的已处理packet以短名（..._A1_A2_A3_A4_A5_A6，即source_packet_id）保存，新处理的用长名。
+                packet=next((p for p in (w['source_packet_id'],prep.packet_id_for_group(w))
+                             if (old/'packets'/p/'COMPLETE').is_file()),None)
+                if packet is None:continue
                 packet_dir=old/'packets'/packet
-                if not (packet_dir/'COMPLETE').is_file():continue
                 metadata=json.loads((old/'dataset.json').read_text())
                 if metadata['config_fingerprint']!=fp:raise ValueError('复用帧的配置与当前不符：'+str(old))
                 prep.validate_preprocessed_packet(packet_dir)
