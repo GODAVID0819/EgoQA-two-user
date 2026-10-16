@@ -122,7 +122,7 @@ def main():
         record['runtime']['engine_core_client_class']=type(engine.engine.engine_core).__name__
         save()
         for index,row in enumerate(rows):
-            seed=settings['validation_seed']+index
+            seed=settings['validation_seed']+int(row.get('global_validation_index',index))
             request=InferRequest(messages=deepcopy(row['messages']),images=list(row['images']))
             decoding=RequestConfig(n=c['num_generations_eval'],seed=seed,max_tokens=c['max_completion_length'],
                                    temperature=c['temperature'],top_p=c['top_p'],top_k=c['top_k'])
@@ -149,7 +149,7 @@ def main():
             if baseline['settings']!=settings or baseline['input_bindings']!=bindings or not same_frozen_judge(baseline['judge'],record['judge']):
                 raise ValueError('baseline与Policy的验证设置、输入或Judge不一致')
             record['comparison']=compare_rows(baseline['rows'],record['rows'])
-            (args.output.parent/'validation_comparison.json').write_text(json.dumps(record['comparison'],ensure_ascii=False,indent=2),encoding='utf-8')
+            (args.output.parent/('test_comparison.json' if args.output.stem.startswith('test_') else 'validation_comparison.json')).write_text(json.dumps(record['comparison'],ensure_ascii=False,indent=2),encoding='utf-8')
     except BaseException as exc:
         record.update(status='failed',error=f'{type(exc).__name__}: {exc}',finished_epoch=time.time())
         raise

@@ -13,8 +13,16 @@ from training.judge_sft.collator import (
     model_visible_prompt, qwen_vision_geometry,
 )
 from training.judge_sft.contracts import VERDICT_ASSISTANT_PREFIX
+from training.grpo_v3.six_user_binary.decode_pipeline import DecodePipeline, engine_metrics, should_reduce_batch
 
 TASKS = ("formality", "groundedness", "answerability")
+
+
+def adapter_base_label(value):
+    """识别普通模型ID及HuggingFace缓存快照路径，不改写原checkpoint元数据。"""
+    parts = str(value).rstrip('/\\').replace('\\', '/').split('/')
+    cache = [p for p in parts if p.startswith('models--')]
+    return cache[-1].split('--')[-1] if cache else parts[-1]
 
 
 class FrameImageCache:
@@ -61,8 +69,8 @@ def validate_config(config: dict) -> dict:
     if not (model / "config.json").is_file():
         raise FileNotFoundError(model / "config.json")
     mode = config.get("judge_mode", "adapter")
-    if mode not in {"baseline", "adapter"}:
-        raise ValueError("judge_mode 必须为 baseline 或 adapter")
+    if mode not in {"baseline", "adapter", "mixed"}:
+        raise ValueError("judge_mode 必须为 baseline、adapter 或 mixed")
     tp = config.get("tensor_parallel_size", 1)
     if isinstance(tp, bool) or not isinstance(tp, int) or tp < 1:
         raise ValueError("tensor_parallel_size 必须是正整数")
@@ -75,12 +83,17 @@ def validate_config(config: dict) -> dict:
         raise ValueError("必须为 formality、groundedness、answerability 显式指定 adapter")
     normalized, ranks = {}, []
     for task, value in adapters.items():
+        if value is None:
+            if mode != 'mixed' or task != 'groundedness':
+                raise ValueError('本轮只允许尚未完成微调的groundedness显式使用基座')
+            normalized[task] = None
+            continue
         path = Path(value).expanduser().resolve()
         cfg = json.loads((path / "adapter_config.json").read_text(encoding="utf-8"))
         weights = path / "adapter_model.safetensors"
         if not weights.is_file() or weights.stat().st_size == 0:
             raise FileNotFoundError(weights)
-        if str(cfg.get("base_model_name_or_path", "")).rstrip("/\\").replace("\\", "/").split("/")[-1] != model.name:
+        if adapter_base_label(cfg.get('base_model_name_or_path', '')) != model.name:
             raise ValueError(f"adapter base model 不一致：{task}")
         rank = cfg.get("r")
         if isinstance(rank, bool) or not isinstance(rank, int) or rank <= 0:
@@ -101,12 +114,12 @@ def engine_options(config):
         mm_processor_cache_gb=float(config.get("mm_processor_cache_gb", 4)),
         additional_config={"gdn_prefill_backend": "triton"},
         limit_mm_per_prompt={"image": 1800}, logprobs_mode="raw_logprobs",
-        enable_lora=config["judge_mode"] == "adapter")
+        enable_lora=config["judge_mode"] in {"adapter", "mixed"}, disable_log_stats=False)
     if config.get('shared_gpu'):
         options['enable_sleep_mode'] = True
     if options["enable_lora"]:
         options.update(max_lora_rank=config["max_lora_rank"], max_loras=1,
-                       max_cpu_loras=len(set(config["adapters"].values())))
+                       max_cpu_loras=len({p for p in config['adapters'].values() if p is not None}))
     return options
 
 
@@ -152,7 +165,7 @@ class VllmJudge:
         self.max_tokens = int(self.config.get("max_input_tokens", 262144))
         self.min_pixels = int(self.config.get("min_pixels", 3136))
         self.max_pixels = int(self.config.get("max_pixels", 262144))
-        unique_paths = list(dict.fromkeys(self.config["adapters"].values()))
+        unique_paths = list(dict.fromkeys(p for p in self.config['adapters'].values() if p is not None))
         self.llm = LLM(**engine_options(self.config))
         self.sleeping = False
         tokenizer = self.llm.get_tokenizer()
@@ -167,17 +180,26 @@ class VllmJudge:
         self.sampling = SamplingParams(temperature=0., max_tokens=1, detokenize=False,
                                       logprob_token_ids=[self.pass_id, self.fail_id])
         self.adapters = {}
-        if self.config["judge_mode"] == "adapter":
+        if self.config["judge_mode"] in {"adapter", "mixed"}:
             from vllm.lora.request import LoRARequest
             self.adapters = {task: LoRARequest(f"judge-{unique_paths.index(path)+1}", unique_paths.index(path)+1, path)
-                             for task, path in self.config["adapters"].items()}
+                             for task, path in self.config["adapters"].items() if path is not None}
         self.image_cache = FrameImageCache(int(float(self.config.get('decoded_image_cache_gb', 8)) * 1024**3))
+        import atexit
+        self.pipeline=DecodePipeline(workers=int(self.config.get('decode_workers',4)))
+        atexit.register(self.pipeline.close)
+        self._effective_batch_size=int(self.config.get('max_num_seqs',4))
+        self._prepared={};self._next_examples=[];self._last_preemptions=None
         self.cache_namespace = uuid.uuid4().hex
         self.identity = {"model_id": self.config["model_id"], "judge_mode": self.config["judge_mode"], "adapters": self.config["adapters"],
             "backend": "vllm_raw_verdict_logprobs", "max_input_tokens": self.max_tokens,
             "min_pixels": self.min_pixels, "max_pixels": self.max_pixels,
             "tensor_parallel_size": self.config.get("tensor_parallel_size", 1),
             "max_num_seqs": self.config.get("max_num_seqs", 4), "media_uuid_cache": True}
+        self.identity['task_backends'] = {
+            task: ('lora' if task in self.adapters else 'base') for task in TASKS}
+        self.identity['merge_answerability_batch']=bool(self.config.get('merge_answerability_batch',False))
+        self.identity['cpu_prefetch']=bool(self.config.get('cpu_prefetch',False))
 
     def predict(self, example):
         return self.predict_many([example])[0]
@@ -213,12 +235,12 @@ class VllmJudge:
         cache_audit = {}
         if example.frames:
             def decode(contents):
-                images, videos = self.process_vision_info([{'role':'user','content':contents}], image_patch_size=self.geometry["patch_size"])
-                if videos is not None and len(videos):
-                    raise RuntimeError("Judge 独立图片输入意外产生视频")
-                if images is None or len(images) != len(contents):
-                    raise RuntimeError("Judge 解码帧数不匹配")
-                return list(images)
+                def decode_chunk(chunk):
+                    images,videos=self.process_vision_info([{'role':'user','content':chunk}],image_patch_size=self.geometry['patch_size'])
+                    if videos is not None and len(videos):raise RuntimeError('Judge独立图片输入意外产生视频')
+                    if images is None or len(images)!=len(chunk):raise RuntimeError('Judge解码帧数不匹配')
+                    return list(images)
+                return self.pipeline.decode(contents,decode_chunk)
             keys = [(str(path), effective, self.min_pixels, self.geometry['patch_size']) for path in example.frames]
             images, cache_audit = self.image_cache.get_many(keys, content[:-1], decode)
             payload["multi_modal_data"] = {"image": images}
@@ -229,6 +251,27 @@ class VllmJudge:
                 "prepare_seconds": time.perf_counter() - start, **cache_audit}
         return payload, audit
 
+    def _metrics(self):
+        try:return engine_metrics(self.llm.get_metrics())
+        except Exception as exc:return {'metrics_error':type(exc).__name__}
+
+    def _take_prepared(self,example):
+        value=self._prepared.pop(id(example),None)
+        return value[1] if value is not None and value[0] is example else self.prepare(example)
+
+    def _warm_examples(self,examples):
+        start=time.perf_counter();items=[]
+        for example in examples:
+            previous=self._prepared.get(id(example))
+            prepared=previous[1] if previous is not None and previous[0] is example else self.prepare(example)
+            items.append((example,prepared))
+        return {'items':items,'seconds':time.perf_counter()-start}
+
+    def predict_many_with_prefetch(self,examples,following):
+        self._next_examples=following
+        try:return self.predict_many(examples)
+        finally:self._next_examples=[]
+
     def predict_many(self, examples):
         if self.config.get('shared_gpu') and self.sleeping is not False:
             raise RuntimeError('共享Judge必须先完成显存唤醒才能评分')
@@ -238,19 +281,47 @@ class VllmJudge:
         if len(tasks) != 1:
             raise ValueError("Judge 批次必须属于同一种任务，防止 adapter 路由错误")
         results = []
-        batch_size = int(self.config.get("max_num_seqs", 4))
+        batch_size = self._effective_batch_size
         if batch_size < 1:
             raise ValueError("max_num_seqs 必须为正数")
-        for offset in range(0, len(examples), batch_size):
-            prepared = [self.prepare(e) for e in examples[offset:offset + batch_size]]
+        offset=0
+        while offset<len(examples):
+            metrics_before=self._metrics()
+            previous=getattr(self,'_last_preemptions',None)
+            if previous is not None and metrics_before.get('preemptions',previous)>previous and self._effective_batch_size>4:
+                self._effective_batch_size=4
+            batch_size=self._effective_batch_size
+            current=examples[offset:offset+batch_size]
+            cpu_started=time.perf_counter()
+            prepared = [self._take_prepared(e) for e in current]
+            cpu_prepare=time.perf_counter()-cpu_started
+            following=examples[offset+batch_size:offset+2*batch_size] or self._next_examples
+            future=self.pipeline.prefetch(self._warm_examples,following) if following and self.config.get('cpu_prefetch') else None
             start = time.perf_counter()
-            outputs = self.llm.generate([p for p,_ in prepared], self.sampling,
-                lora_request=self.adapters.get(next(iter(tasks))), use_tqdm=False)
-            elapsed = time.perf_counter() - start
+            prefetch_wait=prefetch_seconds=0.
+            try:
+                outputs = self.llm.generate([p for p,_ in prepared], self.sampling,
+                    lora_request=self.adapters.get(next(iter(tasks))), use_tqdm=False)
+                elapsed = time.perf_counter() - start
+            finally:
+                if future is not None:
+                    wait_started=time.perf_counter();warmed=future.result()
+                    prefetch_wait=time.perf_counter()-wait_started;prefetch_seconds=warmed['seconds']
+                    for example,value in warmed['items']:self._prepared[id(example)]=(example,value)
+            metrics_after=self._metrics()
+            reduced=should_reduce_batch(metrics_before,metrics_after,batch_size)
+            if reduced:self._effective_batch_size=4
+            self._last_preemptions=metrics_after.get('preemptions',metrics_before.get('preemptions'))
             if len(outputs) != len(prepared):
                 raise RuntimeError("Judge 返回结果数量不匹配")
             for output, (_, audit) in zip(outputs, prepared):
                 result = binary_decision(output, pass_id=self.pass_id, fail_id=self.fail_id)
                 results.append({**result, **audit, "generate_batch_seconds": elapsed,
-                    "generate_batch_size": len(prepared), "num_cached_tokens": getattr(output, "num_cached_tokens", None)})
+                    "generate_batch_size": len(prepared), "num_cached_tokens": getattr(output, "num_cached_tokens", None),
+                    'prompt_token_count':len(output.prompt_token_ids) if getattr(output,'prompt_token_ids',None) is not None else None,
+                    'cpu_prepare_batch_seconds':cpu_prepare,'cpu_prefetch_seconds':prefetch_seconds,
+                    'cpu_prefetch_residual_wait_seconds':prefetch_wait,'engine_metrics_before':metrics_before,
+                    'engine_metrics_after':metrics_after,'reduced_after_kv_recompute':reduced,
+                    'effective_next_batch_size':self._effective_batch_size})
+            offset+=len(current)
         return results

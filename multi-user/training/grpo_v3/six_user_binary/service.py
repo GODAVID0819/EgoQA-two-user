@@ -7,6 +7,9 @@ import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 import time
+import uuid
+from pathlib import Path
+import traceback
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
@@ -113,16 +116,25 @@ class CandidateScorer:
                 continue
             valid.append((len(results), examples))
             results.append({**identity, "status": "scored", "predictions": {}})
-        # 同一任务的候选相邻，复用视觉前缀；不能把候选位置用作身份替代。
-        for key in ("formality", "groundedness", "speaker_only", "all_six"):
-            examples = [row[key] for _, row in valid]
+        # S/A都属于answerability且使用同一340；明确保留(候选,条件)绑定。
+        merge=getattr(self.predictor,'config',{}).get('merge_answerability_batch',False)
+        groups=[('formality',),('groundedness',),('speaker_only','all_six')] if merge else [(k,) for k in ('formality','groundedness','speaker_only','all_six')]
+        for stage,keys in enumerate(groups):
+            bindings=[(index,key,row[key]) for key in keys for index,row in valid]
+            examples = [example for _,_,example in bindings]
             if not examples:
                 continue
-            predictions = self.predictor.predict_many(examples)
-            if len(predictions) != len(valid):
+            following=[row[key] for key in groups[stage+1] for _,row in valid] if stage+1<len(groups) else []
+            stage_start=time.perf_counter();stage_id=uuid.uuid4().hex
+            pipelined=getattr(self.predictor,'predict_many_with_prefetch',None)
+            predictions = pipelined(examples,following) if pipelined else self.predictor.predict_many(examples)
+            elapsed=time.perf_counter()-stage_start
+            if len(predictions) != len(bindings):
                 raise RuntimeError("Judge predictor 批次返回数量不一致")
-            for (index, _), prediction in zip(valid, predictions):
-                results[index]["predictions"][key] = prediction
+            for (index,key,_), prediction in zip(bindings, predictions):
+                results[index]["predictions"][key] = {**prediction,'score_stage_id':stage_id,
+                    'score_stage_keys':list(keys),'score_stage_request_count':len(bindings),
+                    'score_stage_seconds':elapsed}
         for result in results:
             if result["status"] == "scored":
                 result["probabilities"] = validate_probabilities({k:v["pass_probability"] for k,v in result["predictions"].items()})
@@ -170,16 +182,35 @@ def make_server(scorer, *, port: int):
     return ThreadingHTTPServer(("127.0.0.1", port), Handler)
 
 
+def load_startup_scorer(config, instance_id):
+    """先落盘启动首因，避免引擎析构阻塞时父进程只能等健康检查超时。"""
+    try:
+        from .predictor import VllmJudge
+        scorer = CandidateScorer(VllmJudge.from_config(config), instance_id)
+        if scorer.predictor.config.get('shared_gpu'):
+            scorer.predictor.resource('sleep')
+        return scorer
+    except Exception as exc:
+        Path(config).with_suffix('.startup_error.json').write_text(json.dumps({
+            'error': type(exc).__name__, 'message': str(exc), 'traceback': traceback.format_exc()
+        }), encoding='utf-8')
+        raise
+
+
+def raise_startup_error(config):
+    failure = Path(config).with_suffix('.startup_error.json')
+    if failure.exists():
+        value = json.loads(failure.read_text(encoding='utf-8'))
+        raise RuntimeError('Judge启动失败：' + value['error'] + ': ' + value['message'] + '；详情 ' + str(failure))
+
+
 def main():
     parser = argparse.ArgumentParser(description="冻结六用户 Judge 服务")
     parser.add_argument("--config", required=True)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--instance-id", required=True)
     args = parser.parse_args()
-    from .predictor import VllmJudge
-    scorer = CandidateScorer(VllmJudge.from_config(args.config), args.instance_id)
-    if scorer.predictor.config.get('shared_gpu'):
-        scorer.predictor.resource('sleep')
+    scorer = load_startup_scorer(args.config, args.instance_id)
     with make_server(scorer, port=args.port) as server:
         print(json.dumps(scorer.health(), ensure_ascii=False), flush=True)
         server.serve_forever()

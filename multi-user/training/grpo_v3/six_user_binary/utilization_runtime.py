@@ -10,12 +10,20 @@ import time
 from .utilization_guard import Feedback, checked_config
 
 _active = None
-REVISION = 'pointwise-2-instant'
+REVISION = 'pointwise-2-dual-device-smallpool'
+
+
+def guard_cuda_device():
+    """返回当前进程可见CUDA索引；训练rank显式设置，启动保护默认为0。"""
+    value = os.environ.get('EGOQA_GUARD_CUDA_DEVICE', '0')
+    if not value.isascii() or not value.isdigit():
+        raise ValueError('EGOQA_GUARD_CUDA_DEVICE必须为非负CUDA索引')
+    return int(value)
 
 
 def auxiliary_operands(torch, device):
-    """两个小缓冲区共1.125MiB，避开矩阵库的额外工作区。"""
-    source = torch.ones((384,384), device=device, dtype=torch.float32)
+    """每tensor不超过1MiB，避免CUDA大分配池最少20MiB预留。"""
+    source = torch.ones((512,512), device=device, dtype=torch.float32)
     return source, torch.empty_like(source)
 
 
@@ -26,6 +34,7 @@ def auxiliary_step(torch, operands):
 class Guard:
     def __init__(self, config, log, *, stop_file=None):
         self.config = checked_config(config)
+        self.cuda_device = guard_cuda_device()
         self.log = Path(log)
         self.stop_file = Path(stop_file) if stop_file else None
         self.stop = threading.Event()
@@ -33,11 +42,13 @@ class Guard:
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.error = None
         self.graph_live = False
+        self.rebuild_deferred = False
 
     def record(self, **values):
         self.log.parent.mkdir(parents=True, exist_ok=True)
         with self.log.open('a', encoding='utf-8') as f:
-            f.write(json.dumps({'epoch': time.time(), 'pid': os.getpid(), 'revision':REVISION, **values})+'\n')
+            f.write(json.dumps({'epoch': time.time(), 'pid': os.getpid(), 'revision':REVISION,
+                               'cuda_device': self.cuda_device, **values})+'\n')
 
     def start(self):
         self.thread.start()
@@ -59,11 +70,11 @@ class Guard:
             import torch
             import pynvml as nv
             from hpc.shared.cuda_device_identity import handle_for_cuda_device
-            torch.cuda.set_device(0)
+            torch.cuda.set_device(self.cuda_device)
             nv.nvmlInit()
-            handle = handle_for_cuda_device(0, torch.cuda, nv)
-            stream = torch.cuda.Stream(device=0, priority=0)
-            stream.wait_stream(torch.cuda.default_stream(0))
+            handle = handle_for_cuda_device(self.cuda_device, torch.cuda, nv)
+            stream = torch.cuda.Stream(device=self.cuda_device, priority=0)
+            stream.wait_stream(torch.cuda.default_stream(self.cuda_device))
             feedback = Feedback(**self.config)
             history = os.environ.get('EGOQA_UTILIZATION_METRICS')
             if history and Path(history).is_file():
@@ -79,7 +90,7 @@ class Guard:
             def allocate(capture=False):
                 # 捕获只在start()阻塞主线程时进行；运行期间绝不并发捕获图。
                 with torch.cuda.stream(stream), torch.inference_mode():
-                    a,c = auxiliary_operands(torch,'cuda')
+                    a,c = auxiliary_operands(torch,f'cuda:{self.cuda_device}')
                     b = None
                     for _ in range(3): auxiliary_step(torch,(a,c))
                     stream.synchronize()
@@ -89,18 +100,22 @@ class Guard:
                         with torch.cuda.graph(g, stream=stream):
                             for _ in range(128): auxiliary_step(torch,(a,c))
                 return a,b,c,g
-            mem = nv.nvmlDeviceGetMemoryInfo(handle)
-            if mem.free/1024**2 >= self.config['reserve_gib']*1024+self.config['max_prealloc_mib']:
-                before = torch.cuda.memory_allocated()
-                reserved_before = torch.cuda.memory_reserved()
-                left,right,output,graph = allocate(capture=True)
-                allocated = torch.cuda.memory_allocated()-before
-                reserved = torch.cuda.memory_reserved()-reserved_before
+            def checked_allocate(capture=False):
+                # 图与让步后的eager重建都保留原显存预算检查。
+                before = torch.cuda.memory_allocated(self.cuda_device)
+                reserved_before = torch.cuda.memory_reserved(self.cuda_device)
+                operands = allocate(capture=capture)
+                allocated = torch.cuda.memory_allocated(self.cuda_device)-before
+                reserved = torch.cuda.memory_reserved(self.cuda_device)-reserved_before
                 self.record(event='auxiliary_allocated', allocated_mib=allocated/1024**2,
                             reserved_mib=reserved/1024**2)
                 if max(allocated,reserved) > self.config['max_prealloc_mib']*1024**2:
                     raise RuntimeError(f'辅助图分配超过预算：allocated={allocated/1024**2:.3f}MiB '
                                        f'reserved={reserved/1024**2:.3f}MiB max={self.config["max_prealloc_mib"]}MiB')
+                return operands
+            mem = nv.nvmlDeviceGetMemoryInfo(handle)
+            if mem.free/1024**2 >= self.config['reserve_gib']*1024+self.config['max_prealloc_mib']:
+                left,right,output,graph = checked_allocate(capture=True)
                 self.graph_live = True
             self.record(event='monitor_ready', config=self.config, stream_priority=stream.priority)
             self.ready.set()
@@ -129,7 +144,13 @@ class Guard:
                     self.stop.wait(.05)
                     continue
                 if left is None:
-                    left,right,output,graph = allocate(capture=False)
+                    # 主训练可能并行分配；进程全局差值在这里不能归因给辅助负载。
+                    # 等已有主线程安全边界的rearm_training_guard，不放宽任何预算。
+                    if not self.rebuild_deferred:
+                        self.record(event='rebuild_deferred_to_safe_boundary')
+                        self.rebuild_deferred = True
+                    self.stop.wait(.05)
+                    continue
                 started = time.monotonic()
                 deadline = started+.05*action['duty']
                 while time.monotonic() < deadline and not self.stop.is_set():
@@ -173,7 +194,7 @@ def enable_training_guard():
     import pynvml as nv
     from hpc.shared.cuda_device_identity import handle_for_cuda_device
     nv.nvmlInit()
-    handle = handle_for_cuda_device(0,torch.cuda,nv)
+    handle = handle_for_cuda_device(guard_cuda_device(),torch.cuda,nv)
     while any(p.pid==status['pid'] for p in nv.nvmlDeviceGetComputeRunningProcesses(handle)):
         if time.monotonic()>=deadline:
             raise RuntimeError('启动保护的CUDA上下文尚未释放')

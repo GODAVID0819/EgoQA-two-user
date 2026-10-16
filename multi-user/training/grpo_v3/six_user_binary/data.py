@@ -101,6 +101,7 @@ def main() -> None:
     parser.add_argument("--selection", type=Path, help="JSON 对象：各 split 下为 source_packet_id/asker_index 列表")
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--speaker-holdout", action="store_true")
     parser.add_argument("--validate", type=Path, nargs="+")
     args = parser.parse_args()
     if args.validate:
@@ -110,7 +111,12 @@ def main() -> None:
         splits = {str(path): read_rows(path) for path in resolved}
         if any(not rows for rows in splits.values()):
             raise ValueError("训练和验证数据不得为空")
-        validate_splits(splits)
+        if args.speaker_holdout:
+            from .speaker_holdout_split import validate_holdout
+            if len(resolved) != 3: raise ValueError("speaker留出模式必须检查训练/验证/测试")
+            validate_holdout(dict(zip(("train", "validation", "test"), splits.values())))
+        else:
+            validate_splits(splits)
         for rows in splits.values():
             for row in rows:
                 validate_row(row)

@@ -102,13 +102,13 @@ def swift_command(c, output):
         "top_p": c["top_p"], "top_k": c["top_k"], "lr_scheduler_type": c.get("lr_scheduler_type", "constant"),
         "save_strategy": "steps", "save_steps": c.get("save_steps", c["max_steps"]),
         "eval_strategy": "steps", "eval_steps": c.get("eval_steps", c["max_steps"]),
-        "save_total_limit": c.get("save_total_limit", 2), "logging_steps": 1, "log_completions": "true", "dataset_shuffle": "true",
+        "save_total_limit": c.get("save_total_limit", 2), "logging_steps": 1, "log_completions": "true", "dataset_shuffle": str(c.get("dataset_shuffle", True)).lower(),
         "split_dataset_ratio": 0, "dataset_num_proc": 1, "dataloader_num_workers": 0,
         "remove_unused_columns": "false", "strict": "true", "truncation_strategy": "delete",
         "report_to": "none", "output_dir": str(PurePosixPath(output) / "swift")}
     if c.get("use_vllm"):
         options.update(vllm_mode="colocate", vllm_tensor_parallel_size=1,
-            vllm_enable_lora="true", sleep_level=1, offload_model="true", offload_optimizer="true",
+            vllm_enable_lora="true", vllm_max_lora_rank=c.get("lora_rank", 8), sleep_level=1, offload_model="true", offload_optimizer="true",
             vllm_gpu_memory_utilization=c.get("vllm_gpu_memory_utilization", .55),
             vllm_max_model_len=c["max_length"], vllm_max_num_seqs=c["num_generations"],
             vllm_enable_prefix_caching="true", vllm_enforce_eager="false",
@@ -148,6 +148,9 @@ def final_validation(c, output, evaluate):
         evaluate()
     checked = json.loads((Path(output) / 'training_result.json').read_text(encoding='utf-8'))
     evaluate(checked['checkpoint'])
+    if c.get('test_dataset'):
+        evaluate(split='test')
+        evaluate(checked['checkpoint'], split='test')
 
 
 def run_validation_only(c, evaluate):
@@ -286,7 +289,8 @@ def main():
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     try:
-        subprocess.run([c["train_python"], "-m", "training.grpo_v3.six_user_binary.data", "--validate", c["train_dataset"], c["val_dataset"]], cwd=package, env=env, check=True)
+        from .holdout_runtime import data_validation_command
+        subprocess.run(data_validation_command(c), cwd=package, env=env, check=True)
         tool_audit = {}
         for role in ("train", "judge"):
             role_env = role_environment(c[role + "_python"], env)
@@ -362,14 +366,18 @@ def main():
             policy_env["CUDA_PATH"] = str(cuda_home)
         baseline_source = (checked_baseline_source(c["baseline_validation_source"], health, c["num_generations_eval"])
             if c.get("baseline_validation_source") else output / "validation_baseline.json")
-        def evaluate_policy(adapter=None):
-            label = "policy" if adapter else "baseline"
-            destination = output / ("validation_" + label + ".json")
+        def evaluate_policy(adapter=None, *, split="validation"):
+            from .holdout_runtime import evaluation_files
+            files = evaluation_files(c, output, adapter, split, baseline_source)
+            label = files["label"]
+            destination = Path(files["destination"])
+            if split == "test":
+                Path(files["config_path"]).write_text(json.dumps(files["config"], indent=2))
             eval_command = [c["train_python"], "-m", "training.grpo_v3.six_user_binary.evaluation",
-                "--config", str(output / "run_config.json"), "--output", str(destination),
+                "--config", files["config_path"], "--output", str(destination),
                 "--judge-url", client.base_url, "--judge-instance", instance_id]
             if adapter:
-                eval_command += ["--adapter", str(adapter), "--baseline", str(baseline_source)]
+                eval_command += ["--adapter", str(adapter), "--baseline", files["baseline"]]
             process = child(eval_command, "validation_" + label + ".log", policy_env)
             while process.poll() is None:
                 if service.poll() is not None:

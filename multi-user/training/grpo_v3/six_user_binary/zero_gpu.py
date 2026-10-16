@@ -15,17 +15,6 @@ import time
 import math
 
 
-def normalize_scheduler_kwargs(value):
-    """跳过GPU初始化的CLI解析可能保留JSON字符串，按同一字典严格核验。"""
-    if isinstance(value, str):
-        value = json.loads(value)
-    if value is None:
-        return {}
-    if not isinstance(value, dict):
-        raise ValueError('学习率调度附加参数必须是JSON对象或字典')
-    return value
-
-
 def compiler_check(directory):
     """实际执行C/C++编译器，防止仅发现名字却不能编译或加载。"""
     result={}
@@ -126,8 +115,7 @@ def main():
                     if key in run and getattr(parsed,key)!=run[key]:raise ValueError(f'{key}未正确传入实际CLI')
                 if str(getattr(parsed.lr_scheduler_type,'value',parsed.lr_scheduler_type))!=run.get('lr_scheduler_type','constant'):
                     raise ValueError('学习率调度类型未正确传入实际CLI')
-                scheduler_kwargs=normalize_scheduler_kwargs(parsed.lr_scheduler_kwargs)
-                if 'lr_scheduler_kwargs' in run and scheduler_kwargs!=run['lr_scheduler_kwargs']:
+                if 'lr_scheduler_kwargs' in run and parsed.lr_scheduler_kwargs!=run['lr_scheduler_kwargs']:
                     raise ValueError('学习率下限未正确传入实际CLI')
                 if 'stop_after_steps' in run and 'egoqa_stage_stop' not in parsed.callbacks:
                     raise ValueError('分阶段正常结束回调未正确传入实际CLI')
@@ -137,7 +125,7 @@ def main():
                 report['checks']['typed_cli']={'max_steps':parsed.max_steps,'eval_steps':parsed.eval_steps,'use_vllm':parsed.use_vllm,
                     'max_completion_length':parsed.max_completion_length,'resume_from_checkpoint':parsed.resume_from_checkpoint,
                     'learning_rate':parsed.learning_rate,'lr_scheduler_type':str(getattr(parsed.lr_scheduler_type,'value',parsed.lr_scheduler_type)),
-                    'warmup_steps':parsed.warmup_steps,'lr_scheduler_kwargs':scheduler_kwargs,'callbacks':parsed.callbacks}
+                    'warmup_steps':parsed.warmup_steps,'lr_scheduler_kwargs':parsed.lr_scheduler_kwargs,'callbacks':parsed.callbacks}
         elif args.mode=='checkpoint':
             import torch
             from .validate_run import finite_updated_adapter

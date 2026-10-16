@@ -16,11 +16,13 @@ def audit(event, **values):
 
 @contextmanager
 def judge_window(client, suspend_policy, resume_policy):
+    audit('policy_offload_begin')
     suspend_policy()
     from .utilization_runtime import rearm_training_guard
     rearm_training_guard()
     audit('policy_offloaded')
     try:
+        audit('judge_wake_begin')
         state = client.resource('wake')
         if state.get('sleeping') is not False:
             raise RuntimeError('Judge没有确认唤醒')
@@ -28,10 +30,12 @@ def judge_window(client, suspend_policy, resume_policy):
         yield
     finally:
         # 如果释放失败，保持Policy卸载并退出，避免恢复时显存重叠。
+        audit('judge_sleep_begin')
         state = client.resource('sleep')
         if state.get('sleeping') is not True:
             raise RuntimeError('Judge没有确认释放GPU')
         audit('judge_asleep', resource=state)
+        audit('policy_restore_begin')
         resume_policy()
         audit('policy_restored')
 

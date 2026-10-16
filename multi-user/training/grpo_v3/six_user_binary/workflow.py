@@ -76,6 +76,8 @@ def training_config(workflow, *, job_id, phase, max_steps):
                     "resume_from_checkpoint", "baseline_validation_source", "baseline_after_training", "stop_after_steps", "warmup_steps", "validation_only_adapter"):
             if key in workflow:
                 result[key] = workflow[key]
+    for key in ('speaker_holdout_validation', 'test_dataset'):
+        if key in workflow: result[key] = workflow[key]
     return result
 
 

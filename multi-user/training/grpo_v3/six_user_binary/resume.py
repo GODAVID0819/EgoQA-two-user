@@ -71,7 +71,11 @@ def main():
         source = Path(c["prepared_data_root"])
         expected = c.get("expected_split_counts", {"train":12,"validation":6,"test":6})
         splits = {name: read_rows(source / (name + ".jsonl")) for name in expected}
-        validate_splits(splits)
+        if c.get('speaker_holdout_validation'):
+            from .speaker_holdout_split import validate_holdout
+            validate_holdout(splits)
+        else:
+            validate_splits(splits)
         if {k: len(v) for k, v in splits.items()} != expected:
             raise ValueError(f"恢复数据计数不一致，期望{expected}")
         status["data"] = {"rows": {k: len(v) for k, v in splits.items()}, "reused_without_preprocessing": True}

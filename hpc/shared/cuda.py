@@ -44,10 +44,6 @@ def b2g(value: int) -> float:
     return value / GB
 
 
-def stop_due_to_elapsed(now_epoch: float, job_start_epoch: float, stop_after_seconds: float) -> bool:
-    return stop_after_seconds > 0 and job_start_epoch > 0 and now_epoch - job_start_epoch >= stop_after_seconds
-
-
 class UtilWin:
     def __init__(self, window_s: int = 7200) -> None:
         self.window_s = window_s
@@ -369,7 +365,6 @@ def main() -> None:
     parser.add_argument("--reserve", default="5.0")
     parser.add_argument("--max-prealloc", type=float, default=2.5)
     parser.add_argument("--start-after-seconds", type=float, default=7200.0)
-    parser.add_argument("--stop-after-seconds", type=float, default=0.0)
     parser.add_argument("--job-start-epoch-seconds", type=float, default=0.0)
     args = parser.parse_args()
     if not torch.cuda.is_available():
@@ -378,8 +373,6 @@ def main() -> None:
         raise SystemExit("--start-after-seconds must be non-negative")
     if args.job_start_epoch_seconds < 0:
         raise SystemExit("--job-start-epoch-seconds must be non-negative")
-    if args.stop_after_seconds > 0 and args.job_start_epoch_seconds <= 0:
-        raise SystemExit("--stop-after-seconds requires --job-start-epoch-seconds")
     gpu_list = parse_gpus_arg(args.gpus, torch.cuda.device_count())
     if not gpu_list:
         raise SystemExit("No GPUs selected")
@@ -409,9 +402,6 @@ def main() -> None:
     signal.signal(signal.SIGTERM, handle_signal)
     try:
         while not stop_event.is_set():
-            if stop_due_to_elapsed(time.time(), args.job_start_epoch_seconds, args.stop_after_seconds):
-                print(f"Keeper handoff after {args.stop_after_seconds:.0f}s of allocation time", flush=True)
-                break
             dead = [controller.gpu for controller in controllers if not controller.is_alive()]
             if dead:
                 raise RuntimeError(f"CUDA keeper controller stopped unexpectedly: gpus={dead}")

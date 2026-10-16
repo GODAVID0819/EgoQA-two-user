@@ -50,7 +50,7 @@ def validate(output, *, adapter_check=finite_updated_adapter):
     }
     if 'stop_after_steps' in config:
         required = ('adapter_model.safetensors', 'adapter_config.json', 'optimizer.pt', 'scheduler.pt',
-                    'rng_state.pth', 'args.json', 'training_args.bin')
+                    'rng_state_0.pth', 'rng_state_1.pth', 'args.json', 'training_args.bin')
         checks['complete_stage_checkpoint'] = all((checkpoint / name).is_file() and (checkpoint / name).stat().st_size > 0 for name in required)
         checks['schedule_horizon_preserved'] = state.get('max_steps') == config['max_steps']
     return {"status": "passed" if all(checks.values()) else "failed", "checks": checks,
