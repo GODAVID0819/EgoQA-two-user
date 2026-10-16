@@ -19,7 +19,7 @@ class RecoveryTests(unittest.TestCase):
         self.data.write_text(''.join(json.dumps(r)+'\n' for r in self.rows))
         judge=self.root/'judge.json';judge.write_text('{}')
         base={'max_steps':300,'stop_after_steps':300,'num_generations':4,'lora_rank':64,'lora_alpha':128,
-              'world_size':2,'learning_rate':1e-5,'train_dataset':str(self.data),'judge_config':str(judge),
+              'world_size':2,'train_conditions':600,'learning_rate':1e-5,'train_dataset':str(self.data),'judge_config':str(judge),
               'resume_from_checkpoint':None}
         (self.source/'run_config.json').write_text(json.dumps(base))
         self.c={**base,'resume_from_checkpoint':str(self.cp),'resume_source_output':str(self.source),
@@ -34,9 +34,11 @@ class RecoveryTests(unittest.TestCase):
         for rank in [0,1]:
             folder=self.source/('rank'+str(rank));folder.mkdir()
             rows=[]
+            # 每步4行：第一轮(4s, 4s+1)、第二轮(4s+2, 4s+3)，rank r取每轮第r行。
             for step in range(13):
-                row=self.rows[step*2+rank]
-                rows.extend({**row,'request_id':f'r{rank}s{step}:{i}','reward':.5} for i in range(4))
+                for round_index in range(2):
+                    row=self.rows[4*step+2*round_index+rank]
+                    rows.extend({**row,'request_id':f'r{rank}s{step}g{round_index}:{i}','reward':.5} for i in range(4))
             (folder/'reward_trace.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in rows))
 
     def test_valid_resume_keeps_original_horizon(self):
@@ -54,12 +56,17 @@ class RecoveryTests(unittest.TestCase):
     def test_prefix_uses_only_checkpointed_conditions_and_preserves_ids(self):
         dest=self.root/'new_output';(dest/'rank0').mkdir(parents=True);(dest/'rank1').mkdir()
         report=self.seed(self.c,dest)
-        self.assertEqual(report['inherited_candidates'],96)
+        self.assertEqual(report['inherited_candidates'],192)
         for rank in [0,1]:
             rows=[json.loads(x) for x in (dest/('rank'+str(rank))/'reward_trace.jsonl').read_text().splitlines()]
-            self.assertEqual(len(rows),48)
-            self.assertEqual(rows[-1]['source_packet_id'],self.rows[22+rank]['source_packet_id'])
+            self.assertEqual(len(rows),96)
+            self.assertEqual(rows[-1]['source_packet_id'],self.rows[4*11+2+rank]['source_packet_id'])
         with self.assertRaises(FileExistsError):self.seed(self.c,dest)
+
+    def test_resume_bindings_are_first_round_of_the_resumed_step(self):
+        from recovery import expected_resume_bindings
+        self.assertEqual(expected_resume_bindings(self.c),
+                         [(self.rows[48+r]['source_packet_id'],self.rows[48+r]['asker_index']) for r in (0,1)])
 
     def test_restored_optimizer_step_and_lr_must_be_continuous(self):
         meta=self.validate(self.c)
