@@ -10,7 +10,7 @@ def merge_validation(output):
     from training.grpo_v3.six_user_binary.evaluation import compare_rows, summarize, same_frozen_judge
     output=Path(output);c=json.loads((output/'run_config.json').read_text())
     bases=[];policies=[]
-    for rank in range(2):
+    for rank in range(c['world_size']):
         p=output/('rank'+str(rank));b=json.loads((p/'validation_baseline.json').read_text());a=json.loads((p/'validation_policy.json').read_text())
         if b['status']!='completed' or a['status']!='completed':raise ValueError('配对分片未完整完成')
         if b['settings']!=a['settings'] or b['input_bindings']!=a['input_bindings'] or not same_frozen_judge(b['judge'],a['judge']):

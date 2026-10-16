@@ -6,8 +6,8 @@ from functools import wraps
 def average_gradients(model, *, max_bucket_bytes=8*1024*1024):
     import torch
     import torch.distributed as dist
-    if not dist.is_initialized() or dist.get_world_size()!=2:
-        raise RuntimeError('本轮梯度均值同步要求两个实际分布式进程')
+    if not dist.is_initialized() or dist.get_world_size() not in (2,4):
+        raise RuntimeError('本轮梯度均值同步要求2或4个实际分布式进程')
     started=time.monotonic()
     named=[(name,p) for name,p in model.named_parameters() if p.requires_grad]
     if not named:raise RuntimeError('缺少可训练参数')

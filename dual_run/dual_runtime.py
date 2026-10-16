@@ -10,12 +10,14 @@ def condition_binding(row):
 
 
 def validate_config(c):
-    # 每步4个不同窗口：每rank累积8微批、每4微批生成一轮（1条件×G4），每步两轮×两rank。
-    expected={'world_size':2,'num_generations':4,'per_device_train_batch_size':1,
-              'gradient_accumulation_steps':8,'max_steps':900,'lora_rank':128,
+    # 每步4个不同窗口：每rank每4微批生成一轮（1条件×G4）。两卡：每rank累积8微批、两轮；四卡：累积4微批、一轮。
+    world=c.get('world_size')
+    if world not in WORLD_SIZES:raise ValueError('world_size只允许2或4')
+    expected={'num_generations':4,'per_device_train_batch_size':1,
+              'gradient_accumulation_steps':4*rounds_per_step(world),'max_steps':900,'lora_rank':128,
               'lora_alpha':128,'train_conditions':600,'validation_conditions':120}
     if any(c.get(k)!=v for k,v in expected.items()):
-        raise ValueError('双卡参数不符合四窗口G4、r128、900步配置')
+        raise ValueError('多卡参数不符合四窗口G4、r128、900步配置')
     if c.get('resume_from_checkpoint'):
         from recovery import validated_resume
         validated_resume(c)
@@ -24,7 +26,7 @@ def validate_config(c):
 
 
 def rank_environment(output, records, rank):
-    if rank not in (0,1) or len(records)!=2 or records[0]['port']==records[1]['port']:
+    if len(records) not in WORLD_SIZES or rank not in range(len(records)) or len({r['port'] for r in records})!=len(records):
         raise ValueError('rank或独立Judge端口不合法')
     root=Path(output);p=root/('rank'+str(rank));rec=records[rank]
     return {'EGOQA_GUARD_CUDA_DEVICE':str(rank),
@@ -39,19 +41,29 @@ def rank_environment(output, records, rank):
 
 
 def validate_rank_bindings(groups):
-    if len(groups)!=2 or any(len(g)!=4 for g in groups):
-        raise ValueError('两个rank各须获得完整G4组')
+    if len(groups) not in WORLD_SIZES or any(len(g)!=4 for g in groups):
+        raise ValueError('每个rank各须获得完整G4组')
     keys=[]
     for group in groups:
         values={(r['source_packet_id'],int(r['asker_index'])) for r in group}
         if len(values)!=1:raise ValueError('rank内G4组的窗口speaker错位')
         keys.append(next(iter(values)))
-    if keys[0][0]==keys[1][0]:raise ValueError('同一步必须为两个不同窗口')
+    if len({k[0] for k in keys})!=len(keys):raise ValueError('同一轮各rank必须为不同窗口')
     return [k[0] for k in keys]
 
 
 ROWS_PER_STEP=4
-ROUNDS_PER_STEP=2
+WORLD_SIZES=(2,4)
+
+
+def rounds_per_step(world_size):
+    """文件第4k..4k+3行为第k步；第j轮生成取4k+W·j..4k+W·j+W-1行，第r行给rank r（TRL BatchSamplerShard按批轮转）。"""
+    if world_size not in WORLD_SIZES:raise ValueError('world_size只允许2或4')
+    return ROWS_PER_STEP//world_size
+
+
+def step_row(step,round_index,rank,world_size):
+    return ROWS_PER_STEP*step+world_size*round_index+rank
 
 
 def make_length_quads(rows,cost,seed=42):
@@ -86,9 +98,10 @@ def check_step_order(rows):
             raise ValueError(f'第{start//ROWS_PER_STEP+1}步不是4个不同窗口')
 
 
-def validation_partition(count,rank):
-    if count%2 or rank not in (0,1):raise ValueError('验证数量必须可均分两个rank')
-    return list(range(rank,count,2))
+def validation_partition(count,rank,world_size=2):
+    if world_size not in WORLD_SIZES or count%world_size or rank not in range(world_size):
+        raise ValueError('验证数量必须可均分各rank')
+    return list(range(rank,count,world_size))
 
 
 def frozen_visual_key(inputs):

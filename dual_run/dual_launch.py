@@ -1,4 +1,4 @@
-"""双卡同节点DDP、每卡独立冻结Judge及同步完整G4评分。"""
+"""2或4卡同节点DDP、每卡独立冻结Judge及同步完整G4评分。"""
 import argparse
 import json
 import os
@@ -17,7 +17,8 @@ def main():
     from training.torch_storage_preflight import validate_storage_environment
     from training.grpo_v3.six_user_binary.service import JudgeClient, raise_startup_error
     job=os.environ['SLURM_JOB_ID'];allocation=os.environ['CUDA_VISIBLE_DEVICES'].split(',')
-    if len(allocation)!=2:raise RuntimeError('必须实际分配两张GPU')
+    world=c['world_size']
+    if len(allocation)!=world:raise RuntimeError('实际分配GPU数必须等于world_size')
     root=Path(c['project_root']);package=root/'multi-user';output=Path(c['output_root'])/('train_'+job)
     output.mkdir(parents=True,exist_ok=False)
     scratch,env=scratch_environment(c,job)
@@ -26,7 +27,7 @@ def main():
     if storage['status']!='passed':raise RuntimeError('scratch封闭或可写性失败')
     (output/'run_config.json').write_text(json.dumps(c,indent=2))
     children=[];streams=[];services=[];clients=[];records=[];guards=[]
-    result={'status':'running','job_id':job,'world_size':2,'config':c}
+    result={'status':'running','job_id':job,'world_size':world,'config':c}
     def child(command,path,child_env):
         stream=path.open('w');streams.append(stream)
         p=subprocess.Popen(command,cwd=package,env=child_env,stdout=stream,stderr=subprocess.STDOUT,start_new_session=True)
@@ -79,13 +80,13 @@ def main():
         train_env.update(vision_cache_environment(c))
         if recovery:
             train_env['EGOQA_RESUME_METADATA']=json.dumps(validated_resume(c))
-        # 原CLI构造器描述单个rank的同卡轮换；全局两卡由本父入口管理。
+        # 原CLI构造器描述单个rank的同卡轮换；全局多卡由本父入口管理。
         cmd=swift_command({**c,'policy_gpu_indices':[0],'judge_gpu_indices':[0]},str(output))[2:]
         cb=cmd.index('--callbacks');cmd[cb+1]='egoqa_stage_stop';cmd.insert(cb+2,'egoqa_dual_audit')
         cmd.extend(['--steps_per_generation','4','--ddp_find_unused_parameters','false'])
         if recovery:
             cmd.extend(['--resume_only_model','false','--ignore_data_skip','false'])
-        command=[c['train_python'],'-m','torch.distributed.run','--nproc_per_node=2','--master_addr=127.0.0.1',
+        command=[c['train_python'],'-m','torch.distributed.run','--nproc_per_node='+str(world),'--master_addr=127.0.0.1',
                  '--master_port='+str(select_master_port()),str(root/'dual_worker.py'),*cmd]
         (output/'train_command.json').write_text(json.dumps(command,indent=2))
         trainer=child(command,output/'trainer.log',train_env)
@@ -96,7 +97,7 @@ def main():
         errors=cleanup_processes([trainer]);children.remove(trainer)
         if errors:raise RuntimeError(str(errors))
         with (output/'reward_trace.jsonl').open('w') as f:
-            for rank in range(2):f.write((output/('rank'+str(rank))/'reward_trace.jsonl').read_text())
+            for rank in range(world):f.write((output/('rank'+str(rank))/'reward_trace.jsonl').read_text())
         subprocess.run([c['train_python'],'-m','training.grpo_v3.six_user_binary.validate_run','--output',str(output)],cwd=package,env=env,check=True)
         checked=json.loads((output/'training_result.json').read_text());adapter=checked['checkpoint']
         if c['stop_after_steps']<c['max_steps']:
@@ -107,7 +108,7 @@ def main():
         val_rows=[json.loads(s) for s in Path(c['val_dataset']).read_text().splitlines() if s.strip()]
         eval_processes=[]
         for rank,gpu in enumerate(allocation):
-            p=output/('rank'+str(rank));indices=validation_partition(len(val_rows),rank)
+            p=output/('rank'+str(rank));indices=validation_partition(len(val_rows),rank,world)
             partition=p/'validation.jsonl'
             partition.write_text(''.join(json.dumps({**val_rows[i],'global_validation_index':i})+'\n' for i in indices))
             vc={**c,'val_dataset':str(partition),'world_size':1,'policy_gpu_indices':[0],'judge_gpu_indices':[0]}

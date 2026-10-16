@@ -1,4 +1,4 @@
-"""由torchrun启动两个同步训练rank，按rank选择同卡独立Judge。"""
+"""由torchrun启动2或4个同步训练rank，按rank选择同卡独立Judge。"""
 import json
 import os
 from pathlib import Path
@@ -39,7 +39,7 @@ def install_audit(output):
                 'eligible':key is not None,'image_count':len(key) if key else 0})
         bindings=[{'source_packet_id':r['source_packet_id'],'asker_index':r['asker_index']} for r in inputs]
         mode='train' if trainer.model.training else 'eval'
-        groups=[None,None];collective_started=time.monotonic()
+        groups=[None]*dist.get_world_size();collective_started=time.monotonic()
         dist.all_gather_object(groups,bindings)
         record('phase_timing',{'global_step':trainer.state.global_step,'phase':'generation_group_collective',
             'seconds':time.monotonic()-collective_started,'epoch':time.time()})
@@ -49,7 +49,7 @@ def install_audit(output):
             if set(windows)&set(seen) or len(seen)+len(windows)>4:
                 raise RuntimeError(f'第{trainer.state.global_step+1}步窗口重复或超过4个：{seen}+{windows}')
             seen.extend(windows)
-        if mode=='train' and trainer.state.global_step==config.get('expected_resume_step') and len(step_windows[trainer.state.global_step])==2:
+        if mode=='train' and trainer.state.global_step==config.get('expected_resume_step') and len(step_windows[trainer.state.global_step])==dist.get_world_size():
             from recovery import expected_resume_bindings
             actual=[(group[0]['source_packet_id'],int(group[0]['asker_index'])) for group in groups]
             if actual!=expected_resume_bindings(config):raise RuntimeError('实际恢复采样位置错误')
@@ -84,13 +84,14 @@ def install_audit(output):
             record('ddp_sync',{'global_step':state.global_step,'rank':rank,'world_size':dist.get_world_size(),
                                'cuda_device':torch.cuda.current_device(),'all_trainable_parameters_equal':equal,
                                'checked_elements':elements,'checked_tensors':count,'finite':finite,'differences':differences})
-            if not equal or not finite:raise RuntimeError('双卡adapter参数样本不同步或非有限')
+            if not equal or not finite:raise RuntimeError('多卡adapter参数样本不同步或非有限')
         def on_train_begin(self,args,state,control,**kwargs):
             nonlocal cache_controller
             if config.get('resume_from_checkpoint') and state.global_step!=config['expected_resume_step']:
                 raise RuntimeError('实际恢复global_step错误，禁止从0重新训练')
-            if dist.get_world_size()!=2 or args.generation_batch_size!=8 or args.steps_per_generation!=4:
-                raise ValueError('实际双卡生成批量必须8、每rank4微批')
+            world=config['world_size']
+            if dist.get_world_size()!=world or args.generation_batch_size!=4*world or args.steps_per_generation!=4:
+                raise ValueError('实际生成批量必须4×world_size、每rank4微批')
             self.verify(state,kwargs['model'])
             if os.environ.get('EGOQA_FROZEN_VISION_CACHE')=='1':
                 from frozen_vision_cache import install
@@ -121,7 +122,7 @@ def main():
     output=Path(os.environ['EGOQA_DUAL_OUTPUT'])
     records=json.loads((output/'rank_manifest.json').read_text())
     rank=int(os.environ['LOCAL_RANK'])
-    if int(os.environ['WORLD_SIZE'])!=2:raise RuntimeError('只允许两个DDP进程')
+    if int(os.environ['WORLD_SIZE'])!=len(records):raise RuntimeError('DDP进程数必须等于rank清单')
     os.environ.update(rank_environment(output,records,rank))
     import torch
     torch.cuda.set_device(rank)

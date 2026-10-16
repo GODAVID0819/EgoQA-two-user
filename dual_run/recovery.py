@@ -20,7 +20,7 @@ def validated_resume(config):
     if checkpoint.parents[2]!=source or source.name!='train_'+str(config['recovery_from_job']):
         raise ValueError('断点和来源JobID/输出目录不匹配')
     required=['adapter_model.safetensors','adapter_config.json','optimizer.pt','scheduler.pt',
-              'rng_state_0.pth','rng_state_1.pth','trainer_state.json','args.json','training_args.bin']
+              *('rng_state_'+str(r)+'.pth' for r in range(config['world_size'])),'trainer_state.json','args.json','training_args.bin']
     if not all((checkpoint/name).is_file() and (checkpoint/name).stat().st_size for name in required):
         raise ValueError('恢复断点缺少完整模型/优化器/调度器/双rank随机状态')
     state=json.loads((checkpoint/'trainer_state.json').read_text())
@@ -50,25 +50,28 @@ def validated_resume(config):
 def expected_resume_bindings(config):
     meta=validated_resume(config)
     if meta is None:return None
-    # 恢复后第一轮生成：第step步的前两行（rank0、rank1）。训练文件按epoch循环。
-    rows=head_rows(config['train_dataset'],config['train_conditions'])
-    start=(4*meta['step'])%len(rows)
-    return [(r['source_packet_id'],int(r['asker_index'])) for r in rows[start:start+2]]
+    # 恢复后第一轮生成：第step步的前world_size行（依次给rank0..）。训练文件按epoch循环。
+    from dual_runtime import step_row
+    rows=head_rows(config['train_dataset'],config['train_conditions']);world=config['world_size']
+    picked=[rows[step_row(meta['step'],0,r,world)%len(rows)] for r in range(world)]
+    return [(r['source_packet_id'],int(r['asker_index'])) for r in picked]
 
 
 def seed_reward_prefix(config,output):
     meta=validated_resume(config)
     if meta is None:return None
-    output=Path(output);source=Path(meta['source_output']);g=config['num_generations'];count=meta['step']*2*g
+    from dual_runtime import rounds_per_step, step_row
+    world=config['world_size'];rounds=rounds_per_step(world)
+    output=Path(output);source=Path(meta['source_output']);g=config['num_generations'];count=meta['step']*rounds*g
     data=head_rows(config['train_dataset'],config['train_conditions'])
     prepared={};ids=set()
-    for rank in [0,1]:
+    for rank in range(world):
         rows=[json.loads(x) for x in (source/('rank'+str(rank))/'reward_trace.jsonl').read_text().splitlines() if x.strip()]
         if len(rows)<count:raise ValueError('断点来源评分前缀不完整')
         for step in range(meta['step']):
-            for round_index in range(2):
-                expected=data[(4*step+2*round_index+rank)%len(data)]
-                group=rows[(2*step+round_index)*g:(2*step+round_index+1)*g]
+            for round_index in range(rounds):
+                expected=data[step_row(step,round_index,rank,world)%len(data)]
+                group=rows[(rounds*step+round_index)*g:(rounds*step+round_index+1)*g]
                 if any((r['source_packet_id'],int(r['asker_index']))!=(expected['source_packet_id'],int(expected['asker_index'])) for r in group):
                     raise ValueError('恢复评分前缀与实际训练条件顺序不符')
         prefix=rows[:count]
