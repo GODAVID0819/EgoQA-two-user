@@ -1,0 +1,71 @@
+{
+  "project_root": "/scratch/tx856/multi_user_qa/EgoQA-joint/dual_run",
+  "train_python": "/scratch/tx856/.conda/envs/grpo-swift/bin/python",
+  "judge_python": "/scratch/tx856/.conda/envs/grpo-swift/bin/python",
+  "policy_model": "/scratch/hm2991/egolife_vllm_runtime/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "judge_config": "/scratch/tx856/multi_user_qa/dual_full120/configs/judge_mixed_f504.json",
+  "train_dataset": "/scratch/tx856/multi_user_qa/dual_full120/data/trainval/train.jsonl",
+  "val_dataset": "/scratch/tx856/multi_user_qa/dual_full120/data/trainval/validation.jsonl",
+  "output_root": "/scratch/tx856/multi_user_qa/dual_full120/outputs/smoke4_allsix_sft",
+  "scratch_root": "/scratch/tx856/js",
+  "reward_mode": "all_six_sft",
+  "shared_gpu": true,
+  "use_vllm": true,
+  "policy_gpu_indices": [
+    0
+  ],
+  "judge_gpu_indices": [
+    0
+  ],
+  "world_size": 4,
+  "train_conditions": 600,
+  "validation_conditions": 120,
+  "walltime_seconds": 21600,
+  "max_steps": 900,
+  "stop_after_steps": 2,
+  "num_generations": 4,
+  "num_generations_eval": 4,
+  "per_device_train_batch_size": 1,
+  "gradient_accumulation_steps": 4,
+  "per_device_eval_batch_size": 4,
+  "max_length": 65536,
+  "max_completion_length": 2048,
+  "max_pixels": 24576,
+  "judge_port": 8766,
+  "learning_rate": 1e-05,
+  "lr_scheduler_type": "cosine_with_min_lr",
+  "lr_scheduler_kwargs": {
+    "min_lr_rate": 0.1
+  },
+  "warmup_steps": 10,
+  "beta": 0.04,
+  "temperature": 0.85,
+  "top_p": 0.95,
+  "top_k": 40,
+  "seed": 42,
+  "data_seed": 42,
+  "lora_rank": 128,
+  "lora_alpha": 128,
+  "lora_target_modules": [
+    "q_proj",
+    "v_proj",
+    "in_proj_qkv"
+  ],
+  "save_steps": 2,
+  "save_total_limit": 3,
+  "eval_steps": 900,
+  "dataset_shuffle": false,
+  "policy_allocator_config": "expandable_segments:True",
+  "policy_image_cache_gb": 4,
+  "utilization_guard": {
+    "cancel": 60,
+    "target": 85,
+    "reserve_gib": 8,
+    "max_prealloc_mib": 16
+  },
+  "frozen_vision_cache": true,
+  "frozen_vision_cache_max_bytes": 2147483648,
+  "policy_cuda_home": "/scratch/tx856/.conda/cuda130_home",
+  "judge_startup_timeout_seconds": 1800,
+  "run_attempt": "smoke_stop2_allsix_sft"
+}

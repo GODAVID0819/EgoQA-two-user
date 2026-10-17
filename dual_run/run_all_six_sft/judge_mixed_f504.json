@@ -1,0 +1,13 @@
+{
+  "model_id": "/scratch/hm2991/egolife_vllm_runtime/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "judge_mode": "mixed",
+  "adapters": {
+    "formality": "/scratch/tx856/multi_user_qa/dual_full120/adapters/formality_checkpoint-504",
+    "groundedness": "/scratch/tx856/multi_user_qa/dual_full120/adapters/groundedness_epoch4",
+    "answerability": "/scratch/tx856/multi_user_qa/dual_full120/adapters/answerability_checkpoint-340"
+  },
+  "max_num_seqs": 8,
+  "merge_answerability_batch": true,
+  "cpu_prefetch": true,
+  "decode_workers": 4
+}
