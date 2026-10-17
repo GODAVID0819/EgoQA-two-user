@@ -38,7 +38,7 @@ def validate_config(c):
         raise ValueError("Policy CUDA工具必须位于scratch")
     if c.get("early_keeper_until_seconds") is not None:
         raise ValueError("训练入口不允许配置人为 GPU 空转负载")
-    if c.get("reward_mode") not in {"continuous", "binary", "formality", "groundedness"}:
+    if c.get("reward_mode") not in {"continuous", "binary", "formality", "groundedness", "all_six"}:
         raise ValueError("必须明确 reward_mode")
     policy, judge = c.get("policy_gpu_indices", []), c.get("judge_gpu_indices", [])
     if len(policy) != 1 or not judge or any(isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in policy + judge):

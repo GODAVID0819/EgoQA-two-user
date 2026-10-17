@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 KEYS = ("formality", "groundedness", "speaker_only", "all_six")
-MODES = ("continuous", "binary", "formality", "groundedness")
+MODES = ("continuous", "binary", "formality", "groundedness", "all_six")
 
 
 def validate_probabilities(values: dict) -> dict[str, float]:
@@ -20,6 +20,9 @@ def aggregate(probabilities: dict, *, mode: str) -> float:
         raise ValueError(f"必须显式选择 reward mode：{MODES}")
     if mode in {"formality", "groundedness"}:
         return p[mode]
+    if mode == "all_six":
+        # 只用六人合并可回答概率，不再乘(1-speaker_only)；speaker_only仍由Judge打分并记录，不进奖励。
+        return .2 * p["formality"] + .4 * p["groundedness"] + .4 * p["all_six"]
     if mode == "binary":
         p = {key: float(value >= .5) for key, value in p.items()}
     # 这是显式选择的奖励函数；乘积是联合要求的软近似，不宣称概率独立性已被验证。
