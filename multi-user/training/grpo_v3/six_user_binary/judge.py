@@ -8,6 +8,7 @@ from functools import lru_cache
 from training.judge_sft.data import normalized_record_to_example
 from training.judge_sft.prepare_real_data import _frame_fields, _load_full_judge_view, _repo_module
 from .data import checked_packet
+from .joint_answerability_prompt import build_all_six_answerability_prompt
 
 
 class InvalidCompletion(ValueError):
@@ -59,7 +60,6 @@ def build_examples(request: dict[str, Any]) -> dict[str, Any]:
     result = {}
     for key, task, speaker_only in (("formality", "formality", False),
                                     ("groundedness", "groundedness", False),
-                                    ("speaker_only", "answerability", True),
                                     ("all_six", "answerability", False)):
         row = {"example_id": request["request_id"] + "::" + key,
                "group_id": view["source_packet_id"], "task": task, "verdict": "fail"}
@@ -70,11 +70,9 @@ def build_examples(request: dict[str, Any]) -> dict[str, Any]:
             if key == "groundedness":
                 row["prompt"] = prompts.build_evidence_groundedness_judge_prompt(qa, view)
             else:
-                condition = "speaker_only" if speaker_only else "combined_all_six_users"
-                users = view["required_users"][:1] if speaker_only else view["required_users"]
-                row["condition_type"] = condition
-                row["prompt"] = prompts.build_answerability_prompt(qa, {
-                    "condition_type": condition, "condition_id": condition + "::" + "+".join(users),
-                    "users": users})
+                # 用340 SFT模板删去“speaker单独不足”条件后的版本，只判断六人合并是否足以回答；不再跑speaker_only。
+                # (Uses the 340 SFT template with the "speaker alone insufficient" condition removed, judging only whether all six combined suffice; speaker_only is no longer run.)
+                row["condition_type"] = "combined_all_six_users"
+                row["prompt"] = build_all_six_answerability_prompt(qa["question"])
         result[key] = normalized_record_to_example(row)
     return result

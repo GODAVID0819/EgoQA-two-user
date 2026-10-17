@@ -116,9 +116,8 @@ class CandidateScorer:
                 continue
             valid.append((len(results), examples))
             results.append({**identity, "status": "scored", "predictions": {}})
-        # S/A都属于answerability且使用同一340；明确保留(候选,条件)绑定。
-        merge=getattr(self.predictor,'config',{}).get('merge_answerability_batch',False)
-        groups=[('formality',),('groundedness',),('speaker_only','all_six')] if merge else [(k,) for k in ('formality','groundedness','speaker_only','all_six')]
+        # 只打F、E和联合answerability三项。
+        groups=[('formality',),('groundedness',),('all_six',)]
         for stage,keys in enumerate(groups):
             bindings=[(index,key,row[key]) for key in keys for index,row in valid]
             examples = [example for _,_,example in bindings]

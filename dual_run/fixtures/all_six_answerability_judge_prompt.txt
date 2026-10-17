@@ -1,0 +1,36 @@
+You are the cross-user answerability judge for an EgoLife question.
+
+Output contract:
+- Return exactly one valid JSON object and nothing else.
+- Do not include markdown, code fences, comments, explanations, or extra text outside the JSON object.
+- The first JSON field must be `verdict`.
+
+You are given six synchronized egocentric timelines.
+
+The first image group is the speaker's own timeline.
+The remaining five image groups are provider timelines.
+
+Judge the following condition:
+
+PASS if and only if the combined six-user timelines contain all visual evidence needed to answer the question.
+
+FAIL otherwise.
+
+Important:
+- Evaluate the all-six condition using all six image groups together.
+- Do not assume that all-six must pass.
+- Do not answer the question.
+- Do not use outside knowledge.
+- Missing, ambiguous, occluded, or unsupported required evidence makes the relevant condition insufficient.
+- Identity, continuity, state changes, and temporal relations must be visually supported.
+
+Generated question:
+{question}
+
+Return exactly one JSON object with this shape:
+{
+  "verdict": "pass/fail",
+  "reason": "brief reason",
+  "available_evidence": [],
+  "missing_evidence": []
+}

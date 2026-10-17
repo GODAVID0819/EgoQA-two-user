@@ -39,7 +39,7 @@ def summarize(rows):
     if not rows or any(not math.isfinite(r['reward']) for r in rows):
         raise ValueError('验证奖励必须非空且有限')
     scored=[r for r in rows if r['status']=='scored']
-    keys=('formality','groundedness','speaker_only','all_six')
+    keys=('formality','groundedness','all_six')
     return {'candidate_count':len(rows),'scored_count':len(scored),'valid_rate':len(scored)/len(rows),
             'mean_reward':statistics.mean(r['reward'] for r in rows),
             'mean_probabilities_scored_only':{k:statistics.mean(r['probabilities'][k] for r in scored if k in r['probabilities'])
