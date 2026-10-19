@@ -60,3 +60,18 @@ cd /scratch/tx856/multi_user_qa/dual_full120
 sbatch --parsable --export=ALL,RUN_CONFIG=/scratch/tx856/multi_user_qa/dual_full120/configs/formal4_allsix_sft_stage1.json,ADAPTER=/scratch/tx856/multi_user_qa/dual_full120/eval_ckpts/step204_20161348,COUNT=100 \
   eval_passrate.sbatch
 ```
+
+## 断点续跑（20161348 在第215步 CUDA OOM 退出，从 checkpoint-214 续跑）
+
+```bash
+cd /scratch/tx856/multi_user_qa/dual_full120
+S=$PWD/outputs/formal4_allsix_sft/train_20161348
+# 1) CPU核验断点（登录节点会被kill，用CPU作业）：adapter/优化器有限、160个状态step=214、lr=原调度第214步、4个rng
+sbatch --parsable --job-name=resume_audit --account=torch_pr_111_tandon_advanced --cpus-per-task=8 --mem=64G --time=01:00:00 \
+  --output=$PWD/logs/resume_audit_%j.out --wrap "/scratch/tx856/.conda/envs/grpo-swift/bin/python \
+  /scratch/tx856/multi_user_qa/EgoQA-joint/dual_run/resume_audit.py --checkpoint $S/swift/v0-20261017-035106/checkpoint-214 \
+  --config $S/run_config.json --output $PWD/resume/cpu_audit_20161348_step214.json"
+# 2) 续跑配置 = 原 run_config.json + resume_from_checkpoint/resume_source_output/recovery_from_job/expected_resume_step/
+#    resume_cpu_audit/run_attempt（见 run_all_six_sft/formal4_allsix_sft_stage1_resume214.json；其余训练设置不变，recovery.py会拒绝任何改动）
+RUN_CONFIG=$PWD/configs/formal4_allsix_sft_stage1_resume214.json sbatch --parsable --export=ALL,RUN_CONFIG quad_allsix_sft.sbatch
+```
