@@ -48,3 +48,15 @@ sbatch --parsable \
 每次提交把 JobID 记入 `submissions/submissions.txt`。日志：`logs/quad_allsix_sft_<JobID>.out`，
 内存 `logs/hostmem_<JobID>.log`，训练 `outputs/<run>/train_<JobID>/trainer.log` 与 `swift/*/logging.jsonl`。
 stage2/3 用断点续跑（`resume_from_checkpoint` 等字段 + CPU audit），不能改任何训练设置。
+
+## 基座 vs LoRA 问题通过率
+
+验证集前 100 条输入（未参与训练），基座和 LoRA 各生成 1 题（同输入、同种子、同训练采样设置），
+三个冻结 Judge 打分；每个 Judge 以 `P(pass) > 0.5` 为通过（与 Judge SFT 评估的判定一致），未被打分的无效生成算不通过。
+结果写到 `outputs/eval_passrate/eval_<JobID>/passrate_summary.json`。
+
+```bash
+cd /scratch/tx856/multi_user_qa/dual_full120
+sbatch --parsable --export=ALL,RUN_CONFIG=/scratch/tx856/multi_user_qa/dual_full120/configs/formal4_allsix_sft_stage1.json,ADAPTER=/scratch/tx856/multi_user_qa/dual_full120/eval_ckpts/step204_20161348,COUNT=100 \
+  eval_passrate.sbatch
+```
