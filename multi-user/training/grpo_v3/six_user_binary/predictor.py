@@ -267,6 +267,35 @@ class VllmJudge:
             items.append((example,prepared))
         return {'items':items,'seconds':time.perf_counter()-start}
 
+    def explain_many(self, examples, *, max_tokens=384):
+        """反馈环用：在训练时的 {"verdict":" 前缀后强制写入 fail，再由同一 Judge 贪心续写 reason 等字段。
+
+        只生成反馈文本，不参与通过与否的判定（判定仍由 predict_many 的 pass/fail logprob 决定）。
+        """
+        if self.config.get('shared_gpu') and self.sleeping is not False:
+            raise RuntimeError('共享Judge必须先完成显存唤醒才能生成反馈')
+        if not examples:
+            return []
+        tasks = {example.task.value for example in examples}
+        if len(tasks) != 1:
+            raise ValueError("Judge 批次必须属于同一种任务，防止 adapter 路由错误")
+        from vllm import SamplingParams
+        sampling = SamplingParams(temperature=0., max_tokens=int(max_tokens))
+        results = []
+        for offset in range(0, len(examples), self._effective_batch_size):
+            prepared = [self.prepare(e) for e in examples[offset:offset + self._effective_batch_size]]
+            payloads = [{**p, 'prompt': p['prompt'] + 'fail'} for p, _ in prepared]
+            start = time.perf_counter()
+            outputs = self.llm.generate(payloads, sampling, lora_request=self.adapters.get(next(iter(tasks))), use_tqdm=False)
+            elapsed = time.perf_counter() - start
+            if len(outputs) != len(prepared):
+                raise RuntimeError("Judge 反馈返回结果数量不匹配")
+            for output in outputs:
+                choice = output.outputs[0]
+                results.append({'continuation': choice.text, 'finish_reason': choice.finish_reason,
+                                'generated_token_count': len(choice.token_ids), 'explain_batch_seconds': elapsed})
+        return results
+
     def predict_many_with_prefetch(self,examples,following):
         self._next_examples=following
         try:return self.predict_many(examples)
