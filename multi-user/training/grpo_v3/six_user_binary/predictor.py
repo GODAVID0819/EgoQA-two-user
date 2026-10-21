@@ -267,7 +267,7 @@ class VllmJudge:
             items.append((example,prepared))
         return {'items':items,'seconds':time.perf_counter()-start}
 
-    def explain_many(self, examples, *, max_tokens=384):
+    def explain_many(self, examples, *, max_tokens=384, forced='fail'):
         """反馈环用：在训练时的 {"verdict":" 前缀后强制写入 fail，再由同一 Judge 贪心续写 reason 等字段。
 
         只生成反馈文本，不参与通过与否的判定（判定仍由 predict_many 的 pass/fail logprob 决定）。
@@ -284,7 +284,7 @@ class VllmJudge:
         results = []
         for offset in range(0, len(examples), self._effective_batch_size):
             prepared = [self.prepare(e) for e in examples[offset:offset + self._effective_batch_size]]
-            payloads = [{**p, 'prompt': p['prompt'] + 'fail'} for p, _ in prepared]
+            payloads = [{**p, 'prompt': p['prompt'] + forced} for p, _ in prepared]
             start = time.perf_counter()
             outputs = self.llm.generate(payloads, sampling, lora_request=self.adapters.get(next(iter(tasks))), use_tqdm=False)
             elapsed = time.perf_counter() - start

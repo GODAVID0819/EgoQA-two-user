@@ -16,6 +16,8 @@ from urllib.error import HTTPError
 from .judge import InvalidCompletion, build_examples
 from .reward import validate_probabilities
 
+REASON_PREFILL = 'fail", "reason": "'
+
 
 def validate_response(result: dict, request: dict) -> dict:
     if result.get("request_id") != request["request_id"] or result.get("evidence_id") != request["evidence_id"]:
@@ -169,6 +171,16 @@ class CandidateScorer:
             outputs = self.predictor.explain_many([e for _, e in bindings], max_tokens=int(requests[0].get("max_tokens", 384)))
             if len(outputs) != len(bindings):
                 raise RuntimeError("Judge 反馈批次返回数量不一致")
+            # 没写出 reason 的Judge（groundedness LoRA 在 fail 后直接结束）按prompt输出schema的字段顺序预填 reason 再续写一次。
+            retry = [n for n, output in enumerate(outputs) if '"reason"' not in output["continuation"]]
+            if retry:
+                forced = self.predictor.explain_many([bindings[n][1] for n in retry], forced=REASON_PREFILL,
+                                                     max_tokens=int(requests[0].get("max_tokens", 384)))
+                if len(forced) != len(retry):
+                    raise RuntimeError("Judge 反馈批次返回数量不一致")
+                for n, output in zip(retry, forced):
+                    outputs[n] = {**output, "continuation": REASON_PREFILL[len("fail"):] + output["continuation"],
+                                  "reason_prefilled": True, "unprefilled_continuation": outputs[n]["continuation"]}
             for (i, _), output in zip(bindings, outputs):
                 results[i]["feedback"][key] = output
         return results

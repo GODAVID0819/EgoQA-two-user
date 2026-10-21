@@ -109,9 +109,11 @@ class ServiceExplainTests(unittest.TestCase):
         class Predictor:
             identity = {'model_id': 'm'}
             calls = []
-            def explain_many(self, examples, max_tokens):
-                self.calls.append(([e.key for e in examples], max_tokens))
-                return [{'continuation': e.key} for e in examples]
+            def explain_many(self, examples, max_tokens, forced='fail'):
+                self.calls.append(([e.key for e in examples], max_tokens, forced))
+                # formality 自然写出 reason；其余在 fail 后直接结束，需预填 reason 重试
+                return [{'continuation': f'", "reason": "{e.key}"}}' if e.key == 'formality' or forced != 'fail' else ','}
+                        for e in examples]
 
         scorer = service.CandidateScorer(Predictor(), 'inst')
         examples = lambda r: {k: Example(k) for k in ('formality', 'groundedness', 'all_six')}
@@ -119,7 +121,13 @@ class ServiceExplainTests(unittest.TestCase):
             out = scorer.explain_many([{'request_id': 'a', 'evidence_id': 'e', 'keys': ['groundedness'], 'max_tokens': 99},
                                        {'request_id': 'b', 'evidence_id': 'e', 'keys': ['formality', 'all_six']}])
         self.assertEqual([set(o['feedback']) for o in out], [{'groundedness'}, {'formality', 'all_six'}])
-        self.assertEqual(Predictor.calls, [(['formality'], 99), (['groundedness'], 99), (['all_six'], 99)])
+        pre = service.REASON_PREFILL
+        self.assertEqual(Predictor.calls, [(['formality'], 99, 'fail'), (['groundedness'], 99, 'fail'), (['groundedness'], 99, pre),
+                                           (['all_six'], 99, 'fail'), (['all_six'], 99, pre)])
+        from training.grpo_v3.six_user_binary.feedback_loop import parse_feedback
+        self.assertNotIn('reason_prefilled', out[1]['feedback']['formality'])
+        self.assertEqual(out[0]['feedback']['groundedness']['unprefilled_continuation'], ',')
+        self.assertEqual(parse_feedback(out[0]['feedback']['groundedness']['continuation'])['reason'], 'groundedness')
         with self.assertRaises(ValueError):
             scorer.explain_many([{'request_id': 'a', 'evidence_id': 'e', 'keys': ['speaker_only']}])
 
