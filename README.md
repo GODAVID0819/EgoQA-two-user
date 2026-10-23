@@ -1,3 +1,5 @@
+> **当前六用户GRPO（lxr-grpo）**：最新F/E/C与门控diversity、固定历史池及180/360阶段源码见[运行快照与使用说明](multi-user/training/grpo_v3/experiments/full120x6_fec_moda_stage180_20261021/README_CN.md)。旧V5与其他实验目录保留历史实现；归档不代表当前180步已验收完成。
+
 # EgoLife 双用户 QA Pilot
 
 这个模块用于从 EgoLife 视频中构造 20 条 pilot 多选题。每道题都要求至少两个用户的第一视角视频共同提供证据，单个用户的视频不能完整回答。
