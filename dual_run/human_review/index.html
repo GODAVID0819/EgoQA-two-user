@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Question Review</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #e3e6eb;
+  --accent: #3b5bdb; --pass: #2b8a3e; --pass-bg: #e6f4ea; --fail: #c92a2a; --fail-bg: #fdecec;
+  --chip: #eef1f6; --correct-bg: #e6f4ea; --video-bg: #0e1116;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1218; --panel: #171b23; --text: #e6e9ef; --muted: #98a2b3; --line: #2a303b;
+    --accent: #7c95f5; --pass: #69db7c; --pass-bg: #17311f; --fail: #ff8787; --fail-bg: #3a1a1c;
+    --chip: #222834; --correct-bg: #17311f; --video-bg: #000;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 15px; margin: 0 8px 0 0; }
+select, button, input, textarea { font: inherit; color: inherit; }
+select, input[type=text] { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+button { background: var(--chip); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+.muted { color: var(--muted); }
+.progress { margin-left: auto; display: flex; gap: 12px; align-items: center; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 12px; padding: 12px 16px; }
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.tile.speaker { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.tile .head { display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; font-size: 13px; }
+.tile .role { font-size: 11px; padding: 1px 6px; border-radius: 10px; background: var(--chip); color: var(--muted); }
+.tile.speaker .role { background: var(--accent); color: #fff; }
+.tile video { display: block; width: 100%; aspect-ratio: 1; background: var(--video-bg); }
+.tile .missing { aspect-ratio: 1; display: grid; place-items: center; background: var(--video-bg); color: #98a2b3; font-size: 13px; text-align: center; padding: 12px; }
+.sync { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+.sync input[type=range] { flex: 1; }
+.sync .time { font-variant-numeric: tabular-nums; min-width: 92px; text-align: right; }
+aside { display: flex; flex-direction: column; gap: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+.question { font-size: 16px; font-weight: 600; margin: 0 0 10px; }
+.opt { display: flex; gap: 8px; padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; border: 1px solid var(--line); }
+.opt.correct { background: var(--correct-bg); border-color: var(--pass); }
+.opt b { min-width: 16px; }
+.ev { border-top: 1px solid var(--line); padding: 6px 0; font-size: 13px; }
+.ev:first-of-type { border-top: 0; }
+.ts { display: inline-block; margin: 2px 4px 2px 0; padding: 1px 6px; border-radius: 10px; background: var(--chip); border: 1px solid var(--line); cursor: pointer; font-size: 12px; }
+.ts:hover { border-color: var(--accent); }
+.judge { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; font-size: 13px; align-items: center; }
+.bar { height: 6px; background: var(--chip); border-radius: 3px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+.verdict { display: flex; gap: 8px; margin-bottom: 8px; }
+.verdict button { flex: 1; padding: 10px; font-weight: 600; font-size: 15px; }
+.verdict .pass.on { background: var(--pass-bg); border-color: var(--pass); color: var(--pass); }
+.verdict .fail.on { background: var(--fail-bg); border-color: var(--fail); color: var(--fail); }
+textarea { width: 100%; min-height: 70px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; resize: vertical; }
+.status { font-size: 12px; color: var(--muted); margin-top: 4px; min-height: 16px; }
+.list { display: flex; flex-wrap: wrap; gap: 3px; }
+.list button { width: 30px; padding: 2px 0; font-size: 12px; }
+.list button.pass { background: var(--pass-bg); border-color: var(--pass); }
+.list button.fail { background: var(--fail-bg); border-color: var(--fail); }
+.list button.cur { outline: 2px solid var(--accent); }
+pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; max-height: 360px; overflow: auto; background: var(--chip); padding: 8px; border-radius: 6px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+kbd { font-size: 11px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--chip); }
+@media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .grid { grid-template-columns: 1fr; } header { padding: 8px; } .layout { padding: 8px 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Question Review</h1>
+  <label>集合 <select id="setSel"></select></label>
+  <button id="prev" title="上一题 (K)">← 上一题</button>
+  <span id="pos" class="muted"></span>
+  <button id="next" title="下一题 (J)">下一题 →</button>
+  <button id="nextTodo">下一个未审</button>
+  <label><input type="checkbox" id="hideJudge"> 隐藏Judge分数</label>
+  <div class="progress">
+    <span id="stats" class="muted"></span>
+    <label>审核人 <input type="text" id="reviewer" size="8"></label>
+  </div>
+</header>
+
+<div class="layout">
+  <main>
+    <div class="sync">
+      <button id="playAll" title="全部播放/暂停 (空格)">▶ 同步播放</button>
+      <button id="back5" title="后退5秒 (←)">−5s</button>
+      <button id="fwd5" title="前进5秒 (→)">+5s</button>
+      <input type="range" id="seek" min="0" max="600" step="1" value="0">
+      <span class="time" id="time">0:00 / 10:00</span>
+      <label class="muted"><input type="checkbox" id="muted" checked> 静音</label>
+    </div>
+    <div class="grid" id="grid"></div>
+    <p class="muted" style="font-size:12px">六路是同一10分钟窗口的同步视频；“同步播放”和进度条控制全部六路，单个视频也可以单独拖动（再点同步播放会对齐回进度条时间）。
+      快捷键：<kbd>空格</kbd> 播放/暂停 <kbd>←</kbd><kbd>→</kbd> ±5秒 <kbd>P</kbd> 通过 <kbd>F</kbd> 不通过 <kbd>J</kbd>/<kbd>K</kbd> 下一题/上一题</p>
+  </main>
+
+  <aside>
+    <div class="card">
+      <div class="verdict">
+        <button class="pass" id="vPass">✓ 通过 (P)</button>
+        <button class="fail" id="vFail">✗ 不通过 (F)</button>
+      </div>
+      <textarea id="notes" placeholder="备注（可选）：哪里错了、缺什么证据……"></textarea>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button id="saveNotes">保存备注</button>
+        <button id="clear">清除结论</button>
+        <label class="muted" style="margin-left:auto"><input type="checkbox" id="autoNext" checked> 判定后跳下一题</label>
+      </div>
+      <div class="status" id="saveStatus"></div>
+    </div>
+    <div class="card" id="qCard"></div>
+    <div class="card" id="evCard"></div>
+    <div class="card" id="judgeCard"></div>
+    <div class="card"><h2>全部题目</h2><div class="list" id="list"></div></div>
+    <div class="card"><details><summary>Generator 原始输出</summary><pre id="raw"></pre></details></div>
+  </aside>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('review.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('review.' + k, JSON.stringify(v)); } catch {} },
+};
+let state = { set: null, items: [], reviews: {}, idx: 0, duration: 600 };
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.text()) || r.status);
+  return r.json();
+}
+
+function videos() { return [...document.querySelectorAll('#grid video')]; }
+function master() { return videos()[0]; }
+
+function renderStats() {
+  const v = Object.values(state.reviews);
+  const pass = v.filter(r => r.verdict === 'pass').length;
+  $('stats').textContent = `已审 ${v.length}/${state.items.length} · 通过 ${pass} · 不通过 ${v.length - pass}`;
+  $('list').innerHTML = state.items.map((it, i) => {
+    const r = state.reviews[it.review_id];
+    return `<button class="${r ? r.verdict : ''} ${i === state.idx ? 'cur' : ''}" data-i="${i}" title="${esc(it.review_id)}">${i + 1}</button>`;
+  }).join('');
+}
+
+function renderVerdict() {
+  const it = state.items[state.idx], r = state.reviews[it.review_id];
+  $('vPass').classList.toggle('on', r?.verdict === 'pass');
+  $('vFail').classList.toggle('on', r?.verdict === 'fail');
+  $('notes').value = r?.notes ?? '';
+  $('saveStatus').textContent = r ? `已保存：${r.verdict === 'pass' ? '通过' : '不通过'} · ${r.reviewer || ''} · ${r.updated_at}` : '未审核';
+}
+
+function renderItem() {
+  const it = state.items[state.idx];
+  store.set('idx.' + state.set, state.idx);
+  $('pos').textContent = `${state.idx + 1} / ${state.items.length} · ${it.review_id}`;
+  const w = it.window;
+  state.duration = w.duration_seconds;
+  $('seek').max = w.duration_seconds;
+  $('grid').innerHTML = it.videos.map(v => `
+    <div class="tile ${v.role}">
+      <div class="head"><span><b>${esc(v.agent_name)}</b> <span class="muted">${esc(v.agent_id)}</span></span>
+        <span class="role">${v.role === 'speaker' ? 'Speaker（提问者）' : 'Provider'}</span></div>
+      ${v.video_ready ? `<video src="${v.video}" preload="metadata" playsinline controls muted></video>`
+        : `<div class="missing">视频还没生成<br>${esc(it.packet_id)}/${esc(v.agent_dir)}.mp4</div>`}
+    </div>`).join('');
+  videos().forEach(el => { el.muted = $('muted').checked; });
+  $('playAll').textContent = '▶ 同步播放';
+  setTime(0);
+
+  const q = it.question;
+  if (!q) {
+    $('qCard').innerHTML = `<h2>问题</h2><p style="color:var(--fail)">Generator 输出不是合法JSON（${esc(it.parse_error)}），按不通过计。原始输出见下方。</p>`;
+    $('evCard').innerHTML = '';
+  } else {
+    const opts = Array.isArray(q.options) ? q.options : [];
+    $('qCard').innerHTML = `<h2>问题 · Speaker: ${esc(it.speaker)} · ${esc(w.day)} ${esc(w.start_clock)} 起10分钟</h2>
+      <p class="question">${esc(q.question)}</p>
+      ${opts.map(o => typeof o === 'object'
+        ? `<div class="opt ${o.letter === q.correct ? 'correct' : ''}"><b>${esc(o.letter)}</b><span>${esc(o.text)}</span>${o.letter === q.correct ? '<span style="margin-left:auto;color:var(--pass)">✓ 标注答案</span>' : ''}</div>`
+        : `<div class="opt"><span>${esc(o)}</span></div>`).join('')}
+      <p class="muted" style="margin:8px 0 0">correct = <b>${esc(q.correct)}</b> · answer = ${esc(q.answer)}</p>
+      <p class="muted" style="margin:4px 0 0">required_users: ${esc((q.required_users || []).join(', '))}</p>`;
+    const ts = (q.referred_timestamps || []).filter(t => typeof t?.timestamp_seconds === 'number');
+    $('evCard').innerHTML = `<h2>Generator 给出的证据</h2>
+      ${ts.length ? `<div style="margin-bottom:6px">${ts.map(t => `<span class="ts" data-t="${t.timestamp_seconds}" title="${esc(t.moment)}">${esc(t.user)} @ ${fmt(t.timestamp_seconds)}</span>`).join('')}</div>
+        <p class="muted" style="font-size:12px;margin:0 0 6px">点时间戳把六路视频都跳到该时刻。</p>` : ''}
+      ${(q.evidence || []).map(e => `<div class="ev"><b>${esc(e.user)}</b> <span class="muted">${esc(e.timeframe)}</span><br>${esc(e.needed_fact)}</div>`).join('') || '<p class="muted">无</p>'}`;
+  }
+  const j = it.judge, names = { formality: 'Formality', groundedness: 'Groundedness', all_six: 'All-six answerability' };
+  $('judgeCard').innerHTML = `<h2>Judge（P(pass) &gt; 0.5 算通过）</h2>
+    <div class="judge">${Object.keys(names).map(k => {
+      const p = j.pass_probability?.[k];
+      return `<span>${names[k]}</span><div class="bar"><i style="width:${(p ?? 0) * 100}%"></i></div>
+        <span style="color:${j.pass[k] ? 'var(--pass)' : 'var(--fail)'}">${p == null ? '—' : p.toFixed(2)} ${j.pass[k] ? '✓' : '✗'}</span>`;
+    }).join('')}</div>
+    <p class="muted" style="margin:8px 0 0">三项全过：${j.pass_all_three ? '是' : '否'}${it.accepted_attempt ? ` · 第 ${it.accepted_attempt} 轮通过` : ` · reward ${j.reward?.toFixed(3) ?? '—'}`} · ${esc(it.checkpoint)}</p>
+    ${(it.previous_attempts || []).map(a => {
+      const pp = a.judge.pass_probability || {};
+      return `<details style="margin-top:6px"><summary>第 ${a.attempt} 轮（未通过）· ${Object.keys(names).map(k => `${names[k].split(' ')[0]} ${pp[k] == null ? '—' : pp[k].toFixed(2)}`).join(' · ')}</summary>
+        <p style="margin:6px 0">${a.question ? esc(a.question.question) : `<span style="color:var(--fail)">输出不合法：${esc(a.judge.invalid_reason || a.parse_error)}</span>`}</p>
+        ${a.question && Array.isArray(a.question.options) ? a.question.options.map(o => `<div class="muted" style="font-size:12px">${esc(o.letter)}. ${esc(o.text)}${o.letter === a.question.correct ? ' ✓' : ''}</div>`).join('') : ''}
+        <p style="margin:6px 0 0;font-size:12px"><b>Judge 反馈给 Generator：</b>${esc(a.feedback_to_generator)}</p></details>`;
+    }).join('')}`;
+  $('judgeCard').style.display = $('hideJudge').checked ? 'none' : '';
+  $('raw').textContent = it.raw_completion ?? JSON.stringify(it.generator_output, null, 2);
+  renderVerdict();
+  renderStats();
+}
+
+function setTime(t) {
+  t = Math.max(0, Math.min(state.duration, t));
+  videos().forEach(v => { if (Math.abs(v.currentTime - t) > 0.25) v.currentTime = t; });
+  $('seek').value = t;
+  $('time').textContent = `${fmt(t)} / ${fmt(state.duration)}`;
+}
+
+function playing() { const m = master(); return m && !m.paused; }
+function togglePlay() {
+  const vs = videos(); if (!vs.length) return;
+  if (playing()) { vs.forEach(v => v.pause()); $('playAll').textContent = '▶ 同步播放'; }
+  else { const t = +$('seek').value; vs.forEach(v => { v.currentTime = t; v.play().catch(() => {}); }); $('playAll').textContent = '❚❚ 暂停'; }
+}
+setInterval(() => {
+  const m = master(); if (!m || m.paused) return;
+  const t = m.currentTime;
+  $('seek').value = t; $('time').textContent = `${fmt(t)} / ${fmt(state.duration)}`;
+  videos().slice(1).forEach(v => { if (!v.paused && Math.abs(v.currentTime - t) > 0.4) v.currentTime = t; });
+}, 500);
+
+async function save(verdict) {
+  const it = state.items[state.idx];
+  const keep = verdict === undefined ? state.reviews[it.review_id]?.verdict : verdict;
+  if (keep === undefined) { $('saveStatus').textContent = '先选择通过或不通过，备注会一起保存。'; return; }
+  $('saveStatus').textContent = '保存中…';
+  try {
+    const r = await api('/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ set: state.set, review_id: it.review_id, verdict: keep, notes: $('notes').value, reviewer: $('reviewer').value }) });
+    if (keep === null) delete state.reviews[it.review_id]; else state.reviews[it.review_id] = r.review;
+    renderVerdict(); renderStats();
+    if (verdict && $('autoNext').checked && state.idx < state.items.length - 1) go(state.idx + 1);
+  } catch (e) { $('saveStatus').textContent = '保存失败：' + e.message; }
+}
+
+function go(i) {
+  if (i < 0 || i >= state.items.length) return;
+  videos().forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); });
+  state.idx = i; renderItem(); window.scrollTo({ top: 0 });
+}
+
+async function loadSet(name) {
+  const data = await api('/api/set?name=' + encodeURIComponent(name));
+  state = { ...state, set: name, items: data.items, reviews: data.reviews || {}, idx: Math.min(store.get('idx.' + name, 0), data.items.length - 1) };
+  store.set('set', name);
+  renderItem();
+}
+
+$('setSel').onchange = e => loadSet(e.target.value);
+$('prev').onclick = () => go(state.idx - 1);
+$('next').onclick = () => go(state.idx + 1);
+$('nextTodo').onclick = () => {
+  const n = state.items.length;
+  for (let k = 1; k <= n; k++) { const i = (state.idx + k) % n; if (!state.reviews[state.items[i].review_id]) return go(i); }
+};
+$('list').onclick = e => { const b = e.target.closest('button'); if (b) go(+b.dataset.i); };
+$('evCard').onclick = e => { const t = e.target.closest('.ts'); if (t) setTime(+t.dataset.t); };
+$('playAll').onclick = togglePlay;
+$('back5').onclick = () => setTime(+$('seek').value - 5);
+$('fwd5').onclick = () => setTime(+$('seek').value + 5);
+$('seek').oninput = e => setTime(+e.target.value);
+$('muted').onchange = e => { videos().forEach(v => { v.muted = true; }); if (!e.target.checked && master()) master().muted = false; store.set('muted', e.target.checked); };
+$('vPass').onclick = () => save('pass');
+$('vFail').onclick = () => save('fail');
+$('saveNotes').onclick = () => save();
+$('clear').onclick = () => save(null);
+$('hideJudge').onchange = e => { $('judgeCard').style.display = e.target.checked ? 'none' : ''; store.set('hideJudge', e.target.checked); };
+$('reviewer').onchange = e => store.set('reviewer', e.target.value);
+document.addEventListener('keydown', e => {
+  if (['TEXTAREA', 'INPUT', 'SELECT'].includes(e.target.tagName)) return;
+  const k = e.key.toLowerCase();
+  if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+  else if (e.key === 'ArrowLeft') setTime(+$('seek').value - 5);
+  else if (e.key === 'ArrowRight') setTime(+$('seek').value + 5);
+  else if (k === 'p') save('pass');
+  else if (k === 'f') save('fail');
+  else if (k === 'j') go(state.idx + 1);
+  else if (k === 'k') go(state.idx - 1);
+});
+
+(async () => {
+  const cfg = await api('/api/config');
+  $('setSel').innerHTML = cfg.sets.map(s => `<option>${esc(s)}</option>`).join('');
+  $('reviewer').value = store.get('reviewer', cfg.reviewer);
+  $('hideJudge').checked = store.get('hideJudge', false);
+  $('muted').checked = store.get('muted', true);
+  const s = cfg.sets.includes(store.get('set')) ? store.get('set') : cfg.sets[0];
+  $('setSel').value = s;
+  await loadSet(s);
+})().catch(e => { document.body.innerHTML = `<p style="padding:16px">加载失败：${esc(e.message)}</p>`; });
+</script>
+</body>
+</html>
