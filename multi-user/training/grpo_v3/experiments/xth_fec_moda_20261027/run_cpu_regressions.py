@@ -21,6 +21,7 @@ def main():
         'test_moda_training','test_moda_validation',
         'test_stage_capacity_inputs','test_stage_validation','test_stage_resume',
         'test_judge_prompt_assets','test_combined_allocation',
+        'test_xth_options',
     ]
     suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromName(name) for name in modules)
     result=unittest.TextTestRunner(verbosity=2).run(suite)

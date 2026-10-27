@@ -17,6 +17,8 @@ from .judge import InvalidCompletion, build_examples
 from .reward import validate_probabilities
 
 SCORING_KEYS = ('formality', 'groundedness', 'combined_answerability')
+# 反馈环：groundedness LoRA 在强制 fail 后可能直接结束，此时按输出schema预填 reason 再续写一次。
+REASON_PREFILL = 'fail", "reason": "'
 
 
 def validate_response(result: dict, request: dict) -> dict:
@@ -67,6 +69,17 @@ class JudgeClient:
         if value.get('sleeping') is not (action == 'sleep'):
             raise RuntimeError('Judge未确认请求的显存状态')
         return value
+
+    def explain_many(self, requests):
+        """反馈环用：requests 每项带 keys（要写反馈的Judge），返回同一Judge在 verdict=fail 后续写的文本。"""
+        values = self._request("/explain_batch", {"requests": requests}).get("results")
+        if not isinstance(values, list) or len(values) != len(requests):
+            raise RuntimeError("Judge 反馈批次返回数量不一致")
+        for request, result in zip(requests, values):
+            if result.get("request_id") != request["request_id"] or set(result.get("feedback", {})) != set(request["keys"]):
+                raise RuntimeError("Judge 反馈返回与请求不一致")
+            self._check_instance(result["judge"])
+        return values
 
     def score(self, request):
         result = validate_response(self._request("/score", request), request)
@@ -143,6 +156,35 @@ class CandidateScorer:
             result["batch_size"] = len(requests)
         return results
 
+    def explain_many(self, requests):
+        """只为已判fail的Judge生成反馈文本；判定本身不在这里改变。"""
+        if not isinstance(requests, list) or not 1 <= len(requests) <= 64:
+            raise ValueError("反馈批次必须包含 1 至 64 个候选")
+        if any(not r["keys"] or set(r["keys"]) - set(SCORING_KEYS) for r in requests):
+            raise ValueError(f"反馈Judge必须是 {SCORING_KEYS} 的非空子集")
+        examples = [build_examples(request) for request in requests]
+        results = [{"request_id": r["request_id"], "evidence_id": r["evidence_id"], "judge": self.health(), "feedback": {}}
+                   for r in requests]
+        for key in SCORING_KEYS:
+            bindings = [(i, examples[i][key]) for i, r in enumerate(requests) if key in r["keys"]]
+            if not bindings:
+                continue
+            max_tokens = int(requests[0].get("max_tokens", 384))
+            outputs = self.predictor.explain_many([e for _, e in bindings], max_tokens=max_tokens)
+            if len(outputs) != len(bindings):
+                raise RuntimeError("Judge 反馈批次返回数量不一致")
+            retry = [n for n, output in enumerate(outputs) if '"reason"' not in output["continuation"]]
+            if retry:
+                forced = self.predictor.explain_many([bindings[n][1] for n in retry], forced=REASON_PREFILL, max_tokens=max_tokens)
+                if len(forced) != len(retry):
+                    raise RuntimeError("Judge 反馈批次返回数量不一致")
+                for n, output in zip(retry, forced):
+                    outputs[n] = {**output, "continuation": REASON_PREFILL[len("fail"):] + output["continuation"],
+                                  "reason_prefilled": True, "unprefilled_continuation": outputs[n]["continuation"]}
+            for (i, _), output in zip(bindings, outputs):
+                results[i]["feedback"][key] = output
+        return results
+
 
 def make_server(scorer, *, port: int):
     lock = threading.Lock()
@@ -159,7 +201,7 @@ def make_server(scorer, *, port: int):
         def do_GET(self):
             self.respond(200, scorer.health()) if self.path == "/health" else self.respond(404, {"error": "not_found"})
         def do_POST(self):
-            if self.path not in {"/score", "/score_batch", "/resource"}:
+            if self.path not in {"/score", "/score_batch", "/resource", "/explain_batch"}:
                 self.respond(404, {"error": "not_found"})
                 return
             try:
@@ -170,6 +212,8 @@ def make_server(scorer, *, port: int):
                 with lock:
                     if self.path == '/resource':
                         result = scorer.resource(request)
+                    elif self.path == "/explain_batch":
+                        result = {"results": scorer.explain_many(request["requests"])}
                     elif self.path == "/score_batch":
                         requests = request["requests"]
                         results = scorer.score_many(requests)

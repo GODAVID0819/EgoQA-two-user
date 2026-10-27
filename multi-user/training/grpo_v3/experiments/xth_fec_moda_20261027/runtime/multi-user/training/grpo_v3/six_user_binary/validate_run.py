@@ -133,7 +133,7 @@ def validate(output, *, adapter_check=finite_updated_adapter):
         distance=row['diversity_distance']
         components_correct=components_correct and 0<=distance<=1 and row['bonus_gate']==gate
         components_correct=components_correct and 0<=row['reference_count']<=11
-        components_correct=components_correct and math.isclose(row['quality_reward'],aggregate(scores,mode='continuous'),abs_tol=1e-10)
+        components_correct=components_correct and math.isclose(row['quality_reward'],aggregate(scores,mode=config.get('reward_mode','continuous')),abs_tol=1e-10)
         components_correct=components_correct and math.isclose(row['diversity_bonus'],.5*int(gate)*distance,abs_tol=1e-10)
         components_correct=components_correct and math.isclose(row['reward'],row['quality_reward']+row['diversity_bonus'],abs_tol=1e-10)
     checks['reward_components_match_approved_formula']=components_correct

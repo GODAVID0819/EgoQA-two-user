@@ -9,7 +9,7 @@ import time
 import uuid
 
 from training.grpo_v3.six_user_binary.data import validate_row
-from training.grpo_v3.six_user_binary.reward import MODES, aggregate
+from training.grpo_v3.six_user_binary.reward import QUALITY_MODES, aggregate
 from training.grpo_v3.six_user_binary.service import JudgeClient, validate_response
 from training.grpo_v3.six_user_binary.diversity import score_group
 
@@ -50,8 +50,8 @@ class SixUserBinaryReward(ORM):
                  encoder=None, history_by_window=None, diversity_lambda=None, **kwargs):
         super().__init__(args, **kwargs)
         self.mode = reward_mode or os.environ.get("EGOQA_SIX_USER_REWARD_MODE")
-        if self.mode != 'continuous':
-            raise ValueError("本轮已批准连续F/E/联合C奖励")
+        if self.mode not in QUALITY_MODES:
+            raise ValueError(f"质量奖励只能是 {QUALITY_MODES}")
         self.history_metadata = None
         if diversity_lambda is None:
             config=json.loads(Path(os.environ['EGOQA_MODA_CONFIG']).read_text(encoding='utf-8'))
@@ -134,7 +134,7 @@ class SixUserBinaryReward(ORM):
         elapsed = time.perf_counter() - start
         checked=[validate_response(response,request) for request,response in zip(requests,results)]
         components=score_group(requests,checked,encoder=self.encoder,history_by_window=self.history_by_window,
-                               diversity_lambda=self.diversity_lambda)
+                               diversity_lambda=self.diversity_lambda,mode=self.mode)
         records=[]
         step=self.completed_groups+1
         for slot,(binding,request,result,parts) in enumerate(zip(bindings,requests,checked,components)):

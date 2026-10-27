@@ -10,9 +10,19 @@ import numpy as np
 
 from training.grpo_v3.six_user_binary.diversity import checked_vectors, window_id
 HISTORY_SCORE_SOURCE = 'old_training_F_E_A_S'
+# 我们自己的历史池：step204 生成器在三轮反馈环中被接受的题（F/E/all-six 三个 Judge P(pass)>0.5，all-six 为六人合并prompt，无speaker-only分）。
+XTH_SCORE_SOURCE = 'xth_fbloop_step204_F_E_A'
+XTH_KEYS = {'formality', 'groundedness', 'all_six'}
 
 
 def reference_qualified(record):
+    if 'probabilities_xth_F_E_A' in record:
+        scores = record['probabilities_xth_F_E_A']
+        if not isinstance(scores,dict) or set(scores)!=XTH_KEYS:
+            raise ValueError('xth历史池必须是反馈环接受轮的F/E/all-six分数')
+        if any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) or not 0<=v<=1 for v in scores.values()):
+            raise ValueError('Judge分数必须为[0,1]有限数值')
+        return all(v > .5 for v in scores.values())
     scores = record.get('probabilities_old_F_E_A_S')
     if not isinstance(scores,dict) or set(scores)!={'formality','groundedness','all_six','speaker_only'}:
         raise ValueError('历史池必须直接使用旧F/E/A/S，不混入或推造新C')
@@ -84,6 +94,17 @@ class MiniLMEncoder:
         return vectors
 
 
+def save_xth_history(records,windows,encoder,output,*,source_metadata):
+    """与 save_history 相同的筛选与落盘（seed42、每窗最多8、不补满），分数来源换成 XTH_SCORE_SOURCE。"""
+    if any('probabilities_xth_F_E_A' not in r for r in records): raise ValueError('只接受xth反馈环记录')
+    metadata=save_history(records,windows,encoder,output,source_metadata=source_metadata)
+    metadata.update(score_source=XTH_SCORE_SOURCE,
+        selection='step204反馈环被接受的题(F/E/all-six P(pass)>0.5，无speaker-only分)；seed42，每窗最多8，本轮固定，不重评分',
+        old_F_min=None,old_E_min=None,old_A_min=None,old_S_max_exclusive=None,xth_pass_threshold_exclusive=.5)
+    (Path(output)/'pool_metadata.json').write_text(json.dumps(metadata,ensure_ascii=False,indent=2),encoding='utf-8')
+    return metadata
+
+
 def save_history(records,windows,encoder,output,*,source_metadata,old_judge_config=None):
     selected,counts = select_history(records,windows)
     output=Path(output);output.mkdir(parents=True,exist_ok=False)
@@ -112,9 +133,11 @@ def save_history(records,windows,encoder,output,*,source_metadata,old_judge_conf
 def load_history(directory):
     directory=Path(directory)
     metadata=json.loads((directory/'pool_metadata.json').read_text(encoding='utf-8'))
-    if (metadata.get('status')!='passed' or metadata.get('score_source')!=HISTORY_SCORE_SOURCE
-            or metadata.get('historical_rescoring_performed') is not False
-            or [metadata.get(k) for k in ['old_F_min','old_E_min','old_A_min','old_S_max_exclusive','capacity']] != [.5,.4,.5,.5,8]):
+    old=(metadata.get('score_source')==HISTORY_SCORE_SOURCE
+         and [metadata.get(k) for k in ['old_F_min','old_E_min','old_A_min','old_S_max_exclusive','capacity']] == [.5,.4,.5,.5,8])
+    xth=(metadata.get('score_source')==XTH_SCORE_SOURCE and metadata.get('capacity')==8
+         and metadata.get('xth_pass_threshold_exclusive')==.5)
+    if metadata.get('status')!='passed' or metadata.get('historical_rescoring_performed') is not False or not (old or xth):
         raise ValueError('历史池必须来自已批准的旧分数门槛，不进行历史重评分')
     rows=[json.loads(line) for line in (directory/'history_bank.jsonl').read_text(encoding='utf-8').splitlines() if line.strip()]
     vectors=np.load(directory/'question_embeddings.npy',allow_pickle=False)

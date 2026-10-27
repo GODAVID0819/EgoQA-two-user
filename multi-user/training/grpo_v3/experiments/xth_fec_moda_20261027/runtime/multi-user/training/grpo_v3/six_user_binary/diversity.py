@@ -7,7 +7,7 @@ import re
 import numpy as np
 
 from training.grpo_v3.six_user_binary.judge import parse_completion
-from training.grpo_v3.six_user_binary.reward import aggregate, validate_probabilities
+from training.grpo_v3.six_user_binary.reward import QUALITY_MODES, aggregate, validate_probabilities
 
 
 def window_id(source_packet_id):
@@ -27,7 +27,9 @@ def checked_vectors(values, *, expected_count=None, dimension=None):
     return vectors
 
 
-def score_group(requests, results, *, encoder=None, history_by_window=None, diversity_lambda=.5):
+def score_group(requests, results, *, encoder=None, history_by_window=None, diversity_lambda=.5, mode='continuous'):
+    if mode not in QUALITY_MODES:
+        raise ValueError(f'质量奖励只能是 {QUALITY_MODES}')
     if isinstance(diversity_lambda, bool) or not math.isfinite(diversity_lambda) or diversity_lambda < 0:
         raise ValueError('距离权重必须是非负有限数')
     if len(requests) != 4 or len(results) != 4:
@@ -49,7 +51,7 @@ def score_group(requests, results, *, encoder=None, history_by_window=None, dive
             raise ValueError('基础设施或Judge失败不能伪装成零奖励')
         scored = result['status'] == 'scored'
         scores = validate_probabilities(result['probabilities']) if scored else None
-        quality = aggregate(scores, mode='continuous') if scored else 0.
+        quality = aggregate(scores, mode=mode) if scored else 0.
         gate = bool(scored and all(value >= .5 for value in scores.values()))
         output.append({'request_id': request['request_id'], 'quality_reward': quality,
                        'bonus_gate': gate, 'diversity_distance': 0., 'diversity_bonus': 0.,
