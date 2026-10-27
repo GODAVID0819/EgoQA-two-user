@@ -1,0 +1,29 @@
+{
+  "F": {
+    "source": "C:\\Users\\20661\\Documents\\xwechat_files\\wxid_i096w25uhusk22_e748\\msg\\file\\2026-10\\formality_prompt.txt",
+    "raw_template": "C:\\Users\\20661\\Desktop\\Research\\AR\\multiuser\\.codex_runtime\\grpo720_moda_config_20261018\\prompts\\formality_prompt.txt",
+    "model_visible_template": "C:\\Users\\20661\\Desktop\\Research\\AR\\multiuser\\.codex_runtime\\grpo720_moda_config_20261018\\prompts\\formality_prompt.txt",
+    "bindings": {
+      "<DETERMINISTIC_SCHEMA_RESULT_JSON>": "真实结构检查及题面姓名泄漏检查的status/errors，不伪造模型判定",
+      "<PARTICIPANT_NAMES_JSON>": "真实packet已确定的六名参与者，仅用于姓名泄漏检测",
+      "<QUESTION_ANSWER_ITEM_JSON>": "question_type/question/options/correct/answer，不包含generator rationale、证据或评审结果"
+    }
+  },
+  "E": {
+    "source": "C:\\Users\\20661\\Documents\\xwechat_files\\wxid_i096w25uhusk22_e748\\msg\\file\\2026-10\\groundedness_judge_prompt.txt",
+    "raw_template": "C:\\Users\\20661\\Desktop\\Research\\AR\\multiuser\\.codex_runtime\\grpo720_moda_config_20261018\\prompts\\groundedness_judge_prompt.txt",
+    "model_visible_template": "C:\\Users\\20661\\Desktop\\Research\\AR\\multiuser\\.codex_runtime\\grpo720_moda_config_20261018\\prompts\\groundedness_model_prompt.txt",
+    "bindings": {
+      "{video_packet_brief(packet)}": "真实六视角媒体及原始时间映射",
+      "{qa_item JSON}": "对应完整QA对象"
+    }
+  },
+  "C": {
+    "source": "C:\\Users\\20661\\Documents\\xwechat_files\\wxid_i096w25uhusk22_e748\\msg\\file\\2026-10\\combined_answerability_judge_prompt.txt",
+    "raw_template": "C:\\Users\\20661\\Desktop\\Research\\AR\\multiuser\\.codex_runtime\\grpo720_moda_config_20261018\\prompts\\combined_answerability_judge_prompt.txt",
+    "model_visible_template": "C:\\Users\\20661\\Desktop\\Research\\AR\\multiuser\\.codex_runtime\\grpo720_moda_config_20261018\\prompts\\combined_answerability_judge_prompt.txt",
+    "bindings": {
+      "{question}": "真实问题正文；一次六视角联合输入，speaker第一组"
+    }
+  }
+}
