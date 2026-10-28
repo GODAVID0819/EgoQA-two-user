@@ -41,6 +41,7 @@ lxr 的 cp348 是在旧 prompt + brevity 段上训练的；用新 prompt 生成�
 | `runtime/multi-user/training/grpo_v3/six_user_binary/reward.py` | `continuous` / `continuous_gated` |
 | `runtime/.../diversity.py`、`plugin.py`、`launch.py`、`validate_run.py` | 按 `reward_mode` 计算/校验质量项 |
 | `runtime/.../history_pool.py`、`runtime/build_xth_history.py` | xth 历史池来源与构建 |
+| `history_pool/` | **训练实际用的固定历史池**（894题，`history_bank.jsonl` 题目与分数、`question_embeddings.npy` MiniLM 向量、`window_counts.csv`、`pool_metadata.json`）；与 `$ROOT/history_pool/` 逐字节相同 |
 | `runtime/prepare_xth_720.py` | 我们的720行按 lxr 顺序排列并逐行 `validate_row` |
 | `runtime/rebuild_generator_rows.py` | 用当前 prompts.py 重建生成器行（不加 brevity），核对图片等不变 |
 | `runtime/.../service.py`、`predictor.py`、`feedback_loop.py`，`runtime/eval_feedback_loop.py` | 三轮反馈环 |
@@ -87,7 +88,7 @@ $P prepare_xth_720.py --config configs/train_continuous.json --output data/train
 # 5b. 用新 prompts.py 重建生成器行（不加 brevity）→ 配置实际使用的 _v2 文件
 $P rebuild_generator_rows.py --input data/train_length_paired.jsonl --output data/train_length_paired_v2.jsonl
 $P rebuild_generator_rows.py --input $D/data/trainval/validation.jsonl --output data/validation_v2.jsonl
-# 5c. 固定历史池（只用 train_dataset 取120个窗口）
+# 5c. 固定历史池：直接用仓库里的 history_pool/（cp -r $EXP/history_pool $ROOT/），或按下行从反馈环输出重建（结果相同）
 $P build_xth_history.py --config configs/train_continuous.json --runs $D/outputs/feedback_loop/fbloop_{20772096,20819555,21073148,21073149}
 # 5d. 单步容量smoke用：图片最多的一对相邻条件（0起第126、127行，各1800帧）
 $P -c "

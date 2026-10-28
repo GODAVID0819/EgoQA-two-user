@@ -1,0 +1,33 @@
+{
+  "status": "passed",
+  "source_metadata": "{\"runs\": [\"/scratch/tx856/multi_user_qa/dual_full120/outputs/feedback_loop/fbloop_20772096\", \"/scratch/tx856/multi_user_qa/dual_full120/outputs/feedback_loop/fbloop_20819555\", \"/scratch/tx856/multi_user_qa/dual_full120/outputs/feedback_loop/fbloop_21073148\", \"/scratch/tx856/multi_user_qa/dual_full120/outputs/feedback_loop/fbloop_21073149\"], \"accepted_QA\": 2149}",
+  "old_judge_config": null,
+  "score_source": "xth_fbloop_step204_F_E_A",
+  "selection": "step204反馈环被接受的题(F/E/all-six P(pass)>0.5，无speaker-only分)；seed42，每窗最多8，本轮固定，不重评分",
+  "old_F_min": null,
+  "old_E_min": null,
+  "old_A_min": null,
+  "old_S_max_exclusive": null,
+  "capacity": 8,
+  "fixed_for_this_run": true,
+  "window_count": 120,
+  "selected_QA": 894,
+  "empty_windows": 1,
+  "selected_count_distribution": {
+    "8": 103,
+    "5": 5,
+    "6": 2,
+    "1": 2,
+    "0": 1,
+    "3": 1,
+    "2": 1,
+    "4": 3,
+    "7": 2
+  },
+  "encoder_revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+  "dimension": 384,
+  "historical_rescoring_performed": false,
+  "history_preparation_device": "CPU",
+  "thresholds_are_not_human_quality_calibration": true,
+  "xth_pass_threshold_exclusive": 0.5
+}
