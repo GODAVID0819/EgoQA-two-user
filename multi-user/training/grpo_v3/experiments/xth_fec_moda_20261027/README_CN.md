@@ -155,6 +155,8 @@ sbatch --job-name=xth_lxr_fbloop_cp348_1000 \
 | 21141156 | 反馈环 smoke（旧 prompt），cp348，2输入×2题×2轮 | 完成；C 的反馈会明确指出 “speaker 自己的时间线已足够回答” |
 | 21145082 | GRPO 单步 smoke（旧 prompt），`continuous_gated`，最长一对 | lxr `validate_run` 25 项全部通过（含按 gated 公式重算的 reward 分量） |
 | 21172903 | CPU 单测（含新 prompts.py） | 61 项 OK |
-| 21173114 | CPU：用新 prompt 重建 720 训练行、120 验证行、容量对 | 见下方更新 |
+| 21173114 | CPU：用新 prompt 重建 720 训练行、120 验证行、容量对 | 720 + 120 行全部通过（图片/帧数/speaker 顺序不变），无 brevity 段、无 CLIP/剪枝描述 |
+| 21176520 | 反馈环 smoke（新 prompt），cp348，2输入×2题×2轮 | 完成；输出约 4000–5000 字符（无 brevity 段，比旧 prompt 长），8 次生成中 1 次 answer 与 correct 不一致判为非法 |
+| 21179169 | **正式生成**：cp348，新 prompt，validation_v2 前100条 × 10 = 1000 题，最多3轮 | 运行中，输出 `$ROOT/outputs/feedback_loop/fbloop_21179169/` |
 
 这些只证明工程链路可用；Judge 代理通过率不等于人工正确率。
