@@ -44,6 +44,7 @@ def main():
     parser.add_argument('--train', type=Path, required=True)
     parser.add_argument('--validation', type=Path, required=True)
     parser.add_argument('--validate-media', action='store_true', help='逐行 validate_row（读帧文件，需在CPU作业里跑）')
+    parser.add_argument('--output', type=Path, help='默认写到配置的 train_dataset')
     a = parser.parse_args()
     c = json.loads(a.config.read_text())
     read = lambda p: [json.loads(s) for s in Path(p).read_text().splitlines() if s.strip()]
@@ -55,7 +56,7 @@ def main():
             validate_row(row)
             if i % 60 == 0:
                 print('VALIDATED_CONDITION', i, flush=True)
-    destination = Path(c['train_dataset'])
+    destination = a.output or Path(c['train_dataset'])
     if destination.exists():
         if read(destination) != rows:
             raise FileExistsError(f'{destination} 已存在且内容不同')
