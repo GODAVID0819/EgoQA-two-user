@@ -49,6 +49,8 @@ lxr 的 cp348 是在旧 prompt + brevity 段上训练的；用新 prompt 生成�
 | `materialize_root.sh` | 按 lxr README 的“独立根”布局物化运行目录（含 prompts.py 覆盖） |
 | `make_xth_configs.py` | 在运行根写 `configs/`：`train_continuous.json`、`train_continuous_gated.json`、`smoke_capacity.json`、`judge_fec.json`、`fbloop.json` |
 | `slurm/train_dual.sbatch`、`slurm/fbloop.sbatch` | 提交脚本 |
+| `slurm/resume_audit.sbatch` | 续训前 CPU 核验断点（写 `reload_cpu_audit.json`）并跑 `recovery.validated_resume` |
+| `vqa/vqa_qwen25vl.py`、`vqa/vqa.sbatch` | 人工全 pass 题的多视角 VQA 评测（Qwen2.5-VL-7B / Qwen3-VL-8B，vLLM） |
 
 ## 一次性准备（Torch）
 
@@ -154,6 +156,40 @@ sbatch --job-name=xth_lxr_fbloop_cp348_1000 \
 - 续跑：加 `RESUME_DIR=$ROOT/outputs/feedback_loop/fbloop_<JobID>`，其余参数与原运行相同。
 - 输出 `$ROOT/outputs/feedback_loop/fbloop_<JobID>/`：`rank*/feedback_loop.json`（每题每轮的 seed、收到的反馈、原始输出、
   三个 Judge 概率/是否通过、Judge 原始续写、给下一轮的反馈）、`feedback_loop_summary.json`（每轮结束后各 Judge 通过率与各轮接受数）。
+
+## 多视角 VQA 评测（人工全 pass 的 169 题）
+
+数据：HF dataset [`tianxia2/egolife-six-user-mcqa-human-pass`](https://huggingface.co/datasets/tianxia2/egolife-six-user-mcqa-human-pass)
+的 `vqa.json` + `videos/`（每人 10 分钟、640×640、20fps）。来源：judge-SFT 842 人工标注里三项均 pass 的 146 题 + 生成题人工 review pass 的 23 题。
+`evidence_videos` 是生成器 evidence 里的两个人（优先非 speaker；生成器自报，未逐视频人工核对）。
+
+`vqa/vqa_qwen25vl.py` 设置（只差输入视频，其余相同）：
+
+| `--setting` | 视频 |
+|---|---|
+| `all6` | 六个人（speaker 在前） |
+| `evidence2` | `evidence_videos` 两人 |
+| `speaker_plus1` | speaker + evidence 里排第一的非 speaker |
+| `speaker1` | 只有 speaker |
+
+每段视频均匀取 `--frames`（默认64）帧，缩放到 336（Qwen2.5-VL）/ 320（Qwen3-VL）；每段前标注是谁的第一视角、谁是提问者；
+贪心解码取第一个 A–E 字母。`--shuffle-seed` 按 (seed, 题id) 固定重排选项——原数据正确答案集中在 A/B（A103/B57/C9），
+不重排时“全选A”就有61%，比较设置差异应以重排后的结果为准。输出 `predictions.jsonl`、`summary.json`（总体/按来源/按 evidence 选择方式）。
+
+```bash
+# vqa.sbatch 里的 DATA/输出路径为 Torch 本机路径（/scratch/tx856/multi_user_qa/vqa_eval），换机器先改 vqa_qwen25vl.py 的 DATA
+cd /scratch/tx856/multi_user_qa/vqa_eval
+sbatch --parsable --export=ALL,SETTING=all6,SHUFFLE=0 vqa.sbatch
+sbatch --parsable --export=ALL,SETTING=evidence2,FRAMES=192,SHUFFLE=0 vqa.sbatch            # 两段×192 = 六段×64 总帧数
+sbatch --parsable --export=ALL,SETTING=speaker1,SHUFFLE=0,MODEL=Qwen/Qwen3-VL-8B-Instruct,MODEL_TAG=qwen3vl8b vqa.sbatch
+```
+
+Qwen2.5-VL-7B，未重排选项（受位置偏差影响，仅供参考）：
+
+| 设置 | all6 | evidence2 | evidence2 192帧 | speaker_plus1 | speaker1 |
+|---|---|---|---|---|---|
+| 准确率（169题） | 51.5% | 51.5% | 55.6% | 46.7% | 35.5% |
+| 平均 prompt tokens | 27.9k | 9.4k | 27.8k | 9.4k | 4.8k |
 
 ## 已验证 / 运行记录
 
