@@ -613,7 +613,7 @@ For any selected long-horizon pattern:
 
 5. Cross-user temporal ordering
 - Compare two or more clearly identifiable, semantically related events from different users and determine which happened first, whether one was before or after another, or what visible event fell between them.
-- Infer order from synchronized evidence and original timing metadata, never from equal positions within separately pruned or context-thinned inputs.
+- Infer order from synchronized evidence and any supplied original timing metadata. Equal frame positions across different users' groups do not establish simultaneity or event order.
 - Do not choose arbitrary unrelated actions merely because they have an order, and do not turn this into a prohibited question asking what another person was doing at the same time.
 - Example structure: "What was the order of the window closing, my entering the room, and the lamp turning on?"
 
@@ -1244,6 +1244,51 @@ def video_packet_brief(packet: dict[str, Any]) -> str:
     return json.dumps(brief, ensure_ascii=False, indent=2)
 
 
+def _generator_packet_brief(packet: dict[str, Any]) -> str:
+    """Describe supplied frames without exposing sampling or selection machinery."""
+
+    brief_text = video_packet_brief(packet)
+    if not generator_uses_sampled_frames(packet):
+        return brief_text
+
+    brief = json.loads(brief_text)
+    required_users = list(packet.get("required_users") or [])
+    speaker_user = required_users[0] if required_users else None
+    brief.pop("generator_context_budget", None)
+    for clip in brief["clips"]:
+        clip.pop("generator_media_mode", None)
+        clip.pop("is_pruned", None)
+        clip["media_role"] = "speaker" if clip.get("user") == speaker_user else "provider"
+        frame_input = clip.get("generator_frame_input")
+        if isinstance(frame_input, dict):
+            frame_input.pop("aggregate_sampling", None)
+
+    if len(required_users) == 6:
+        brief["role_contract"]["required_users_order"] = (
+            "required_users[0] is the speaker. required_users[1] through required_users[5] "
+            "are providers. Each user's input consists of frames ordered chronologically "
+            "within that user's group. The speaker input must naturally motivate the "
+            "question but remain insufficient to answer it, while one or more provider "
+            "inputs supply necessary answer-bearing evidence. An unused provider does "
+            "not invalidate the item."
+        )
+
+    brief["generator_media_contract"] = {
+        "mode": "frame_sets",
+        "image_group_order": (
+            "Images are grouped in required_users order and are chronological within "
+            "each user's group. No per-frame indices or timestamps are included."
+        ),
+        "limitations": (
+            "These are individual frames, not continuous video. Do not assume a fixed "
+            "time interval between frames. Do not infer unseen motion, transitions, "
+            "duration, or events between images. Original timestamps are internal "
+            "evidence metadata and must not appear in the question or options."
+        ),
+    }
+    return json.dumps(brief, ensure_ascii=False, indent=2)
+
+
 def _frame_summary(frame: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(frame, dict):
         return {}
@@ -1477,7 +1522,6 @@ def build_video_generation_prompt(
     sampled_frame_input = generator_uses_sampled_frames(packet)
     required_users = list(packet.get("required_users") or [])
     six_user_mode = len(required_users) == 6
-    context_budget = packet.get("generator_context_budget")
     if sampled_frame_input:
         generator_opening = """You are generating one natural, evidence-grounded multiple-choice question from egocentric visual evidence.
 
@@ -1492,8 +1536,8 @@ Before returning the question, verify that every claim in the question, answer, 
 Do not use captions, subtitles, transcripts, pre-written observations, or outside knowledge."""
         relation_source = "the supplied sampled frames"
         timestamp_instruction = (
-            "The text prompt does not include exact per-frame paths, indices, timestamps, "
-            "cluster assignments, or retained-interval mappings. Use the supplied images in "
+            "The text prompt does not include exact per-frame paths, indices, or timestamps. "
+            "Use the supplied images in "
             "their visual order, and do not treat proximity as proof of an unseen event or "
             "transition. Do not include participant names, clock times, timestamps, timecodes, "
             "frame numbers, seconds from the start, minute marks, filenames, or clip positions "
@@ -1525,16 +1569,9 @@ Input: raw videos from multiple people during the same time interval. They may b
         interval_wording = "the videos share a time interval"
 
     six_user_media_line = (
-        "The generator receives images only: every one-per-second sampled frame from each "
-        "of the six full, unpruned videos, all chronological within user. It receives no "
-        "pruned video. Evidence analysis samples at one frame per second and globally "
-        "clusters each 600-second video at K=240 (a density of 12 clusters per 30 seconds); "
-        "analysis pruning never removes generator inputs, and only full-video judge decoding "
-        "is downsampled."
-        if isinstance(context_budget, dict)
-        else "The generator receives images only: every CLIP-sampled frame from all six full, "
-        "unpruned videos. It receives no pruned video, and evidence-analysis pruning never "
-        "removes generator inputs."
+        "The generator receives frames from six people's egocentric recordings during "
+        "the same synchronized interval. Frames are grouped by user and ordered "
+        "chronologically within each user's group."
     )
     dependency_lines = (
         [
@@ -1627,7 +1664,7 @@ Your task:
 
 {feedback_block}
 Evidence packet metadata:
-{video_packet_brief(packet)}
+{_generator_packet_brief(packet)}
 
 Return exactly one valid JSON object with this exact shape:
 {json.dumps(output_schema, ensure_ascii=False, indent=2)}
