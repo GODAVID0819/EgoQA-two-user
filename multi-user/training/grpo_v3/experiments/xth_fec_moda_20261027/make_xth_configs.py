@@ -36,6 +36,9 @@ def main():
     for mode in ('continuous', 'continuous_gated'):
         c = {**base, 'reward_mode': mode, 'output_root': str(root / 'outputs' / mode), 'run_attempt': f'xth_{mode}_stage180'}
         (root / f'configs/train_{mode}.json').write_text(json.dumps(c, indent=2, ensure_ascii=False) + '\n')
+        # 低像素变体：只把 max_pixels 换成我们之前 GRPO 用的 24576（160×160、每帧25个视觉token），其余与上面相同
+        px = {**c, 'max_pixels': 24576, 'output_root': str(root / 'outputs' / f'{mode}_px24576'), 'run_attempt': f'xth_{mode}_px24576_stage180'}
+        (root / f'configs/train_{mode}_px24576.json').write_text(json.dumps(px, indent=2, ensure_ascii=False) + '\n')
     # 单步容量smoke：只用最长两条件中的前两条（同 lxr capacity_measurement 语义），fresh，一次完整更新
     smoke = {**base, 'reward_mode': 'continuous_gated', 'capacity_measurement': True, 'stop_after_steps': 1,
              'train_conditions': 2, 'train_dataset': str(root / 'data/train_capacity2_v2.jsonl'),

@@ -117,6 +117,13 @@ sbatch --job-name=xth_lxr_grpo_cont  --export=ALL,RUN_CONFIG=$ROOT/configs/train
 sbatch --job-name=xth_lxr_grpo_gated --export=ALL,RUN_CONFIG=$ROOT/configs/train_continuous_gated.json $EXP/slurm/train_dual.sbatch
 ```
 
+低像素变体（`max_pixels` 24576，即我们之前 GRPO 的 160×160、每帧25个视觉token；其余与上面完全相同，输出在 `outputs/<mode>_px24576/`）：
+
+```bash
+sbatch --job-name=xth_lxr_grpo_cont_px24k  --export=ALL,RUN_CONFIG=$ROOT/configs/train_continuous_px24576.json       $EXP/slurm/train_dual.sbatch
+sbatch --job-name=xth_lxr_grpo_gated_px24k --export=ALL,RUN_CONFIG=$ROOT/configs/train_continuous_gated_px24576.json $EXP/slurm/train_dual.sbatch
+```
+
 - 入口是 lxr 的 `dual_launch.py`：每卡一个冻结 Judge 服务（与 Policy 同卡交替显存），两 rank DDP，每步两个不同窗口各 G4。
 - 输出 `$ROOT/outputs/<reward_mode>/train_<JobID>/`：`swift/v0-*/checkpoint-*`（每2步存、保留3个）、`rank*/reward_trace.jsonl`
   （每条候选的 F/E/C 概率、quality_reward、diversity_distance/bonus、reward）、`rank*/group_metrics.jsonl`、`run_manifest.json`；结束时自动跑 `validate_run`。
