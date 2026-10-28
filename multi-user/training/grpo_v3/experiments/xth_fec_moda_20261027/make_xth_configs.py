@@ -26,23 +26,23 @@ def main():
 
     base = {k: v for k, v in json.loads(SOURCE.read_text()).items() if k not in DROP}
     base.update(project_root=str(root), train_python=PYTHON, judge_python=PYTHON, policy_model=MODEL,
-                judge_config=str(root / 'configs/judge_fec.json'), train_dataset=str(root / 'data/train_length_paired.jsonl'),
+                judge_config=str(root / 'configs/judge_fec.json'), train_dataset=str(root / 'data/train_length_paired_v2.jsonl'),
                 scratch_root='/scratch/tx856/js', policy_cuda_home='/scratch/tx856/.conda/cuda130_home',
                 history_pool_directory=str(root / 'history_pool'), history_score_source='xth_fbloop_step204_F_E_A',
                 slurm={'account': 'torch_pr_111_tandon_advanced', 'gres': 'gpu:h200:2', 'cpus': 32, 'mem': '750G'},
                 source_provenance={'lxr_config': 'full120x6_fec_moda_stage180_20261021/examples/train_config_20573337.json',
-                                   'data': 'dual_full120/data/trainval/{train,validation}.jsonl reordered by lxr condition_definition.json',
+                                   'data': 'dual_full120/data/trainval/{train,validation}.jsonl reordered by lxr condition_definition.json; v2 = generator prompt rebuilt with runtime/multi-user/prompts.py (user prompts(1).py), no brevity profile',
                                    'history_pool': 'step204 feedback-loop accepted QA (we cannot read the lxr pool)'})
     for mode in ('continuous', 'continuous_gated'):
         c = {**base, 'reward_mode': mode, 'output_root': str(root / 'outputs' / mode), 'run_attempt': f'xth_{mode}_stage180'}
         (root / f'configs/train_{mode}.json').write_text(json.dumps(c, indent=2, ensure_ascii=False) + '\n')
     # 单步容量smoke：只用最长两条件中的前两条（同 lxr capacity_measurement 语义），fresh，一次完整更新
     smoke = {**base, 'reward_mode': 'continuous_gated', 'capacity_measurement': True, 'stop_after_steps': 1,
-             'train_conditions': 2, 'train_dataset': str(root / 'data/train_capacity2.jsonl'),
+             'train_conditions': 2, 'train_dataset': str(root / 'data/train_capacity2_v2.jsonl'),
              'output_root': str(root / 'outputs/smoke'), 'run_attempt': 'xth_capacity_smoke'}
     (root / 'configs/smoke_capacity.json').write_text(json.dumps(smoke, indent=2, ensure_ascii=False) + '\n')
     # 反馈环：生成设置与训练一致（max_pixels 50176、max_length 131072、采样参数），输入为原验证集（每窗口原验证speaker）
-    fb = {**base, 'reward_mode': 'continuous', 'val_dataset': str(DUAL / 'data/trainval/validation.jsonl'),
+    fb = {**base, 'reward_mode': 'continuous', 'val_dataset': str(root / 'data/validation_v2.jsonl'),
           'validation_seed': 42, 'output_root': str(root / 'outputs/feedback_loop'), 'run_attempt': 'xth_fbloop_lxr'}
     (root / 'configs/fbloop.json').write_text(json.dumps(fb, indent=2, ensure_ascii=False) + '\n')
     print(sorted(p.name for p in (root / 'configs').iterdir()))

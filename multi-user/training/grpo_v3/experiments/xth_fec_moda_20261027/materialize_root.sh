@@ -17,5 +17,7 @@ rsync -a --delete --exclude __pycache__ "$REPO/hpc/" "$ROOT/hpc/"
 rsync -a --exclude __pycache__ --exclude 'multi-user/' --exclude 'hpc/' "$HERE/runtime/" "$ROOT/"
 rsync -a --delete --exclude __pycache__ "$HERE/runtime/multi-user/training/grpo_v3/six_user_binary/" "$ROOT/multi-user/training/grpo_v3/six_user_binary/"
 rsync -a --exclude __pycache__ "$HERE/runtime/hpc/" "$ROOT/hpc/"
+# 生成器 prompt：用 runtime/multi-user/prompts.py（用户提供的 prompts(1).py；Judge 用到的函数与仓库版逐字相同）覆盖仓库版
+cp "$HERE/runtime/multi-user/prompts.py" "$ROOT/multi-user/prompts.py"
 echo "{\"commit\": \"$(git -C "$REPO" rev-parse HEAD)\", \"experiment\": \"${HERE#$REPO/}\", \"materialized_at\": \"$(date -Is)\"}" > "$ROOT/SOURCE_COMMIT.json"
 cat "$ROOT/SOURCE_COMMIT.json"
