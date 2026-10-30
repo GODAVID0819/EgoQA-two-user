@@ -1,0 +1,23 @@
+{
+  "model": "DAMO-NLP-SG/VideoLLaMA3-7B",
+  "revision": "d5b763e368861e7f5096e7ff1b49f92fbccf8ae6",
+  "source_files": [
+    "README.md",
+    "added_tokens.json",
+    "chat_template.json",
+    "config.json",
+    "configuration_videollama3.py",
+    "configuration_videollama3_encoder.py",
+    "generation_config.json",
+    "image_processing_videollama3.py",
+    "merges.txt",
+    "modeling_videollama3.py",
+    "modeling_videollama3_encoder.py",
+    "preprocessor_config.json",
+    "processing_videollama3.py",
+    "processor_config.json",
+    "special_tokens_map.json",
+    "tokenizer_config.json",
+    "vocab.json"
+  ]
+}

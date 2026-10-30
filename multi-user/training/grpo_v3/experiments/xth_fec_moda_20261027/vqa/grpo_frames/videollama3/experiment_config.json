@@ -1,0 +1,27 @@
+{
+  "status": "REUSABLE_CONFIGURATION",
+  "model": "DAMO-NLP-SG/VideoLLaMA3-7B",
+  "model_revision": "d5b763e368861e7f5096e7ff1b49f92fbccf8ae6",
+  "dataset_repo": "tianxia2/egolife-six-user-mcqa-textwrong131",
+  "dataset_revision": "90e6e9bfbbe4b2f009bb37fdf25c1920e972a4a5",
+  "reference_commit": "2fff59962208eccea1b6fa495e7f4f96129d21da",
+  "reference_pipeline": "multi-user/training/grpo_v3/experiments/xth_fec_moda_20261027/vqa/grpo_frames/vqa_grpo_frames.py",
+  "n": 131,
+  "settings": [
+    "evidence2",
+    "speaker1",
+    "all6"
+  ],
+  "input_modality": "independent_images_in_original_generator_order",
+  "source_frames": "original_per_question_generator_frame_lists_no_resampling",
+  "preprocess_max_pixels": 24576,
+  "preprocessed_square_size": 156,
+  "processor_policy": "unmodified_official_joint_image_processor_defaults_record_actual_geometry",
+  "do_sample": false,
+  "repetition_penalty": 1.0,
+  "max_new_tokens": 512,
+  "batch_size": 4,
+  "seed": 0,
+  "context_policy": "model_native_32768_no_extension",
+  "image_only_identity_compression_bypass": true
+}
