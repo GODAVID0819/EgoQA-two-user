@@ -1,0 +1,94 @@
+{
+  "status": "COMPLETED_INDEPENDENTLY_VERIFIED",
+  "gpu_job_id": "21411288",
+  "gpu_state": "COMPLETED",
+  "gpu_exit_code": "0:0",
+  "gpu_elapsed": "00:10:00",
+  "node": "gh126",
+  "n": 131,
+  "n_predictions": 393,
+  "unparsed": 0,
+  "model": "DAMO-NLP-SG/VideoLLaMA3-7B",
+  "conditions": {
+    "evidence2": {
+      "correct": 49,
+      "n": 131,
+      "accuracy": 0.37404580152671757
+    },
+    "speaker1": {
+      "correct": 45,
+      "n": 131,
+      "accuracy": 0.3435114503816794
+    },
+    "all6": {
+      "correct": 41,
+      "n": 131,
+      "accuracy": 0.31297709923664124
+    }
+  },
+  "evidence2_minus_all6_gap_pp": 6.106870229007634,
+  "paired": {
+    "both_correct": 33,
+    "evidence2_only_correct": 16,
+    "all6_only_correct": 8,
+    "both_wrong": 74
+  },
+  "strict_130": {
+    "evidence2_correct": 49,
+    "speaker1_correct": 45,
+    "all6_correct": 41,
+    "gap_pp": 6.153846153846154
+  },
+  "exclude_review_fail_114": {
+    "evidence2_correct": 42,
+    "speaker1_correct": 40,
+    "all6_correct": 38,
+    "gap_pp": 3.508771929824561
+  },
+  "window_bootstrap": {
+    "windows": 69,
+    "samples": 10000,
+    "seed": 0,
+    "ci95_gap_pp": [
+      -0.8064516129032258,
+      13.422818791946309
+    ]
+  },
+  "processor_actual_sizes": {
+    "speaker1": [
+      "98x98"
+    ],
+    "evidence2": [
+      "70x70",
+      "84x84",
+      "98x98",
+      "112x112"
+    ],
+    "all6": [
+      "56x56"
+    ]
+  },
+  "reason_present": 0,
+  "raw_bare_letters": {
+    "evidence2": 126,
+    "speaker1": 130,
+    "all6": 130
+  },
+  "cpu_job_id": "21409719",
+  "cpu_elapsed": "00:59:01",
+  "frames": {
+    "total": 89255,
+    "created": 50346,
+    "reused": 38909,
+    "matched_reference": 252
+  },
+  "gpu_accounting": {
+    "step": "21411288.0",
+    "tres_gpuutil": 82,
+    "tres_gpumem_mib": 39854,
+    "source": "sacct TRESUsageInAve"
+  },
+  "gpu_csv_log": "No devices were found in batch step; future logger moved inside srun; no extra GPU test",
+  "remote_output": "/scratch/xl6775/experiments/vqa_videollama3_grpo131_20261030/outputs/formal_21411288",
+  "audit_transcript": "vqa_20261030_173202_d95d00ac.output.txt"
+}

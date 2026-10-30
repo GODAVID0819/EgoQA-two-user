@@ -1,0 +1,11 @@
+{
+  "paragraphs": [
+    "Input: chronologically ordered sampled frames selected from multiple people's egocentric recordings during the same synchronized interval.",
+    "These images are sparse samples rather than continuous video. Use only objects, states, actions, and relationships that are directly visible in the supplied frames and supported by the provided packet metadata.",
+    "Do not infer an action, transition, handoff, state change, temporal sequence, or event occurring between sampled frames unless both relevant states or moments are visibly supported by the supplied evidence.",
+    "Before returning the question, verify that every claim in the question, answer, options, evidence fields, and rationale is grounded in the supplied sampled frames.",
+    "Do not use captions, subtitles, transcripts, pre-written observations, or outside knowledge."
+  ],
+  "six_user": "The generator receives frames from six people's egocentric recordings during the same synchronized interval. Frames are grouped by user and ordered chronologically within each user's group.",
+  "source_commit": "2fff59962208eccea1b6fa495e7f4f96129d21da"
+}
