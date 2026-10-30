@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Speaker-only VQA：答对的题（人工审核）</title>
+<style>
+  :root { --ok:#1a7f37; --bad:#c62828; --muted:#666; --line:#ddd; }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif; margin:0; background:#f6f7f9; color:#222; }
+  header { position:sticky; top:0; z-index:5; background:#fff; border-bottom:1px solid var(--line); padding:10px 18px; }
+  header h1 { font-size:17px; margin:0 0 6px; }
+  .meta { font-size:12px; color:var(--muted); }
+  .filters { display:flex; flex-wrap:wrap; gap:14px; font-size:13px; margin-top:6px; align-items:center; }
+  .filters select { font-size:13px; }
+  main { padding:14px 18px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:8px; margin-bottom:16px; display:grid;
+          grid-template-columns: 800px 1fr; gap:16px; padding:14px; }
+  .grid6 { display:grid; grid-template-columns: repeat(3, 258px); gap:6px; }
+  .pane { border:2px solid transparent; }
+  .pane.speaker { border-color:#e0a800; }
+  .pane video { width:256px; height:256px; background:#000; display:block; }
+  .pane .lab { font-size:11px; padding:2px 3px; background:#f2f2f2; }
+  .pane .lab .gap { color:var(--bad); } .pane .lab .in { color:var(--ok); }
+  .ctrl { font-size:12px; margin-top:6px; }
+  .ctrl button { font-size:12px; padding:1px 6px; margin:1px; }
+  .ctrl input[type=range] { width:780px; }
+  .clock { font-family:monospace; font-size:13px; }
+  .tags span { display:inline-block; font-size:11px; padding:1px 6px; border-radius:10px; background:#eef; margin:0 4px 4px 0; }
+  .tags .ok { background:#e3f4e8; color:var(--ok); } .tags .bad { background:#fde8e8; color:var(--bad); }
+  .q { font-size:15px; font-weight:600; margin:4px 0 8px; }
+  ol.opts { list-style:none; padding:0; margin:0 0 10px; font-size:14px; }
+  ol.opts li { padding:2px 6px; border-radius:4px; }
+  ol.opts li.gold { background:#e3f4e8; }
+  ol.opts .who { font-size:11px; color:var(--muted); margin-left:6px; }
+  .reason { font-size:13px; background:#fafafa; border-left:3px solid #999; padding:6px 10px; margin:6px 0; white-space:pre-wrap; }
+  .reason b { font-size:12px; }
+  .ts { color:#0b5cad; cursor:pointer; text-decoration:underline dotted; }
+  details { font-size:13px; margin-top:6px; } details li { margin:2px 0; }
+  .small { font-size:12px; color:var(--muted); }
+  .review { margin-top:10px; padding:8px; border:1px dashed #bbb; border-radius:6px; font-size:13px; }
+  .review button { font-size:13px; padding:3px 12px; margin-right:6px; border:1px solid #aaa; border-radius:4px; background:#fff; cursor:pointer; }
+  .review button.on[data-v=pass] { background:var(--ok); color:#fff; border-color:var(--ok); }
+  .review button.on[data-v=fail] { background:var(--bad); color:#fff; border-color:var(--bad); }
+  .review textarea { width:100%; box-sizing:border-box; margin-top:6px; font-size:13px; }
+  .card.r-pass { border-left:6px solid var(--ok); } .card.r-fail { border-left:6px solid var(--bad); }
+  #progress { font-weight:600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Speaker-only VQA 答对的题 · 六人帧（= GRPO 生成器输入，同帧同分辨率）</h1>
+  <div class="meta" id="meta"></div>
+  <div class="filters">
+    <label>模型 <select id="fModel">
+      <option value="any">任一答对</option><option value="qwen3">Qwen3-VL-8B 答对</option>
+      <option value="qwen25">Qwen2.5-VL-7B 答对</option><option value="both">两个都答对</option>
+      <option value="one">只有一个答对</option></select></label>
+    <label>正确项最长 <select id="fLong"><option value="">全部</option><option value="1">是</option><option value="0">否</option></select></label>
+    <label>生成器 evidence 含 speaker <select id="fEv"><option value="">全部</option><option value="1">是</option><option value="0">否</option></select></label>
+    <label>来源 <select id="fSrc"><option value="">全部</option></select></label>
+    <label>text only（不给帧）<select id="fText"><option value="">全部</option>
+      <option value="none">两个模型都答错</option><option value="any">至少一个答对</option>
+      <option value="q3wrong">Qwen3 答错</option><option value="q25wrong">Qwen2.5 答错</option></select></label>
+    <label>我的审核 <select id="fRev"><option value="">全部</option><option value="none">未审</option>
+      <option value="pass">通过</option><option value="fail">不通过</option></select></label>
+    <span id="count" class="small"></span>
+    <span id="progress"></span>
+    <button id="export">下载审核结果 JSON</button>
+  </div>
+</header>
+<main id="list"></main>
+<script>
+const NAMES = {qwen3: 'Qwen3-VL-8B', qwen25: 'Qwen2.5-VL-7B'};
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const toSec = c => { const p = c.split(':').map(Number); return p[0]*3600 + p[1]*60 + (p[2]||0); };
+let DATA, REVIEWS = {};
+
+function paintReview(idx) {
+  const item = DATA.items[idx], el = document.querySelector(`#c${idx} .review`);
+  if (!el) return;
+  const r = REVIEWS[item.id] || {};
+  el.querySelectorAll('button').forEach(b => b.classList.toggle('on', !!r.verdict && b.dataset.v === r.verdict));
+  const ta = el.querySelector('textarea');
+  if (document.activeElement !== ta) ta.value = r.note || '';
+  el.querySelector('.rstat').textContent = r.time ? `已保存 ${r.time}` : '未审';
+  const c = document.getElementById('c' + idx);
+  c.classList.toggle('r-pass', r.verdict === 'pass'); c.classList.toggle('r-fail', r.verdict === 'fail');
+}
+
+function progress() {
+  const v = Object.values(REVIEWS), n = DATA.items.length;
+  const p = v.filter(r => r.verdict === 'pass').length, f = v.filter(r => r.verdict === 'fail').length;
+  document.getElementById('progress').textContent = `已审 ${p + f}/${n}：通过 ${p} · 不通过 ${f}`;
+}
+
+async function saveReview(idx, patch) {
+  const item = DATA.items[idx], cur = REVIEWS[item.id] || {};
+  const body = {id: item.id, verdict: cur.verdict ?? null, note: cur.note || '', ...patch};
+  const st = document.querySelector(`#c${idx} .rstat`);
+  try {
+    const r = await fetch('review', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    if (!r.ok) throw new Error(r.status);
+    REVIEWS = await r.json();
+    paintReview(idx); progress();
+  } catch (e) { if (st) st.textContent = '保存失败：' + e.message + '（检查隧道/服务）'; }
+}
+
+function fmtClock(item, t) {
+  const s = toSec(item.start_clock.split('.')[0]) + t;
+  const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = Math.floor(s%60);
+  return [h,m,x].map(v => String(v).padStart(2,'0')).join(':');
+}
+
+// 理由里的 HH:MM:SS 换成可点击跳转（时钟 - 窗口起点 = 视频秒数，按 2 s 一帧取整）
+function linkReason(item, text, idx) {
+  const start = toSec(item.start_clock.split('.')[0]);
+  return esc(text).replace(/\b(\d{1,2}):(\d{2}):(\d{2})\b/g, (m, h, mi, s) => {
+    const off = (+h)*3600 + (+mi)*60 + (+s) - start;
+    if (off < 0 || off >= item.n_frames * item.frame_seconds) return m + '<span class="small">(窗口外)</span>';
+    return `<span class="ts" data-card="${idx}" data-t="${off}">${m}</span>`;
+  });
+}
+
+function card(item, idx) {
+  const m = item.models;
+  const tags = [
+    ...Object.keys(m).map(k => `<span class="${m[k].correct ? 'ok' : 'bad'}">${NAMES[k]} ${m[k].correct ? '✓' : '✗'} (${m[k].pred ?? '-'})</span>`),
+    ...Object.keys(item.text_only || {}).map(k => `<span class="${item.text_only[k].correct ? 'bad' : 'ok'}" title="同模型同 prompt、不给任何帧">text only ${NAMES[k]} ${item.text_only[k].correct ? '能答对' : '答不对'} (${item.text_only[k].pred ?? '-'})</span>`),
+    `<span>${esc(item.source)}</span>`, `<span>speaker: ${esc(item.speaker)}</span>`,
+    item.gold_is_longest ? '<span>正确项最长</span>' : '',
+    `<span>生成器 evidence: ${esc(item.generator_evidence_users.join(', '))}${item.speaker_in_generator_evidence ? '（含 speaker）' : ''}</span>`,
+  ].join('');
+  const opts = Object.entries(item.options).map(([k, t]) => {
+    const who = Object.keys(m).filter(x => m[x].pred === k).map(x => NAMES[x]).join(', ');
+    return `<li class="${k === item.gold ? 'gold' : ''}"><b>${k}.</b> ${esc(t)}${k === item.gold ? ' ✔' : ''}${who ? `<span class="who">← ${who}</span>` : ''}</li>`;
+  }).join('');
+  const tor = item.text_only || {};
+  const textReasons = Object.keys(tor).map(k =>
+    `<div class="reason"><b>${NAMES[k]} text only（选 ${tor[k].pred ?? '-'}，${tor[k].correct ? '对' : '错'}）理由：</b>\n${esc(tor[k].reason || '(无)')}</div>`).join('');
+  const reasons = Object.keys(m).map(k =>
+    `<div class="reason"><b>${NAMES[k]}（选 ${m[k].pred ?? '-'}，${m[k].correct ? '对' : '错'}）理由：</b>\n${linkReason(item, m[k].reason || '(无)', idx)}</div>`).join('');
+  const claims = item.generator_claims.map(c =>
+    `<li><b>${esc(c.user)}</b> (${esc(c.role)})：${c.claims.map(esc).join('；')}</li>`).join('');
+  return `<div class="card" id="c${idx}">
+    <div class="left">
+      <div class="grid6">${item.users.map((u, j) => `
+        <div class="pane ${u.role}">
+          <video id="v${idx}_${j}" src="${u.video}" preload="none" muted playsinline></video>
+          <div class="lab"><b>${esc(u.user)}</b> ${u.role === 'speaker' ? '(speaker，VQA 只给了这一路)' : '(provider)'}
+            · 输入 ${u.n_input_frames} 帧${u.in_generator_evidence ? ' · ★生成器 evidence' : ''}
+            · <span id="g${idx}_${j}"></span></div>
+        </div>`).join('')}
+      </div>
+      <div class="ctrl">
+        <span class="clock" id="k${idx}">${fmtClock(item, 0)}</span> · 时间格 <span id="f${idx}">1</span>/${item.n_frames}
+        · 生成器共输入 ${item.total_input_frames} 帧<br>
+        <input type="range" min="0" max="${item.n_frames - 1}" value="0" id="r${idx}"><br>
+        <button data-a="prev">◀ 格</button><button data-a="play">▶/❚❚</button><button data-a="next">格 ▶</button>
+        速度 <button data-s="1">1×</button><button data-s="4">4×</button><button data-s="10">10×</button><button data-s="20">20×</button>
+      </div>
+      <div class="small">六路同一时间轴（每格 2 s，0.5 fps，256²）；provider 被 keep_mask 去掉、生成器没看到的格显示深灰。黄框 = speaker。<br>${esc(item.packet_id)} ${esc(item.day)} ${esc(item.start_clock)} 起 10 min</div>
+    </div>
+    <div>
+      <div class="tags">${tags}</div>
+      <div class="q">${esc(item.question)}</div>
+      <ol class="opts">${opts}</ol>
+      ${reasons}
+      <details><summary>text only（不给帧）的回答与理由</summary>${textReasons}</details>
+      <details><summary>生成器自报的 evidence（出题时声称的依据）</summary><ul>${claims || '<li>(无)</li>'}</ul></details>
+      <div class="review" data-id="${esc(item.id)}">
+        <b>审核：</b><button data-v="pass">✓ 通过（保留）</button><button data-v="fail">✗ 不通过</button><button data-v="">清除</button>
+        <span class="small rstat"></span>
+        <textarea rows="2" placeholder="备注（可选，失焦自动保存）"></textarea>
+      </div>
+      <div class="small">${esc(item.id)}</div>
+    </div>
+  </div>`;
+}
+
+const STATE = {};
+function wire(item, idx) {
+  const vs = item.users.map((u, j) => document.getElementById(`v${idx}_${j}`));
+  const r = document.getElementById('r' + idx), fs = item.frame_seconds;
+  const st = STATE[idx] = {slot: 0, timer: null, speed: 1, loaded: false};
+  // 首次进入视口才加载；元数据到了再定位（preload=none 时直接设 currentTime 不可靠）
+  vs.forEach(v => v.addEventListener('loadedmetadata', () => { v.currentTime = st.slot * fs + 0.01; }));
+  const load = () => { if (!st.loaded) { st.loaded = true; vs.forEach(v => { v.preload = 'auto'; v.load(); }); } };
+  const show = k => {
+    st.slot = Math.min(Math.max(k, 0), item.n_frames - 1);
+    load();
+    vs.forEach(v => { v.currentTime = st.slot * fs + 0.01; });
+    r.value = st.slot;
+    document.getElementById('f' + idx).textContent = st.slot + 1;
+    document.getElementById('k' + idx).textContent = fmtClock(item, st.slot * fs);
+    item.users.forEach((u, j) => {
+      document.getElementById(`g${idx}_${j}`).innerHTML = u.kept[st.slot] === '1'
+        ? '<span class="in">本格已输入</span>' : '<span class="gap">本格未输入</span>';
+    });
+  };
+  st.show = show;
+  const stop = () => { clearInterval(st.timer); st.timer = null; };
+  const play = () => { stop(); st.timer = setInterval(() => {
+    if (st.slot >= item.n_frames - 1) return stop(); show(st.slot + 1); }, 2000 / st.speed); };
+  st.stop = stop;
+  r.addEventListener('input', () => { stop(); show(+r.value); });
+  document.querySelector('#c' + idx + ' .ctrl').addEventListener('click', e => {
+    const a = e.target.dataset.a, sp = e.target.dataset.s;
+    if (sp) { st.speed = +sp; play(); }
+    if (a === 'play') st.timer ? stop() : play();
+    if (a === 'prev' || a === 'next') { stop(); show(st.slot + (a === 'next' ? 1 : -1)); }
+  });
+  new IntersectionObserver((es, ob) => { if (es[0].isIntersecting) { show(st.slot); ob.disconnect(); } },
+                           {rootMargin: '200px'}).observe(document.getElementById('c' + idx));
+  const rv = document.querySelector('#c' + idx + ' .review');
+  rv.addEventListener('click', e => { const v = e.target.dataset.v;
+    if (v !== undefined && e.target.tagName === 'BUTTON') saveReview(idx, {verdict: v || null}); });
+  rv.querySelector('textarea').addEventListener('change', e => saveReview(idx, {note: e.target.value}));
+  paintReview(idx);
+  item.users.forEach((u, j) => { document.getElementById(`g${idx}_${j}`).innerHTML =
+    u.kept[0] === '1' ? '<span class="in">本格已输入</span>' : '<span class="gap">本格未输入</span>'; });
+}
+
+function render() {
+  const fm = document.getElementById('fModel').value, fl = document.getElementById('fLong').value;
+  const fe = document.getElementById('fEv').value, fsrc = document.getElementById('fSrc').value;
+  const fr = document.getElementById('fRev').value, ft = document.getElementById('fText').value;
+  const list = document.getElementById('list');
+  const shown = [];
+  DATA.items.forEach((it, i) => {
+    const c3 = it.models.qwen3.correct, c25 = it.models.qwen25.correct;
+    const okm = {any: true, qwen3: c3, qwen25: c25, both: c3 && c25, one: c3 !== c25}[fm];
+    if (!okm) return;
+    if (fl && String(+it.gold_is_longest) !== fl) return;
+    if (fe && String(+it.speaker_in_generator_evidence) !== fe) return;
+    if (fsrc && it.source !== fsrc) return;
+    const t3 = it.text_only.qwen3.correct, t25 = it.text_only.qwen25.correct;
+    if (ft && !{none: !t3 && !t25, any: t3 || t25, q3wrong: !t3, q25wrong: !t25}[ft]) return;
+    if (fr && ((REVIEWS[it.id] || {}).verdict || 'none') !== fr) return;
+    shown.push(i);
+  });
+  Object.values(STATE).forEach(st => st.stop && st.stop());
+  for (const k in STATE) delete STATE[k];
+  list.innerHTML = shown.map(i => card(DATA.items[i], i)).join('');
+  shown.forEach(i => wire(DATA.items[i], i));
+  document.getElementById('count').textContent = `显示 ${shown.length} / ${DATA.items.length} 题`;
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('.ts');
+  if (!t) return;
+  const idx = t.dataset.card, st = STATE[idx];
+  st.stop(); st.show(Math.floor(+t.dataset.t / 2));
+  document.getElementById('c' + idx).scrollIntoView({behavior: 'smooth', block: 'nearest'});
+});
+
+document.getElementById('export').addEventListener('click', () => {
+  const out = {reviewed_at: new Date().toISOString(), n_items: DATA.items.length,
+    pass: DATA.items.filter(i => (REVIEWS[i.id] || {}).verdict === 'pass').map(i => i.id),
+    fail: DATA.items.filter(i => (REVIEWS[i.id] || {}).verdict === 'fail').map(i => i.id), reviews: REVIEWS};
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 1)], {type: 'application/json'}));
+  a.download = 'speaker_viz_reviews.json'; a.click();
+});
+
+Promise.all([fetch('data.json').then(r => r.json()), fetch('reviews.json', {cache: 'no-store'}).then(r => r.json())]).then(([d, rv]) => {
+  DATA = d; REVIEWS = rv;
+  const m = d.meta;
+  document.getElementById('meta').textContent =
+    `${m.n_items} 题 · 选项为模型实际看到的重排顺序（seed 0），绿色为正确项 · 视频：${m.resolution}，${m.fps} fps（每 2 s 一帧，视频时间=窗口内秒数）· ${m.gap} · 理由里的时间可点击，六路同时跳到该时间`;
+  const srcs = [...new Set(d.items.map(i => i.source))].sort();
+  document.getElementById('fSrc').innerHTML += srcs.map(s => `<option>${esc(s)}</option>`).join('');
+  progress();
+  ['fModel', 'fLong', 'fEv', 'fSrc', 'fText', 'fRev'].forEach(id => document.getElementById(id).addEventListener('change', render));
+  render();
+});
+</script>
+</body>
+</html>

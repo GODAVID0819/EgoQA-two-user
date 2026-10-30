@@ -51,6 +51,7 @@ lxr 的 cp348 是在旧 prompt + brevity 段上训练的；用新 prompt 生成�
 | `slurm/train_dual.sbatch`、`slurm/fbloop.sbatch` | 提交脚本 |
 | `slurm/resume_audit.sbatch` | 续训前 CPU 核验断点（写 `reload_cpu_audit.json`）并跑 `recovery.validated_resume` |
 | `vqa/vqa_qwen25vl.py`、`vqa/vqa.sbatch` | 人工全 pass 题的多视角 VQA 评测（Qwen2.5-VL-7B / Qwen3-VL-8B，vLLM） |
+| `vqa/grpo_frames/`、`vqa/hf_upload/`、`vqa/README.md` | 用 GRPO 生成器同一套帧的 VQA（text only / speaker only / evidence providers / all6）、人工复审页面、hard56 与 textwrong131 子集及 HF 上传；说明和结果见 `vqa/README.md` |
 
 ## 一次性准备（Torch）
 

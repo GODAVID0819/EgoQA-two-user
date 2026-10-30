@@ -78,6 +78,7 @@ def main():
     ap.add_argument('--max-model-len', type=int, default=32768)
     ap.add_argument('--limit', type=int)
     ap.add_argument('--shuffle-seed', type=int)
+    ap.add_argument('--ids-file', type=Path, help='只跑这些题（JSON id 列表）')
     a = ap.parse_args()
     from qwen_vl_utils import process_vision_info
     from transformers import AutoProcessor
@@ -87,7 +88,11 @@ def main():
     a.size = a.size or (320 if patch == 16 else 336)
     if a.size % (2 * patch):
         raise ValueError(f'--size 须为 {2 * patch} 的倍数')
-    items = json.loads(DATA.read_text())['items'][:a.limit]
+    items = json.loads(DATA.read_text())['items']
+    if a.ids_file:
+        keep = set(json.loads(a.ids_file.read_text()))
+        items = [i for i in items if i['id'] in keep]
+    items = items[:a.limit]
     a.out.mkdir(parents=True, exist_ok=True)
     processor = AutoProcessor.from_pretrained(a.model)
     llm = LLM(a.model, max_model_len=a.max_model_len, limit_mm_per_prompt={'video': 6, 'image': 0},
@@ -129,7 +134,7 @@ def main():
             f.flush()
             print(f'{len(rows)}/{len(items)} acc={sum(r["is_correct"] for r in rows) / len(rows):.3f} '
                   f'{time.time() - t0:.0f}s', flush=True)
-    summary = {'setting': a.setting, 'model': a.model, 'data': str(DATA), 'frames_per_video': a.frames,
+    summary = {'setting': a.setting, 'model': a.model, 'data': str(DATA), 'frames_per_video': a.frames, 'ids_file': a.ids_file and a.ids_file.name,
                'frame_size': a.size, 'shuffle_seed': a.shuffle_seed,
                'gold_letter_counts': dict(sorted(Counter(r['correct'] for r in rows).items())), 'decoding': 'greedy, max_tokens 16, first A-E letter', **summarize(rows),
                'mean_prompt_tokens': round(sum(r['prompt_tokens'] for r in rows) / len(rows))}
