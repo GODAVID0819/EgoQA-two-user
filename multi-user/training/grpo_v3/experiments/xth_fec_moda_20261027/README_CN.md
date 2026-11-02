@@ -49,6 +49,7 @@ lxr 的 cp348 是在旧 prompt + brevity 段上训练的；用新 prompt 生成�
 | `materialize_root.sh` | 按 lxr README 的“独立根”布局物化运行目录（含 prompts.py 覆盖） |
 | `make_xth_configs.py` | 在运行根写 `configs/`：`train_continuous.json`、`train_continuous_gated.json`、`smoke_capacity.json`、`judge_fec.json`、`fbloop.json` |
 | `slurm/train_dual.sbatch`、`slurm/fbloop.sbatch` | 提交脚本 |
+| `prompts_generalanswer.py`、`make_ga_root.sh`、`make_a630_ga_configs.py`、`slurm/train_dual_ga.sbatch` | generalanswer prompt 独立运行根与 checkpoint-630 配置 |
 | `slurm/resume_audit.sbatch` | 续训前 CPU 核验断点（写 `reload_cpu_audit.json`）并跑 `recovery.validated_resume` |
 | `vqa/vqa_qwen25vl.py`、`vqa/vqa.sbatch` | 人工全 pass 题的多视角 VQA 评测（Qwen2.5-VL-7B / Qwen3-VL-8B，vLLM） |
 | `vqa/grpo_frames/`、`vqa/hf_upload/`、`vqa/README.md` | 用 GRPO 生成器同一套帧的 VQA（text only / speaker only / evidence providers / all6）、人工复审页面、hard56 与 textwrong131 子集及 HF 上传；说明和结果见 `vqa/README.md` |
@@ -126,6 +127,15 @@ sbatch --job-name=xth_lxr_grpo_gated --export=ALL,RUN_CONFIG=$ROOT/configs/train
 sbatch --job-name=xth_lxr_grpo_cont_px24k  --export=ALL,RUN_CONFIG=$ROOT/configs/train_continuous_px24576.json       $EXP/slurm/train_dual.sbatch
 sbatch --job-name=xth_lxr_grpo_gated_px24k --export=ALL,RUN_CONFIG=$ROOT/configs/train_continuous_gated_px24576.json $EXP/slurm/train_dual.sbatch
 ```
+
+新 C judge 与 generalanswer prompt（`make_a630_ga_configs.py` 写配置，`make_ga_root.sh` 建独立运行根 `$ROOT_ga`，只换 `multi-user/prompts.py` 并重建数据，不动 `$ROOT`）：
+
+| 任务 | prompt | `max_pixels` | C judge | 配置 |
+|---|---|---|---|---|
+| 21619020（系统取消，约第53步，留有 checkpoint-52） | `prompts(1).py` | 24576 | `answerability_checkpoint-630` | `$ROOT/configs/train_continuous_gated_px24576_a630.json` |
+| 21676092 | `prompts_generalanswer.py`（只改选项写法：原1条换成5条） | 50176（实测 224×224，每帧49个视觉token） | `answerability_checkpoint-630` | `lxr_run_ga/configs/train_continuous_gated_px50176_a630.json`，`slurm/train_dual_ga.sbatch`（72h） |
+
+两个 checkpoint-180 的 500 题反馈环（21676581 continuous、21676583 gated）：`configs/fbloop_px24576.json`，`COUNT=100,SAMPLES=5,ATTEMPTS=3`，旧 prompt、C340。
 
 - 入口是 lxr 的 `dual_launch.py`：每卡一个冻结 Judge 服务（与 Policy 同卡交替显存），两 rank DDP，每步两个不同窗口各 G4。
 - 输出 `$ROOT/outputs/<reward_mode>/train_<JobID>/`：`swift/v0-*/checkpoint-*`（每2步存、保留3个）、`rank*/reward_trace.jsonl`
