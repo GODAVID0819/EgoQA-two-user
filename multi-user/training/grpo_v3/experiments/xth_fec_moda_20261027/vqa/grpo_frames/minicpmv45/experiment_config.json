@@ -1,0 +1,38 @@
+{
+  "model": "openbmb/MiniCPM-V-4_5",
+  "model_revision": "daef484c35ec93210ec93c5e901f8f3e9b78ee34",
+  "dataset_repo": "tianxia2/egolife-six-user-mcqa-textwrong131",
+  "dataset_revision": "90e6e9bfbbe4b2f009bb37fdf25c1920e972a4a5",
+  "n": 131,
+  "settings": [
+    "evidence2",
+    "speaker1",
+    "all6"
+  ],
+  "source_experiment": "/scratch/xl6775/experiments/vqa_videollama3_grpo131_20261030",
+  "preprocess_square_size": 156,
+  "packing": 6,
+  "temporal_scale_seconds": 0.1,
+  "max_slice_nums": 1,
+  "use_image_id": false,
+  "enable_thinking": false,
+  "do_sample": false,
+  "num_beams": 1,
+  "repetition_penalty": 1.0,
+  "max_new_tokens": 512,
+  "batch_size": 4,
+  "seed": 0,
+  "native_context": 40960,
+  "gpu_time_limit_hours": 2,
+  "deadline_beijing": "2026-10-31T08:30:00+08:00",
+  "status": "COMPLETE_VERIFIED_JOB_21448178",
+  "reference_commit": "2fff59962208eccea1b6fa495e7f4f96129d21da",
+  "completed_gpu_job": "21448178",
+  "cpu_job": "21444333",
+  "failed_gpu_job": "21444890",
+  "actual_processor_size": [
+    448,
+    448
+  ],
+  "max_total_with_output": 19946
+}

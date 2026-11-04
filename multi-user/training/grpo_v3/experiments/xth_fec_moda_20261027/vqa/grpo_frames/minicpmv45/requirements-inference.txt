@@ -1,0 +1,11 @@
+# 已核对的核心版本；CUDA轮子使用cu124源，FlashAttention复用匹配Torch2.4的官方预编译轮子。
+torch==2.4.1+cu124
+torchvision==0.19.1+cu124
+transformers==4.51.3
+tokenizers==0.21.4
+flash-attn==2.7.3
+numpy==1.26.4
+huggingface-hub==0.36.2
+safetensors==0.8.0
+accelerate==1.0.1
+pillow==13.0.0

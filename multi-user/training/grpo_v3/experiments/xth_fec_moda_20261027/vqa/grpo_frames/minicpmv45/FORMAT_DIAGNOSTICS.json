@@ -1,0 +1,23 @@
+{
+  "counts": {
+    "evidence2": {
+      "strict_answer_format": 131,
+      "unparsed": 0
+    },
+    "speaker1": {
+      "strict_answer_format": 130,
+      "unparsed": 1
+    },
+    "all6": {
+      "strict_answer_format": 131,
+      "unparsed": 0
+    }
+  },
+  "unparsed_cases": [
+    {
+      "id": "j842:RLHF6U_DAY5_16240000_A1_A2_A3_A4_A5_A6__ASKER_A1::attempt_02",
+      "setting": "speaker1",
+      "raw": "Answer: <unable to determine>\nReason: The provided frames only show activities inside the store and do not contain any information about the car or parking garage where the shopping bags were loaded."
+    }
+  ]
+}

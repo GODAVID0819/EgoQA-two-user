@@ -1,0 +1,9 @@
+{
+  "time_limit_hours": 2,
+  "job_id": "21448178",
+  "gpu_count": 1,
+  "submitted_utc": "2026-10-30T19:12:20.875897+00:00",
+  "gpu_type": "H200",
+  "replaces_failed_job": "21444890",
+  "stage": "formal_393"
+}

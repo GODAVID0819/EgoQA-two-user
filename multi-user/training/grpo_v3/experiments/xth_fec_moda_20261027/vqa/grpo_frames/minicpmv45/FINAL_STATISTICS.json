@@ -1,0 +1,229 @@
+{
+  "status": "VERIFIED_393",
+  "job_id": "21448178",
+  "all131": {
+    "n": 131,
+    "conditions": {
+      "evidence2": {
+        "correct": 97,
+        "n": 131,
+        "accuracy_percent": 74.04580152671755
+      },
+      "speaker1": {
+        "correct": 63,
+        "n": 131,
+        "accuracy_percent": 48.091603053435115
+      },
+      "all6": {
+        "correct": 89,
+        "n": 131,
+        "accuracy_percent": 67.93893129770993
+      }
+    },
+    "comparisons": {
+      "evidence2_minus_all6": {
+        "first_only_correct": 16,
+        "second_only_correct": 8,
+        "both_correct": 81,
+        "both_wrong": 26,
+        "gap_pp": 6.106870229007634
+      },
+      "evidence2_minus_speaker1": {
+        "first_only_correct": 43,
+        "second_only_correct": 9,
+        "both_correct": 54,
+        "both_wrong": 25,
+        "gap_pp": 25.954198473282442
+      },
+      "all6_minus_speaker1": {
+        "first_only_correct": 35,
+        "second_only_correct": 9,
+        "both_correct": 54,
+        "both_wrong": 33,
+        "gap_pp": 19.84732824427481
+      }
+    }
+  },
+  "strict_two_evidence": {
+    "n": 130,
+    "conditions": {
+      "evidence2": {
+        "correct": 97,
+        "n": 130,
+        "accuracy_percent": 74.61538461538461
+      },
+      "speaker1": {
+        "correct": 63,
+        "n": 130,
+        "accuracy_percent": 48.46153846153846
+      },
+      "all6": {
+        "correct": 88,
+        "n": 130,
+        "accuracy_percent": 67.6923076923077
+      }
+    },
+    "comparisons": {
+      "evidence2_minus_all6": {
+        "first_only_correct": 16,
+        "second_only_correct": 7,
+        "both_correct": 81,
+        "both_wrong": 26,
+        "gap_pp": 6.923076923076923
+      },
+      "evidence2_minus_speaker1": {
+        "first_only_correct": 43,
+        "second_only_correct": 9,
+        "both_correct": 54,
+        "both_wrong": 24,
+        "gap_pp": 26.153846153846153
+      },
+      "all6_minus_speaker1": {
+        "first_only_correct": 34,
+        "second_only_correct": 9,
+        "both_correct": 54,
+        "both_wrong": 33,
+        "gap_pp": 19.23076923076923
+      }
+    }
+  },
+  "exclude_review_fail": {
+    "n": 114,
+    "conditions": {
+      "evidence2": {
+        "correct": 87,
+        "n": 114,
+        "accuracy_percent": 76.3157894736842
+      },
+      "speaker1": {
+        "correct": 53,
+        "n": 114,
+        "accuracy_percent": 46.49122807017544
+      },
+      "all6": {
+        "correct": 80,
+        "n": 114,
+        "accuracy_percent": 70.17543859649123
+      }
+    },
+    "comparisons": {
+      "evidence2_minus_all6": {
+        "first_only_correct": 14,
+        "second_only_correct": 7,
+        "both_correct": 73,
+        "both_wrong": 20,
+        "gap_pp": 6.140350877192983
+      },
+      "evidence2_minus_speaker1": {
+        "first_only_correct": 42,
+        "second_only_correct": 8,
+        "both_correct": 45,
+        "both_wrong": 19,
+        "gap_pp": 29.82456140350877
+      },
+      "all6_minus_speaker1": {
+        "first_only_correct": 35,
+        "second_only_correct": 8,
+        "both_correct": 45,
+        "both_wrong": 26,
+        "gap_pp": 23.68421052631579
+      }
+    }
+  },
+  "unparsed": {
+    "evidence2": 0,
+    "speaker1": 1,
+    "all6": 0
+  },
+  "missing_reason": {
+    "evidence2": 0,
+    "speaker1": 0,
+    "all6": 0
+  },
+  "hit_max_output_tokens": {
+    "evidence2": 1,
+    "speaker1": 0,
+    "all6": 0
+  },
+  "cluster_bootstrap": {
+    "clusters": 69,
+    "replicates": 10000,
+    "seed": 0,
+    "evidence2_minus_all6_ci95_pp": [
+      0.0,
+      12.587412587412587
+    ]
+  },
+  "model": "openbmb/MiniCPM-V-4_5",
+  "model_revision": "daef484c35ec93210ec93c5e901f8f3e9b78ee34",
+  "native_context": 40960,
+  "actual_processor_size": [
+    448,
+    448
+  ],
+  "gpu_monitor": {
+    "samples": 509,
+    "sample_period_seconds": 5,
+    "sample_mean_utilization_percent": 42.82514734774067,
+    "sample_peak_memory_mib": 55117.0,
+    "note": "5秒采样均值；峰值包含短时辅助加载。任务完成不等于长期低利用率保护已获验证。"
+  },
+  "cpu_prefetch": {
+    "status": "COMPLETE",
+    "gpu_count": 0,
+    "threads": 8,
+    "job_id": "21448178",
+    "host": "gh126.hpc.nyu.edu",
+    "frames": 60749,
+    "bytes_read": 2134269135,
+    "elapsed_seconds": 28.538040122948587,
+    "source_modified": false
+  },
+  "tail_preencode": {
+    "status": "COMPLETE",
+    "job_id": "21448178",
+    "model_revision": "daef484c35ec93210ec93c5e901f8f3e9b78ee34",
+    "groups": 0,
+    "elapsed_seconds": 0.013841289095580578,
+    "stop_reason": "main_process_nearby",
+    "new_gpu_allocation": 0,
+    "shares_existing_gpu": true,
+    "answers_generated": 0,
+    "preserves_main_batch_size": 4
+  },
+  "run_status": {
+    "status": "COMPLETE_393",
+    "n": 393,
+    "elapsed_seconds": 2520.737212049309,
+    "encoded_groups": 19687
+  },
+  "artifact_kind": "从远端独立审计聚合查询生成的本地衍生统计，不是原始预测文件下载",
+  "verified_local_time": "2026-10-31T04:04:15.647590",
+  "jobs": {
+    "21444333": {
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_seconds": 273,
+      "gpu_count": 0
+    },
+    "21444890": {
+      "state": "FAILED",
+      "exit_code": "1:0",
+      "elapsed_seconds": 100,
+      "gpu_count": 1,
+      "prediction_count": 0
+    },
+    "21448178": {
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed_seconds": 2547,
+      "gpu_count": 1,
+      "gpu_type": "H200",
+      "prediction_count": 393,
+      "start_beijing": "2026-10-31T03:12:42+08:00",
+      "end_beijing": "2026-10-31T03:55:09+08:00"
+    }
+  },
+  "total_gpu_allocated_seconds": 2647,
+  "total_gpu_hours": 0.7352777777777778
+}

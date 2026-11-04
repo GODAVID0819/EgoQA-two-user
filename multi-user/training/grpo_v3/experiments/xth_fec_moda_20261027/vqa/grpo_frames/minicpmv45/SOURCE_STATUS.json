@@ -1,0 +1,11 @@
+{
+  "checked_local": "2026-10-31T03:48:08.691617",
+  "git_root": "C:/Users/20661/Desktop/Research/AR/multiuser/EgoQA-two-user",
+  "branch": "grpo/qa-cross-view-relation-v2",
+  "head": "e503ffc37c02556a62f8df8363640e104f6238cb",
+  "dirty_entries": 78,
+  "reference_copy_matches_previous": true,
+  "reference_commit": "2fff59962208eccea1b6fa495e7f4f96129d21da",
+  "new_code_location": "isolated_runtime_directory_no_git_mutation",
+  "git_status_note": "git返回78条状态；扫描部分原有长路径时产生警告，不能将其解释为完整文件清单。未修改Git配置或任何已有工作区文件。"
+}
