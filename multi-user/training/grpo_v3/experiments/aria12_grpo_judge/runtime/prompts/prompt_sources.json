@@ -1,0 +1,29 @@
+{
+  "source_experiment": "xth_fec_moda_20261027",
+  "changes": "只在本实验副本适配三人、两个provider和packet已记录的同步边界；旧模板不变。",
+  "F": {
+    "model_visible_template": "formality_prompt.txt",
+    "bindings": {
+      "<DETERMINISTIC_SCHEMA_RESULT_JSON>": "真实结构与姓名泄漏检查",
+      "<PARTICIPANT_NAMES_JSON>": "真实三名参与者，只用于姓名泄漏检查",
+      "<QUESTION_ANSWER_ITEM_JSON>": "题面、五个选项、correct、answer，不包含生成器解释或模型评审结果"
+    }
+  },
+  "E": {
+    "model_visible_template": "groundedness_model_prompt.txt",
+    "bindings": {
+      "{video_packet_brief(packet)}": "真实三视角完整采样时间线与媒体顺序",
+      "{qa_item JSON}": "对应QA；用户身份由真实packet覆盖",
+      "{alignment_notice}": "只来自packet.selection，不采用模型生成的同步声明"
+    }
+  },
+  "C": {
+    "model_visible_template": "combined_answerability_judge_prompt.txt",
+    "bindings": {
+      "{question}": "仅真实问题正文，不传选项、答案或生成器解释",
+      "{alignment_notice}": "只来自packet.selection，不采用模型生成的同步声明"
+    },
+    "media": "第一组speaker，随后两个provider；900帧完整时间线",
+    "condition": "同时满足speaker-alone不足与all-three足够"
+  }
+}
