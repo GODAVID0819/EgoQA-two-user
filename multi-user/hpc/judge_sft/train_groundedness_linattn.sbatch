@@ -7,29 +7,34 @@
 #SBATCH --time=1-23:59:00
 #SBATCH --output=/scratch/%u/multi_user_qa/logs/%x_%j.out
 # Groundedness judge with LoRA on attention, MLP and the 5 linear-attention
-# projections (upper TRAINABLE_LAYERS decoder layers, default 8), 0.25 FPS, GA=4, cosine + 5% warmup, 10 epochs,
+# projections (upper TRAINABLE_LAYERS decoder layers, default 16), 0.25 FPS, GA=4, cosine + 5% warmup, 10 epochs,
 # held-out test evaluation after every epoch.
+#
+# Defaults reproduce the groundedness judge in use: job 19851632
+# (runs/groundedness_linattn_L16_r128_a128_lr1e-4_noclassw_ga4_cosine_w005_job19851632), video-disjoint split;
+# the adapter used is trainer/checkpoint-676 = end of epoch 4 of the 10-epoch cosine schedule (169 steps/epoch),
+# HF tianxia2/egolife-groundedness-judge-linattn-L16-r128/epoch4.
 #
 # Per-experiment knobs (pass with sbatch --export=ALL,KEY=VALUE,...):
 #   LORA_RANK      LoRA rank r                       (default 128)
 #   LORA_ALPHA     LoRA alpha; alpha/r is the scale  (default = LORA_RANK)
 #   LR             peak learning rate                (default 1e-4)
 #   CLASS_WEIGHTS  1 = inverse-frequency PASS/FAIL weights, 0 = plain BCE (default 0)
-#   TRAINABLE_LAYERS  number of last decoder layers with LoRA (default 8)
-#   MANIFESTS      split directory with train/ and test/ (default: question split)
+#   TRAINABLE_LAYERS  number of last decoder layers with LoRA (default 16)
+#   MANIFESTS      split directory with train/ and test/ (default: video split manifests_842_video_split)
 #   RESUME         full-state checkpoint dir to resume from (optional)
 set -euo pipefail
 
 REPO=${REPO:-/scratch/$USER/multi_user_qa/repo_check/multi-user}
 ENV=${ENV:-/scratch/$USER/.conda/envs/qwen38-vllm}
 MODEL=${MODEL:-/scratch/hm2991/egolife_vllm_runtime/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0}
-MANIFESTS=${MANIFESTS:-/scratch/$USER/multi_user_qa/manifests_842_question_split}
+MANIFESTS=${MANIFESTS:-/scratch/$USER/multi_user_qa/video_split/manifests_842_video_split}
 
 LORA_RANK=${LORA_RANK:-128}
 LORA_ALPHA=${LORA_ALPHA:-$LORA_RANK}
 LR=${LR:-1e-4}
 CLASS_WEIGHTS=${CLASS_WEIGHTS:-0}
-TRAINABLE_LAYERS=${TRAINABLE_LAYERS:-8}
+TRAINABLE_LAYERS=${TRAINABLE_LAYERS:-16}
 RESUME=${RESUME:-}
 
 if [ "$CLASS_WEIGHTS" = "1" ]; then CW_TAG=classw; CW_ARGS=(); else CW_TAG=noclassw; CW_ARGS=(--no-class-weights); fi
