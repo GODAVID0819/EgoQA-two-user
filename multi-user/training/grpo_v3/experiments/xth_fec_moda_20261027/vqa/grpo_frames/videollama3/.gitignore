@@ -1,0 +1,14 @@
+# 通过固定版本下载的数据和官方模型文件，不进入代码提交。
+/dataset.json
+/vqa_shuffled.json
+/upstream/
+/local_hf_cache/
+/local_tests.log
+/LOCAL_VERIFICATION.json
+/LOCAL_PROMPT_AUDIT.json
+/frames_156/
+/original_video_cache/
+/model/
+/runtime/
+/jobs/
+*.zip
