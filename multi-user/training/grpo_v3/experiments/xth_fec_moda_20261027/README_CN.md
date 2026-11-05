@@ -50,8 +50,10 @@ lxr 的 cp348 是在旧 prompt + brevity 段上训练的；用新 prompt 生成�
 | `make_xth_configs.py` | 在运行根写 `configs/`：`train_continuous.json`、`train_continuous_gated.json`、`smoke_capacity.json`、`judge_fec.json`、`fbloop.json` |
 | `slurm/train_dual.sbatch`、`slurm/fbloop.sbatch` | 提交脚本 |
 | `prompts_generalanswer.py`、`make_ga_root.sh`、`make_a630_ga_configs.py`、`slurm/train_dual_ga.sbatch` | generalanswer prompt 独立运行根与 checkpoint-630 配置 |
+| `build_newasker.py`、`make_newasker_configs.py`、`slurm/fbloop_ga.sbatch` | 新 asker 的 600 题反馈环：每窗口挑 1 个没被已完成反馈环用过的 asker，`validation_seed` 20261104；配置分 C630（`judge_fec_a630.json`）与 C340（`judge_fec_a340.json`）两份 |
 | `slurm/resume_audit.sbatch` | 续训前 CPU 核验断点（写 `reload_cpu_audit.json`）并跑 `recovery.validated_resume` |
 | `vqa/vqa_qwen25vl.py`、`vqa/vqa.sbatch` | 人工全 pass 题的多视角 VQA 评测（Qwen2.5-VL-7B / Qwen3-VL-8B，vLLM） |
+| `vqa/vqa_video_1fps.py`、`vqa/vqa_video_1fps.sbatch`、`vqa/grpo_frames/build_ae_revised_vqa.py` | 完整视频版 VQA：每人 10 分钟视频 1fps 取 600 帧、320×320（每段 30000 视觉 token），一个任务内跑多个设置；`build_ae_revised_vqa.py` 把 131 题改选项版转成题目 JSON |
 | `vqa/grpo_frames/`、`vqa/hf_upload/`、`vqa/README.md` | 用 GRPO 生成器同一套帧的 VQA（text only / speaker only / evidence providers / all6）、人工复审页面、hard56 与 textwrong131 子集及 HF 上传；说明和结果见 `vqa/README.md` |
 
 ## 一次性准备（Torch）
@@ -146,6 +148,21 @@ sbatch --job-name=xth_lxr_grpo_gated_px24k --export=ALL,RUN_CONFIG=$ROOT/configs
   `recovery.validated_resume` 会逐项核对。
 - 训练完的 checkpoint 可直接作为下面反馈环的 `ADAPTER`。
 
+### 当前用于生成的 checkpoint：21676092 checkpoint-180
+
+- 设置：generalanswer prompt、`continuous_gated`（0.2F + 0.4E + 0.4C·[E>0.5]，加多样性奖励）、50176 像素、C judge = `answerability_checkpoint-630`，
+  其余超参同上表；2×H200，`stop_after_steps` 180（cosine 按 360 步调度），实际墙钟 36.3h。
+- 每步平均 reward：前 10 步 0.486，后 10 步 0.685，EMA 0.653。
+- checkpoint：`lxr_run_ga/outputs/continuous_gated_px50176_a630/train_21676092/swift/v0-20261102-133525/checkpoint-180`。
+- 注意：720 个（窗口, asker）条件全部用于训练，没有留出；下面的生成都在训练见过的条件上。
+
+```bash
+GA=/scratch/tx856/multi_user_qa/lxr_run_ga
+bash $EXP/make_ga_root.sh $ROOT $GA                       # CPU 作业（见脚本头）
+python $EXP/make_a630_ga_configs.py $ROOT $GA
+sbatch --job-name=xth_lxr_grpo_ga --export=ALL,RUN_CONFIG=$GA/configs/train_continuous_gated_px50176_a630.json $EXP/slurm/train_dual_ga.sbatch
+```
+
 ## 三轮 Judge 反馈环生成
 
 ```bash
@@ -167,6 +184,21 @@ sbatch --job-name=xth_lxr_fbloop_cp348_1000 \
 - 续跑：加 `RESUME_DIR=$ROOT/outputs/feedback_loop/fbloop_<JobID>`，其余参数与原运行相同。
 - 输出 `$ROOT/outputs/feedback_loop/fbloop_<JobID>/`：`rank*/feedback_loop.json`（每题每轮的 seed、收到的反馈、原始输出、
   三个 Judge 概率/是否通过、Judge 原始续写、给下一轮的反馈）、`feedback_loop_summary.json`（每轮结束后各 Judge 通过率与各轮接受数）。
+
+### 新 asker 的 600 题（checkpoint-180 of 21676092）
+
+```bash
+python $EXP/build_newasker.py                               # 写 $GA/data/fbloop_newasker120_ga.jsonl
+python $EXP/make_newasker_configs.py $GA
+A=$GA/outputs/continuous_gated_px50176_a630/train_21676092/swift/v0-20261102-133525/checkpoint-180
+sbatch --job-name=xth_fbloop_ga_newasker600 \
+  --export=ALL,RUN_CONFIG=$GA/configs/fbloop_ga_px50176_a630_newasker.json,ADAPTER=$A,COUNT=120,SAMPLES=5,ATTEMPTS=3 $EXP/slurm/fbloop_ga.sbatch
+# C340 版：RUN_CONFIG 换成 fbloop_ga_px50176_a340_newasker.json，其余相同
+```
+
+- 之前三批（cp348 1000 题、两个 checkpoint-180 各 500 题）都用 `validation_v2` 前 100 个（窗口, 原验证 speaker），base seed 42，
+  continuous 与 gated 两批首轮 seed 完全相同。新批次 120 个窗口每个换 1 个没用过的 asker（20 个窗口三批都没用过，100 个只在取消的
+  21073148/9 用过），`validation_seed` 20261104。
 
 ## 多视角 VQA 评测（人工全 pass 的 169 题）
 
@@ -219,6 +251,12 @@ Qwen2.5-VL-7B，选项重排 seed 0（正确答案 A25/B38/C30/D42/E34；作业 
 | 21172903 | CPU 单测（含新 prompts.py） | 61 项 OK |
 | 21173114 | CPU：用新 prompt 重建 720 训练行、120 验证行、容量对 | 720 + 120 行全部通过（图片/帧数/speaker 顺序不变），无 brevity 段、无 CLIP/剪枝描述 |
 | 21176520 | 反馈环 smoke（新 prompt），cp348，2输入×2题×2轮 | 完成；输出约 4000–5000 字符（无 brevity 段，比旧 prompt 长），8 次生成中 1 次 answer 与 correct 不一致判为非法 |
-| 21179169 | **正式生成**：cp348，新 prompt，validation_v2 前100条 × 10 = 1000 题，最多3轮 | 运行中，输出 `$ROOT/outputs/feedback_loop/fbloop_21179169/` |
+| 21179169 | **正式生成**：cp348，新 prompt，validation_v2 前100条 × 10 = 1000 题，最多3轮 | 三项都过 771/1000 = 77.1% |
+| 21676581 | 反馈环：continuous checkpoint-180（px24576），100 输入 × 5 = 500 题，C340 | 三项都过 250/500 = 50.0%（F 82.0 / E 62.6 / C 75.0%），第 1/2/3 轮接受 88/79/83 |
+| 21676583 | 反馈环：continuous_gated checkpoint-180（px24576），同上 | 三项都过 233/500 = 46.6%（F 82.2 / E 67.6 / C 67.0%），第 1/2/3 轮接受 80/86/67 |
+| 21676092 | GRPO：generalanswer prompt、gated、px50176、C630 | 跑到 180 步停（36.3h）；reward 前10步 0.486 → 后10步 0.685 |
+| 21836869 | 新 asker 反馈环 smoke（2×2×2） | 完成 |
+| 21839296 | 新 asker 600 题，21676092 checkpoint-180，C630 | 三项都过 512/600 = 85.3%（F 92.3 / E 89.7 / C 98.5%），第 1/2/3 轮接受 282/164/66；C630 几乎全过，与 C340 批次不可直接比 |
+| 21874738 | 同 21839296，C 换 C340 | 运行中 |
 
 这些只证明工程链路可用；Judge 代理通过率不等于人工正确率。
