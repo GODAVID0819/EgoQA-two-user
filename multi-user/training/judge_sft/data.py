@@ -28,6 +28,8 @@ SUPPORTED_FRAME_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 class FrameSet:
     label: str
     frames: tuple[str, ...]
+    times_seconds: tuple[float, ...] = ()
+    cuts_before: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,7 @@ class JudgeExample:
     frame_sets: tuple[FrameSet, ...] = ()
     condition_type: str | None = None
     loss_weight_multiplier: float = 1.0
+    split_group_id: str | None = None
 
     @property
     def target(self) -> int:
@@ -287,6 +290,11 @@ def normalized_record_to_example(
 ) -> JudgeExample:
     if not isinstance(row, dict):
         raise ValueError(f"{location}: expected a JSON object")
+    if row.get("condition_type") == "cross_view_requirement":
+        from .aria12 import cross_view_record_to_example
+        return cross_view_record_to_example(
+            row, location=location, require_frame_files=require_frame_files
+        )
     if "videos" in row or "video_order" in row:
         raise ValueError(
             f"{location}: native-video manifests are obsolete; use packet-owned "
@@ -365,6 +373,10 @@ def iter_normalized_manifest(
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise ValueError(f"{path}:{line_number}: invalid JSON: {exc}") from exc
+            if isinstance(row, dict) and row.get("condition_type") == "cross_view_requirement" and row.get("frame_packet"):
+                packet = Path(row["frame_packet"]).expanduser()
+                if not packet.is_absolute():
+                    row["frame_packet"] = str(path.parent / packet)
             example = normalized_record_to_example(
                 row,
                 location=f"{path}:{line_number}",

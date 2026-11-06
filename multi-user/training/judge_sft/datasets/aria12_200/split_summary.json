@@ -1,0 +1,40 @@
+{
+  "scope": "同场景留题测试；两个集合均使用同一个12窗packet。",
+  "seed": 17,
+  "validation_count": 0,
+  "train": {
+    "count": 160,
+    "labels": {
+      "pass": 40,
+      "fail": 120
+    },
+    "failure_types": {
+      "joint_pass": 40,
+      "unsupported_or_ambiguous": 86,
+      "speaker_sufficient": 34
+    }
+  },
+  "test": {
+    "count": 40,
+    "labels": {
+      "pass": 10,
+      "fail": 30
+    },
+    "failure_types": {
+      "joint_pass": 10,
+      "unsupported_or_ambiguous": 27,
+      "speaker_sufficient": 3
+    }
+  },
+  "test_fact_groups": [
+    "blue_wall_article",
+    "chess_setup_moves_sides",
+    "drink_vessels_and_holders",
+    "office_plant",
+    "payment_method"
+  ],
+  "split_group_overlap": [],
+  "media_group_overlap": [
+    "ARIA12_SCENE_PACKET_01"
+  ]
+}

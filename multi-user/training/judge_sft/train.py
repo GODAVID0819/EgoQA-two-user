@@ -1475,6 +1475,8 @@ def main() -> None:
         "contract_version": "verdict_token_bce_independent_images_tp2_upper16_v9_probe",
         "model_id": args.model_id,
         "media_contract": (
+            "12 independent windows at 0.5 FPS, speaker first, with inline window and frame labels"
+            if getattr(args, "test_manifest", None) else
             "packet-owned 300-frame user timelines sampled at 0.5 FPS; every "
             "sampled JPEG is an independent Qwen image item; one speaker group "
             "or six complete chronological image groups"
@@ -1491,7 +1493,10 @@ def main() -> None:
             "tensor_parallel_size": args.tensor_parallel_size,
             "data_parallel_size": 1,
             "rank_identity_check": "all-gather stable example fingerprint before every forward",
-            "checkpoint_state": "adapter/model only; optimizer-state resume is unsupported",
+            "checkpoint_state": (
+                "adapter/model only" if hf_training_args.save_only_model
+                else "adapter, optimizer, scheduler and trainer/RNG state"
+            ),
             "tp_plan": tp_plan_audit,
             "preflight": sampler_audit,
         },
@@ -1514,6 +1519,8 @@ def main() -> None:
         "optimization_train": manifest_summary(optimization_examples),
         "internal_validation": None,
         "checkpoint_policy": (
+            "fixed final epoch adapter; evaluate the held-out test once after training"
+            if getattr(args, "test_manifest", None) else
             "save and retain every epoch checkpoint; select later with separately "
             "labeled standalone validation and test sets"
         ),

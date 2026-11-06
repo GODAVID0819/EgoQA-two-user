@@ -290,6 +290,11 @@ class JudgeFrameCollator:
             )
         content.append({"type": "text", "text": model_visible_prompt(example)})
         messages = [{"role": "user", "content": content}]
+        if example.condition_type == "cross_view_requirement":
+            from .aria12 import visual_messages
+            messages = visual_messages(
+                example, min_pixels=self.min_pixels, max_pixels=effective_max_pixels
+            )
         rendered = _apply_chat_template(self.processor, messages)
         _assert_thinking_disabled(rendered)
         rendered += VERDICT_ASSISTANT_PREFIX
