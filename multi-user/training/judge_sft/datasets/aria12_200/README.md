@@ -8,4 +8,6 @@
 
 Torch 使用 Qwen3.8-27B 基座，双 H200 TP2，微批1，累积4，LoRA r128/α128，末16层，学习率2e-5，普通BCE。固定5轮共200步。每轮保存断点，最终保存 `final_adapter` 后在40题上评估一次。输出 `test_predictions.jsonl` 和 `test_metrics.json`。
 
+首个GPU作业22137615在数据加载阶段因临时套接字地址过长停留于0步，之后被系统取消。入口使用短路径 `/scratch/$USER/jt/$SLURM_JOB_ID` 指向本次作业缓存，存储检查仍核实实际路径归属。模型加载前通过 `check_worker_transport` 实际创建Unix套接字，并跨进程传递PyTorch张量。失败日志及原JobID保留。
+
 现场核对 `JUDGE_PROJECT`、`JUDGE_REPO`、`JUDGE_ENV`、`JUDGE_MODEL` 后提交 `hpc/judge_sft/preflight_aria12.sbatch` 做正式处理器CPU检查。通过后，把该作业的 `processor_preflight.json` 路径作为 `JUDGE_PREFLIGHT`，按现场账户与时限提交 `hpc/judge_sft/train_aria12_answerability.sbatch`。产物按作业号保存在 `jobs/`。GPU监控记录时间、卡UUID、利用率和显存。

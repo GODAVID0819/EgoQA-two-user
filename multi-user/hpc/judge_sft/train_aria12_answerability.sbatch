@@ -19,6 +19,16 @@ input_root="$JUDGE_PROJECT/input"
 mkdir -p "$job_root"
 cd "$JUDGE_REPO"
 
+# Linux套接字地址有长度上限。短别名仍解析到本次作业的scratch目录。
+socket_root="/scratch/$USER/jt"
+socket_tmp="$socket_root/$SLURM_JOB_ID"
+mkdir -p "$job_cache/tmp" "$socket_root"
+if [[ -e "$socket_tmp" || -L "$socket_tmp" ]]; then
+  test "$(readlink -f "$socket_tmp")" = "$(readlink -f "$job_cache/tmp")"
+else
+  ln -s "$job_cache/tmp" "$socket_tmp"
+fi
+
 job_env=(
   "HOME=$job_cache/home"
   "XDG_CACHE_HOME=$job_cache/xdg"
@@ -31,15 +41,20 @@ job_env=(
   "VLLM_CACHE_ROOT=$job_cache/vllm"
   "CUDA_CACHE_PATH=$job_cache/cuda"
   "FLASHINFER_WORKSPACE_BASE=$job_cache/flashinfer"
-  "TMPDIR=$job_cache/tmp" "TMP=$job_cache/tmp" "TEMP=$job_cache/tmp"
+  "TMPDIR=$socket_tmp" "TMP=$socket_tmp" "TEMP=$socket_tmp"
   "HF_HUB_OFFLINE=1" "TOKENIZERS_PARALLELISM=false" "PYTHONUNBUFFERED=1"
   "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 )
 
 env "${job_env[@]}" "$JUDGE_ENV/bin/python" -m training.torch_storage_preflight \
   --allowed-root "$job_root" --output "$job_root/storage_preflight.json"
+env "${job_env[@]}" "$JUDGE_ENV/bin/python" -m training.judge_sft.check_worker_transport \
+  --output "$job_root/worker_transport_check.json"
 
 git rev-parse HEAD > "$job_root/git_commit.txt"
+if [[ "${JUDGE_STAGE:-train}" == "transport" ]]; then
+  exit 0
+fi
 if [[ "${JUDGE_STAGE:-train}" == "preflight" ]]; then
   env "${job_env[@]}" "$JUDGE_ENV/bin/python" -m training.judge_sft.check_aria12_inputs \
     --model "$JUDGE_MODEL" --input "$input_root" --output "$job_root/processor_preflight.json"
