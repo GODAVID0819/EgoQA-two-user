@@ -20,6 +20,10 @@ for name in HOME XDG_CACHE_HOME HF_HOME HF_DATASETS_CACHE MODELSCOPE_CACHE TORCH
 done
 env "${job_env[@]}" "$JUDGE_ENV/bin/python" -m training.torch_storage_preflight \
   --allowed-root "$job_root" --output "$job_root/storage_preflight.json"
+nvidia-smi --query-gpu=timestamp,index,uuid,utilization.gpu,memory.used --format=csv,noheader,nounits \
+  --loop=2 > "$job_root/gpu.csv" &
+gpu_monitor_pid=$!
+trap 'kill "$gpu_monitor_pid" 2>/dev/null || true' EXIT
 env "${job_env[@]}" HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false \
   "$JUDGE_ENV/bin/python" -m training.judge_sft.evaluate_aria12 \
   --model-id "$JUDGE_MODEL" --adapter-dir "$JUDGE_EVAL_ADAPTER" \
