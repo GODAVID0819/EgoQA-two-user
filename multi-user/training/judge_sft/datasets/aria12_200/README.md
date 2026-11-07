@@ -14,4 +14,8 @@ Torch 使用 Qwen3.8-27B 基座，双 H200 TP2，微批1，累积4，LoRA r128/�
 
 22155006通过FLA前向/反向对照后，在完整长序列MLP反向重计算中显存不足。入口对逐token独立的MLP按2048 token分块，并在块内使用非重入检查点。CPU回归验证嵌套检查点下的输出、输入梯度及所有参数梯度一致。全部帧和训练超参数继续沿用。
 
+用户随后要求逐轮评测并对比旧C630，40题作为checkpoint选择评测集使用，启用GRPO的数值阈值待看对比结果后确定。独立 `watch_epoch_evaluations` 监视第40/80/120/160步完整checkpoint并安排单H200评测，当前训练的第200步继续由原入口完成评测。`evaluate_aria12` 对旧C630和新adapter使用相同40题、12窗顺序、模板、像素上限及0.5判定阈值。
+
+Aria入口支持TP2或TP4。四卡吞吐检查使用 `--tensor-parallel-size 4 --benchmark-steps 2 --mlp-chunk-size 0`，保持微批1/累积4及全部输入，只执行两次更新，不读取评测分数或输出正式训练模型。正式4卡训练是否启动依据测得速度确定；当前2卡作业继续执行。
+
 现场核对 `JUDGE_PROJECT`、`JUDGE_REPO`、`JUDGE_ENV`、`JUDGE_MODEL` 后提交 `hpc/judge_sft/preflight_aria12.sbatch` 做正式处理器CPU检查。通过后，把该作业的 `processor_preflight.json` 路径作为 `JUDGE_PREFLIGHT`，按现场账户与时限提交 `hpc/judge_sft/train_aria12_answerability.sbatch`。产物按作业号保存在 `jobs/`。GPU监控记录时间、卡UUID、利用率和显存。

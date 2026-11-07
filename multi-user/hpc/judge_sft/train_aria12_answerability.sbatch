@@ -68,12 +68,16 @@ nvidia-smi --query-gpu=timestamp,index,uuid,utilization.gpu,memory.used,memory.t
 monitor_pid=$!
 trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
 
-env "${job_env[@]}" "$JUDGE_ENV/bin/torchrun" --standalone --nproc_per_node=2 \
+tp_size="${JUDGE_TP_SIZE:-2}"
+benchmark_steps="${JUDGE_BENCHMARK_STEPS:-0}"
+mlp_chunk_size="${JUDGE_MLP_CHUNK_SIZE:-2048}"
+env "${job_env[@]}" "$JUDGE_ENV/bin/torchrun" --standalone --nproc_per_node="$tp_size" \
   -m training.judge_sft.train_aria12 \
   --train-manifest "$input_root/train.jsonl" --test-manifest "$input_root/test.jsonl" \
   --model-id "$JUDGE_MODEL" --local-files-only --output-dir "$job_root/trainer" \
   --task answerability --epochs 5 --gradient-accumulation-steps 4 \
-  --tensor-parallel-size 2 --attn-implementation sdpa \
+  --tensor-parallel-size "$tp_size" --attn-implementation sdpa \
+  --benchmark-steps "$benchmark_steps" --mlp-chunk-size "$mlp_chunk_size" \
   --min-pixels 3136 --max-pixels 119808 --max-input-tokens 262144 \
   --lora-rank 128 --lora-alpha 128 --lora-dropout 0.05 --trainable-decoder-layers 16 \
   --lora-target-modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj \

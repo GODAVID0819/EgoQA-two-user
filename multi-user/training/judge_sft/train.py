@@ -1337,8 +1337,9 @@ def main() -> None:
         raise ValueError("decoded_image_cache_entries must be non-negative")
     if args.max_steps == 0 or args.max_steps < -1:
         raise ValueError("max_steps must be -1 or a positive integer")
-    if args.tensor_parallel_size != 2:
-        raise ValueError("this launcher is intentionally a pure two-GPU TP job")
+    allowed_tp_sizes = (2, 4) if getattr(args, "test_manifest", None) else (2,)
+    if args.tensor_parallel_size not in allowed_tp_sizes:
+        raise ValueError(f"unsupported tensor-parallel size: {args.tensor_parallel_size}")
     # Fail fast on unsupported LoRA targets before loading data or the model.
     split_lora_targets(args.lora_target_modules)
     if args.resume_from_checkpoint is not None:

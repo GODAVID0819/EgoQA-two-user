@@ -56,6 +56,7 @@ def evaluate_final(trainer, examples, output_dir):
 
 
 def main():
+    benchmark_steps = 0
     original_parser = base.build_parser
     original_training_kwargs = base._training_argument_kwargs
     original_trainer = base.build_verdict_trainer_class
@@ -65,16 +66,23 @@ def main():
     def parser():
         p = original_parser()
         p.add_argument("--test-manifest", type=Path, required=True)
+        p.add_argument("--benchmark-steps", type=int, choices=(0, 1, 2), default=0)
+        p.add_argument("--mlp-chunk-size", type=int, default=2048)
         p.set_defaults(task="answerability", epochs=5, gradient_accumulation_steps=4,
                        lora_rank=128, lora_alpha=128, learning_rate=2e-5, seed=17,
                        max_pixels=119808, no_class_weights=True)
+        if benchmark_steps:
+            p.set_defaults(max_steps=benchmark_steps, probe_skip_save=True)
         return p
 
     args = parser().parse_args()
+    benchmark_steps = args.benchmark_steps
     if (args.task, args.epochs, args.gradient_accumulation_steps, args.max_steps) != ("answerability", 5, 4, -1):
         raise ValueError("this entry point requires the approved 5-epoch joint C run")
     if args.train_example_id or args.probe_skip_save:
         raise ValueError("formal training requires all 160 examples and checkpoint saving")
+    if args.mlp_chunk_size < 0:
+        raise ValueError("MLP chunk size must be nonnegative")
     train, test = load_splits(args.train_manifest, args.test_manifest)
     from .check_linear_backend import validate_linear_backend
     backend = validate_linear_backend(cuda_device=int(os.environ.get("LOCAL_RANK", "0")))
@@ -110,7 +118,8 @@ def main():
     def model_loader(*pos, **kw):
         from .chunked_mlp import install_chunked_mlp
         result = original_model_loader(*pos, **kw)
-        chunking = install_chunked_mlp(result[0])
+        chunking = (install_chunked_mlp(result[0], args.mlp_chunk_size)
+                    if args.mlp_chunk_size else {"chunk_size": 0, "modules": []})
         print("mlp_activation_chunking=" + json.dumps(chunking), flush=True)
         return result
     base.load_model_and_processor = model_loader

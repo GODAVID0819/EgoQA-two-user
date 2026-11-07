@@ -1,7 +1,13 @@
 """新模式的标签、窗口与划分边界回归；不依赖GPU。"""
 import unittest
+import json
+import tempfile
+from pathlib import Path
 from training.judge_sft.aria12 import grouped_split, visual_messages
 from training.judge_sft.data import normalized_record_to_example
+from training.judge_sft.data import JudgeDataset
+from training.judge_sft.trainer import audit_tensor_parallel_sampler
+from training.judge_sft.watch_epoch_evaluations import checkpoint_ready
 
 
 def row():
@@ -14,6 +20,25 @@ def row():
 
 
 class Aria12Tests(unittest.TestCase):
+    def test_four_tp_ranks_receive_each_example_once(self):
+        examples = []
+        for index in range(5):
+            record = row()
+            record["example_id"] = f"sample-{index}"
+            examples.append(normalized_record_to_example(record, location="test", require_frame_files=False))
+        audit = audit_tensor_parallel_sampler(JudgeDataset(examples), tensor_parallel_size=4, seed=17)
+        self.assertEqual(audit["real_examples_per_epoch"], 5)
+        self.assertTrue(audit["identical_order_on_every_tp_rank"])
+
+    def test_partly_written_checkpoint_is_not_submitted_for_evaluation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory)
+            (checkpoint / "adapter_config.json").write_text("{}")
+            (checkpoint / "adapter_model.safetensors").write_bytes(b"example")
+            (checkpoint / "trainer_state.json").write_text('{"global_step":')
+            self.assertFalse(checkpoint_ready(checkpoint, 40))
+            (checkpoint / "trainer_state.json").write_text(json.dumps({"global_step": 40}))
+            self.assertTrue(checkpoint_ready(checkpoint, 40))
     def test_joint_c_accepts_twelve_complete_windows_and_keeps_fail(self):
         ex=normalized_record_to_example(row(),location='test',require_frame_files=False)
         self.assertEqual(ex.target,0)
