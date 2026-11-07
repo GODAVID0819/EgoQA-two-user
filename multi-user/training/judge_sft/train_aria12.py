@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 
 from . import train as base
@@ -74,6 +75,12 @@ def main():
     if args.train_example_id or args.probe_skip_save:
         raise ValueError("formal training requires all 160 examples and checkpoint saving")
     train, test = load_splits(args.train_manifest, args.test_manifest)
+    from .check_linear_backend import validate_linear_backend
+    backend = validate_linear_backend(cuda_device=int(os.environ.get("LOCAL_RANK", "0")))
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    (args.output_dir / f"linear_backend_rank{os.environ.get('RANK', '0')}.json").write_text(
+        json.dumps(backend, indent=2), encoding="utf-8"
+    )
 
     def training_kwargs(*pos, **kw):
         result = original_training_kwargs(*pos, **kw)
