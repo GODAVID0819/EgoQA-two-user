@@ -33,6 +33,11 @@ class FrozenVisionCache:
         self.misses = 0
         self.module.forward = self.forward
 
+    def close(self):
+        self.module.forward = self.original
+        self.cache.clear()
+        self.bytes = 0
+
     def forward(self, *args, **kwargs):
         import torch
         if self.module.training or torch.is_grad_enabled() or self.key is None:

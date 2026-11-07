@@ -32,8 +32,11 @@ def evaluate_final(trainer, examples, output_dir, epoch=5, global_step=200):
     model = trainer.model_wrapped
     was_training = model.training
     model.eval()
+    from .frozen_vision_cache import FrozenVisionCache
+    vision_cache = FrozenVisionCache(model)
     rows = []
     for example in examples:
+        vision_cache.key = (example.frames, 3136, 119808)
         batch = trainer.data_collator([example])
         _, logits, _ = trainer.prediction_step(model, batch, prediction_loss_only=False)
         margin = float((logits[0, 1].float() - logits[0, 0].float()).cpu())
@@ -55,6 +58,7 @@ def evaluate_final(trainer, examples, output_dir, epoch=5, global_step=200):
             "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
         (output_dir / "test_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         print("final_test_metrics=" + json.dumps(metrics), flush=True)
+    vision_cache.close()
     model.train(was_training)
 
 
