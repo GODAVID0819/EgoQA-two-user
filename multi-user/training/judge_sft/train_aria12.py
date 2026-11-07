@@ -60,6 +60,7 @@ def main():
     original_training_kwargs = base._training_argument_kwargs
     original_trainer = base.build_verdict_trainer_class
     original_loader = base.load_normalized_manifest
+    original_model_loader = base.load_model_and_processor
 
     def parser():
         p = original_parser()
@@ -106,6 +107,13 @@ def main():
     base._training_argument_kwargs = training_kwargs
     base.build_verdict_trainer_class = trainer_class
     base.load_normalized_manifest = lambda path: train if Path(path).resolve() == args.train_manifest.resolve() else original_loader(path)
+    def model_loader(*pos, **kw):
+        from .chunked_mlp import install_chunked_mlp
+        result = original_model_loader(*pos, **kw)
+        chunking = install_chunked_mlp(result[0])
+        print("mlp_activation_chunking=" + json.dumps(chunking), flush=True)
+        return result
+    base.load_model_and_processor = model_loader
     try:
         base.main()
     finally:
@@ -113,6 +121,7 @@ def main():
         base._training_argument_kwargs = original_training_kwargs
         base.build_verdict_trainer_class = original_trainer
         base.load_normalized_manifest = original_loader
+        base.load_model_and_processor = original_model_loader
 
 
 if __name__ == "__main__":

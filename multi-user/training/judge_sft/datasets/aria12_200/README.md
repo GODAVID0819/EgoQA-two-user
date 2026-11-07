@@ -12,4 +12,6 @@ Torch 使用 Qwen3.8-27B 基座，双 H200 TP2，微批1，累积4，LoRA r128/�
 
 22150875通过通信检查后，在首个反向传播中触发显存不足。堆栈定位于Qwen线性注意力的纯PyTorch回退实现。运行环境需有fla-core 0.6.0和einops 0.8.1，入口确认实际分发到FLA。登录节点可运行 `check_linear_backend` 做零GPU接口验证，正式作业在大模型加载前用小张量对照原实现检查前向与反向，再开始训练。
 
+22155006通过FLA前向/反向对照后，在完整长序列MLP反向重计算中显存不足。入口对逐token独立的MLP按2048 token分块，并在块内使用非重入检查点。CPU回归验证嵌套检查点下的输出、输入梯度及所有参数梯度一致。全部帧和训练超参数继续沿用。
+
 现场核对 `JUDGE_PROJECT`、`JUDGE_REPO`、`JUDGE_ENV`、`JUDGE_MODEL` 后提交 `hpc/judge_sft/preflight_aria12.sbatch` 做正式处理器CPU检查。通过后，把该作业的 `processor_preflight.json` 路径作为 `JUDGE_PREFLIGHT`，按现场账户与时限提交 `hpc/judge_sft/train_aria12_answerability.sbatch`。产物按作业号保存在 `jobs/`。GPU监控记录时间、卡UUID、利用率和显存。
