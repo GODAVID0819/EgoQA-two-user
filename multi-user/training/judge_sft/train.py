@@ -988,11 +988,12 @@ def load_model_and_processor(
     # process here so PEFT's random LoRA-A initialization is deterministic.
     set_seed(args.seed)
     resume_audit = None
-    if args.resume_from_checkpoint is not None:
+    initial_adapter = args.resume_from_checkpoint or getattr(args, "warm_start_adapter", None)
+    if initial_adapter is not None:
         from peft import PeftModel
 
         resume_audit = validate_resume_checkpoint(
-            args.resume_from_checkpoint,
+            initial_adapter,
             lora_rank=args.lora_rank,
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
@@ -1003,12 +1004,12 @@ def load_model_and_processor(
         # sync/shard steps below then treat it exactly like a fresh adapter.
         model = PeftModel.from_pretrained(
             model,
-            str(args.resume_from_checkpoint),
+            str(initial_adapter),
             is_trainable=True,
             autocast_adapter_dtype=False,
         )
         resume_audit["weights"] = verify_resumed_adapter_weights(
-            model, args.resume_from_checkpoint
+            model, initial_adapter
         )
         print(
             "resume_adapter_preloaded=" + json.dumps(resume_audit, sort_keys=True),

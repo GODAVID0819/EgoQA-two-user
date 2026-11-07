@@ -71,11 +71,18 @@ trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
 tp_size="${JUDGE_TP_SIZE:-2}"
 benchmark_steps="${JUDGE_BENCHMARK_STEPS:-0}"
 mlp_chunk_size="${JUDGE_MLP_CHUNK_SIZE:-2048}"
+extra_args=()
+remaining_epochs=5
+if [[ -n "${JUDGE_WARM_START:-}" ]]; then
+  remaining_epochs=4
+  extra_args+=(--warm-start-adapter "$JUDGE_WARM_START" --epoch-offset 1 --eval-each-epoch)
+fi
 env "${job_env[@]}" "$JUDGE_ENV/bin/torchrun" --standalone --nproc_per_node="$tp_size" \
   -m training.judge_sft.train_aria12 \
   --train-manifest "$input_root/train.jsonl" --test-manifest "$input_root/test.jsonl" \
   --model-id "$JUDGE_MODEL" --local-files-only --output-dir "$job_root/trainer" \
-  --task answerability --epochs 5 --gradient-accumulation-steps 4 \
+  --task answerability --epochs "$remaining_epochs" --gradient-accumulation-steps 4 \
+  "${extra_args[@]}" \
   --tensor-parallel-size "$tp_size" --attn-implementation sdpa \
   --benchmark-steps "$benchmark_steps" --mlp-chunk-size "$mlp_chunk_size" \
   --min-pixels 3136 --max-pixels 119808 --max-input-tokens 262144 \

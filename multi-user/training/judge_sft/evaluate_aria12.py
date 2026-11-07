@@ -37,6 +37,8 @@ def main():
         raise ValueError("this evaluator uses one allocated H200")
     validate_linear_backend()
     model, processor = load_model(args.model_id, "lora", args.adapter_dir)
+    from .frozen_vision_cache import FrozenVisionCache
+    vision_cache = FrozenVisionCache(model)
     tokens = resolve_verdict_token_ids(processor.tokenizer)
     keep_arg = logits_to_keep_argument(model)
     collator = JudgeFrameCollator(
@@ -52,6 +54,7 @@ def main():
         with torch.inference_mode():
             for index, example in enumerate(examples, 1):
                 before = time.monotonic()
+                vision_cache.key = (example.frames, 3136, 119808)
                 batch = collator([example])
                 for key in ("labels", "sample_weights", "tp_example_fingerprint"):
                     batch.pop(key)
@@ -80,6 +83,7 @@ def main():
     summary = dict(label=args.label, adapter=str(args.adapter_dir), examples=len(rows),
                    wall_seconds=time.monotonic()-started, metrics=metrics,
                    scope="same_scene_checkpoint_selection", threshold=0.5)
+    summary["vision_cache"] = dict(hits=vision_cache.hits, misses=vision_cache.misses, bytes=vision_cache.bytes)
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary), flush=True)
 
