@@ -23,5 +23,12 @@ env "${job_env[@]}" "$JUDGE_ENV/bin/python" -m training.torch_storage_preflight 
 env "${job_env[@]}" HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false \
   "$JUDGE_ENV/bin/python" -m training.judge_sft.evaluate_aria12 \
   --model-id "$JUDGE_MODEL" --adapter-dir "$JUDGE_EVAL_ADAPTER" \
-  --eval-manifest "$JUDGE_PROJECT/input/test.jsonl" \
+  --eval-manifest "${JUDGE_EVAL_MANIFEST:-$JUDGE_PROJECT/input/test.jsonl}" \
+  --expected-count "${JUDGE_EVAL_COUNT:-40}" --expected-pass "${JUDGE_EVAL_PASS:-10}" \
   --output-dir "$job_root/evaluation" --label "$JUDGE_EVAL_LABEL"
+if [ -n "${JUDGE_EVAL_MERGE_FROM:-}" ]; then
+  env "${job_env[@]}" "$JUDGE_ENV/bin/python" -m training.judge_sft.evaluation_set \
+    --manifests "$JUDGE_PROJECT/input/train.jsonl" "$JUDGE_PROJECT/input/test.jsonl" \
+    --evaluations "$job_root/evaluation" "$JUDGE_EVAL_MERGE_FROM" \
+    --output-dir "$job_root/full200"
+fi

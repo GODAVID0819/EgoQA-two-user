@@ -1,4 +1,4 @@
-"""在同一40题上评测旧Judge或完整保存的epoch adapter。"""
+"""在指定人工标注子集上评测旧Judge或完整保存的epoch adapter。"""
 import argparse
 import json
 import math
@@ -11,6 +11,7 @@ from .contracts import JudgeTask, Verdict
 from .data import load_normalized_manifest
 from .loss import BinaryClassWeights, resolve_verdict_token_ids
 from .metrics import _binary_metrics
+from .evaluation_set import validate_evaluation_set
 
 
 def main():
@@ -20,12 +21,11 @@ def main():
     parser.add_argument("--eval-manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--label", required=True)
+    parser.add_argument("--expected-count", type=int, default=40)
+    parser.add_argument("--expected-pass", type=int, default=10)
     args = parser.parse_args()
     examples = load_normalized_manifest(args.eval_manifest)
-    if len(examples) != 40 or sum(ex.target for ex in examples) != 10:
-        raise ValueError("expected the approved 40-question evaluation set")
-    if any(ex.condition_type != CONDITION for ex in examples):
-        raise ValueError("evaluation must use the joint C requirement")
+    validate_evaluation_set(examples, args.expected_count, args.expected_pass)
     if (args.output_dir / "summary.json").exists():
         raise FileExistsError("completed evaluation already exists")
     import torch
@@ -72,7 +72,7 @@ def main():
                 rows.append(row)
                 stream.write(json.dumps(row) + "\n")
                 stream.flush()
-                print(f"eval {args.label} {index}/40 p_pass={probability:.4f}", flush=True)
+                print(f"eval {args.label} {index}/{len(examples)} p_pass={probability:.4f}", flush=True)
                 del batch, output, logits
     metrics = _binary_metrics([r["gold"] for r in rows], [r["prediction"] for r in rows])
     metrics["pass_precision"] = sum(r["gold"] == r["prediction"] == 1 for r in rows) / max(1, sum(r["prediction"] for r in rows))
@@ -84,6 +84,8 @@ def main():
                    wall_seconds=time.monotonic()-started, metrics=metrics,
                    scope="same_scene_checkpoint_selection", threshold=0.5)
     summary["vision_cache"] = dict(hits=vision_cache.hits, misses=vision_cache.misses, bytes=vision_cache.bytes)
+    summary["model_id"] = args.model_id
+    summary["eval_manifest"] = str(args.eval_manifest)
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary), flush=True)
 
